@@ -18,6 +18,7 @@ import {
   Database,
   Sliders,
   FileJson,
+  ExternalLink,
   X,
   Volume2,
   VolumeX,
@@ -382,6 +383,54 @@ export default function App() {
       return charTasks[charTasks.length - 1];
     };
   }, [comfyTasks, imagePlatform]);
+
+  const getLatestSucceededTask = React.useCallback((targetId: string, viewType: string) => {
+    const succeededTasks = comfyTasks.filter(
+      t => t.targetId === targetId && t.viewType === viewType && t.status === 'succeeded'
+    );
+    if (!succeededTasks.length) return null;
+    return [...succeededTasks].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  }, [comfyTasks]);
+
+  const handleAdvancedAdjust = async (task: any) => {
+    if (!task) return;
+    const comfyTab = window.open("about:blank", "_blank");
+    if (!comfyTab) {
+      alert("无法打开新标签页，请允许浏览器弹出窗口。");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/comfyui/tasks/${task.id}/export-workflow`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const contentDisposition = res.headers.get("Content-Disposition");
+      let filename = `comfyui_${task.targetType || 'unknown'}_${task.viewType || 'main'}_${task.id}.json`;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (match && match[1]) {
+          filename = match[1];
+        }
+      }
+      const downloadUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(downloadUrl);
+      }, 100);
+      comfyTab.location.href = "/api/comfyui/open-ui";
+      alert("工作流已下载，请在 ComfyUI 中通过 Workflows > Open 打开。");
+    } catch (e: any) {
+      comfyTab.close();
+      alert("高级调整失败：" + e.message);
+    }
+  };
 
   const renderComfyTaskOverlay = (task: any) => {
     if (!task) return null;
@@ -3231,6 +3280,22 @@ export default function App() {
                                                     <span>调整参数</span>
                                                   </button>
                                                 )}
+                                                {(() => {
+                                                  const lastSucceeded = getLatestSucceededTask(shot.id || '', 'main');
+                                                  if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                                                  return (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => handleAdvancedAdjust(lastSucceeded)}
+                                                      disabled={!lastSucceeded.hasUiWorkflow}
+                                                      className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"
+                                                      title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                                                    >
+                                                      <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
+                                                      <span>高级调整</span>
+                                                    </button>
+                                                  );
+                                                })()}
                                                 <button
                                                   type="button"
                                                   onClick={() => handleGenerateShotImage(shot, idx)}
@@ -3467,6 +3532,20 @@ export default function App() {
                   <div className="w-20 h-20 rounded-xl overflow-hidden border border-white/10 shadow-lg shrink-0 bg-slate-950 relative group">
                     {renderCharacterAvatar(activeDrawerChar)}
                     {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'avatar'))}
+                    {(() => {
+                      const lastSucceeded = getLatestSucceededTask(activeDrawerChar.id || '', 'avatar');
+                      if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                      return (
+                        <button
+                          onClick={() => handleAdvancedAdjust(lastSucceeded)}
+                          disabled={!lastSucceeded.hasUiWorkflow}
+                          title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                          className="absolute bottom-1 right-8 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-350 hover:text-white disabled:opacity-40 disabled:hover:bg-slate-950/80 rounded border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity z-20 cursor-pointer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
+                        </button>
+                      );
+                    })()}
                     {imagePlatform === 'comfyui' && (
                       <button
                         onClick={() => {
@@ -3550,6 +3629,20 @@ export default function App() {
                             </div>
                           )}
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'front'))}
+                          {(() => {
+                            const lastSucceeded = getLatestSucceededTask(activeDrawerChar.id || '', 'front');
+                            if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                            return (
+                              <button
+                                onClick={() => handleAdvancedAdjust(lastSucceeded)}
+                                disabled={!lastSucceeded.hasUiWorkflow}
+                                title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                                className="absolute bottom-1 right-7 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white disabled:opacity-40 disabled:hover:bg-slate-950/80 rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
+                              >
+                                <ExternalLink className="w-3 h-3 text-purple-400" />
+                              </button>
+                            );
+                          })()}
                           {imagePlatform === 'comfyui' && (
                             <button
                               onClick={() => {
@@ -3599,6 +3692,20 @@ export default function App() {
                             </div>
                           )}
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'side'))}
+                          {(() => {
+                            const lastSucceeded = getLatestSucceededTask(activeDrawerChar.id || '', 'side');
+                            if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                            return (
+                              <button
+                                onClick={() => handleAdvancedAdjust(lastSucceeded)}
+                                disabled={!lastSucceeded.hasUiWorkflow}
+                                title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                                className="absolute bottom-1 right-7 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white disabled:opacity-40 disabled:hover:bg-slate-950/80 rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
+                              >
+                                <ExternalLink className="w-3 h-3 text-purple-400" />
+                              </button>
+                            );
+                          })()}
                           {imagePlatform === 'comfyui' && (
                             <button
                               onClick={() => {
@@ -3648,6 +3755,20 @@ export default function App() {
                             </div>
                           )}
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'back'))}
+                          {(() => {
+                            const lastSucceeded = getLatestSucceededTask(activeDrawerChar.id || '', 'back');
+                            if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                            return (
+                              <button
+                                onClick={() => handleAdvancedAdjust(lastSucceeded)}
+                                disabled={!lastSucceeded.hasUiWorkflow}
+                                title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                                className="absolute bottom-1 right-7 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white disabled:opacity-40 disabled:hover:bg-slate-950/80 rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
+                              >
+                                <ExternalLink className="w-3 h-3 text-purple-400" />
+                              </button>
+                            );
+                          })()}
                           {imagePlatform === 'comfyui' && (
                             <button
                               onClick={() => {

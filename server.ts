@@ -2040,6 +2040,149 @@ function buildDefaultComfyWorkflow(
   };
 }
 
+function buildDefaultUIWorkflow(
+  checkpoint: string,
+  prompt: string,
+  negativePrompt: string,
+  width: number,
+  height: number,
+  seed: number | string,
+): any {
+  const steps = Math.max(4, Math.min(100, Number(process.env.COMFYUI_STEPS) || 24));
+  const cfg = Math.max(1, Math.min(30, Number(process.env.COMFYUI_CFG) || 7));
+  const sampler = process.env.COMFYUI_SAMPLER || 'euler';
+  const scheduler = process.env.COMFYUI_SCHEDULER || 'normal';
+
+  return {
+    version: 0.4,
+    extra: {},
+    nodes: [
+      {
+        id: 1,
+        type: 'CheckpointLoaderSimple',
+        pos: [20, 150],
+        size: [315, 98],
+        flags: {},
+        order: 0,
+        mode: 0,
+        outputs: [
+          { name: 'MODEL', type: 'MODEL', links: [1], slot_index: 0 },
+          { name: 'CLIP', type: 'CLIP', links: [2, 3], slot_index: 1 },
+          { name: 'VAE', type: 'VAE', links: [8], slot_index: 2 }
+        ],
+        properties: { 'Node name for Google Colab': 'CheckpointLoaderSimple' },
+        widgets_values: [checkpoint]
+      },
+      {
+        id: 2,
+        type: 'CLIPTextEncode',
+        pos: [400, 100],
+        size: [422, 140],
+        flags: {},
+        order: 1,
+        mode: 0,
+        inputs: [{ name: 'clip', type: 'CLIP', link: 2 }],
+        outputs: [{ name: 'CONDITIONING', type: 'CONDITIONING', links: [4], slot_index: 0 }],
+        properties: { 'Node name for Google Colab': 'CLIPTextEncode' },
+        widgets_values: [prompt],
+        title: 'STORY_PROMPT'
+      },
+      {
+        id: 3,
+        type: 'CLIPTextEncode',
+        pos: [400, 280],
+        size: [422, 140],
+        flags: {},
+        order: 2,
+        mode: 0,
+        inputs: [{ name: 'clip', type: 'CLIP', link: 3 }],
+        outputs: [{ name: 'CONDITIONING', type: 'CONDITIONING', links: [5], slot_index: 0 }],
+        properties: { 'Node name for Google Colab': 'CLIPTextEncode' },
+        widgets_values: [negativePrompt],
+        title: 'STORY_NEGATIVE'
+      },
+      {
+        id: 4,
+        type: 'EmptyLatentImage',
+        pos: [20, 300],
+        size: [315, 106],
+        flags: {},
+        order: 3,
+        mode: 0,
+        outputs: [{ name: 'LATENT', type: 'LATENT', links: [6], slot_index: 0 }],
+        properties: { 'Node name for Google Colab': 'EmptyLatentImage' },
+        widgets_values: [width, height, 1]
+      },
+      {
+        id: 5,
+        type: 'KSampler',
+        pos: [860, 150],
+        size: [315, 262],
+        flags: {},
+        order: 4,
+        mode: 0,
+        inputs: [
+          { name: 'model', type: 'MODEL', link: 1 },
+          { name: 'positive', type: 'CONDITIONING', link: 4 },
+          { name: 'negative', type: 'CONDITIONING', link: 5 },
+          { name: 'latent_image', type: 'LATENT', link: 6 }
+        ],
+        outputs: [{ name: 'LATENT', type: 'LATENT', links: [7], slot_index: 0 }],
+        properties: { 'Node name for Google Colab': 'KSampler' },
+        widgets_values: [
+          seed,
+          'randomize',
+          steps,
+          cfg,
+          sampler,
+          scheduler,
+          1.0
+        ]
+      },
+      {
+        id: 6,
+        type: 'VAEDecode',
+        pos: [1210, 200],
+        size: [210, 46],
+        flags: {},
+        order: 5,
+        mode: 0,
+        inputs: [
+          { name: 'samples', type: 'LATENT', link: 7 },
+          { name: 'vae', type: 'VAE', link: 8 }
+        ],
+        outputs: [{ name: 'IMAGE', type: 'IMAGE', links: [9], slot_index: 0 }],
+        properties: { 'Node name for Google Colab': 'VAEDecode' }
+      },
+      {
+        id: 7,
+        type: 'SaveImage',
+        pos: [1450, 200],
+        size: [210, 270],
+        flags: {},
+        order: 6,
+        mode: 0,
+        inputs: [{ name: 'images', type: 'IMAGE', link: 9 }],
+        properties: { 'Node name for Google Colab': 'SaveImage' },
+        widgets_values: ['ComfyUI']
+      }
+    ],
+    links: [
+      [1, 1, 0, 5, 0, 'MODEL'],
+      [2, 1, 1, 2, 0, 'CLIP'],
+      [3, 1, 1, 3, 0, 'CLIP'],
+      [4, 2, 0, 5, 1, 'CONDITIONING'],
+      [5, 3, 0, 5, 2, 'CONDITIONING'],
+      [6, 4, 0, 5, 3, 'LATENT'],
+      [7, 5, 0, 6, 0, 'LATENT'],
+      [8, 1, 2, 6, 1, 'VAE'],
+      [9, 6, 0, 7, 0, 'IMAGE']
+    ],
+    last_node_id: 7,
+    last_link_id: 9
+  };
+}
+
 function findComfyNode(
   workflow: ComfyWorkflow,
   envName: string,
@@ -2543,13 +2686,71 @@ app.get('/api/comfyui/tasks', (req, res) => {
   }
   try {
     const tasks = dbSqlite.prepare(`
-      SELECT * FROM comfyui_tasks
+      SELECT 
+        id, projectId, targetId, targetType, viewType, shotIndex, characterName,
+        prompt, negativePrompt, seed, model, width, height, status, retryCount,
+        retryOfTaskId, supersededByTaskId, error, recoveryCheckCount, missingSince,
+        createdAt, submittedAt, completedAt, updatedAt,
+        (uiWorkflowJson IS NOT NULL AND uiWorkflowJson != '') as hasUiWorkflow
+      FROM comfyui_tasks
       WHERE projectId = ?
       ORDER BY createdAt ASC
-    `).all(projectId);
-    return res.json(tasks);
+    `).all(projectId) as any[];
+
+    const mapped = tasks.map(t => ({
+      ...t,
+      hasUiWorkflow: !!t.hasUiWorkflow
+    }));
+    return res.json(mapped);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/comfyui/tasks/:taskId/export-workflow', (req, res) => {
+  const { taskId } = req.params;
+  try {
+    const task = dbSqlite.prepare(`
+      SELECT * FROM comfyui_tasks WHERE id = ?
+    `).get(taskId) as any;
+
+    if (!task) {
+      return res.status(404).json({ error: `Task '${taskId}' not found.` });
+    }
+
+    if (task.status !== 'succeeded') {
+      return res.status(409).json({ error: `Task '${taskId}' is in status '${task.status}'. Only succeeded tasks can export workflows.` });
+    }
+
+    if (!task.uiWorkflowJson || !task.uiWorkflowJson.trim()) {
+      return res.status(409).json({ error: `Task '${taskId}' does not have a valid ComfyUI UI workflow.` });
+    }
+
+    // Verify it is valid JSON
+    try {
+      JSON.parse(task.uiWorkflowJson);
+    } catch (e) {
+      return res.status(409).json({ error: `Task '${taskId}' UI workflow JSON is corrupted or invalid.` });
+    }
+
+    const safeTargetType = safePathSegment(task.targetType, 'unknown');
+    const safeViewType = safePathSegment(task.viewType, 'main');
+    const filename = `comfyui_${safeTargetType}_${safeViewType}_${task.id}.json`;
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(task.uiWorkflowJson);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/comfyui/open-ui', (req, res) => {
+  try {
+    const url = comfyBaseUrl();
+    return res.redirect(url);
+  } catch (err: any) {
+    return res.status(500).send(`Error getting ComfyUI URL: ${err.message}`);
   }
 });
 
@@ -2767,8 +2968,17 @@ app.post('/api/generate-image', async (req, res) => {
       const workflowSnapshot = customWorkflow
         ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, taskSeed)
         : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
-      const apiWorkflowJson = JSON.stringify(workflowSnapshot);
-      const uiWorkflowJson = JSON.stringify(workflowSnapshot);
+      
+      let apiWorkflowJson = '';
+      let uiWorkflowJson = '';
+      if (customWorkflow) {
+        apiWorkflowJson = JSON.stringify(workflowSnapshot);
+        uiWorkflowJson = ''; // Custom workflows have no UI template unless loaded as UI template (not supported yet)
+      } else {
+        apiWorkflowJson = JSON.stringify(workflowSnapshot);
+        const uiWorkflow = buildDefaultUIWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
+        uiWorkflowJson = JSON.stringify(uiWorkflow);
+      }
       const model = checkpoint || workflowCheckpoint(workflowSnapshot);
 
       const taskId = crypto.randomUUID();
