@@ -2011,7 +2011,7 @@ function buildDefaultComfyWorkflow(
   negativePrompt: string,
   width: number,
   height: number,
-  seed: number,
+  seed: number | string,
 ): ComfyWorkflow {
   const steps = Math.max(4, Math.min(100, Number(process.env.COMFYUI_STEPS) || 24));
   const cfg = Math.max(1, Math.min(30, Number(process.env.COMFYUI_CFG) || 7));
@@ -2045,7 +2045,6 @@ function findComfyNode(
   envName: string,
   classTypes: string[],
   titlePattern?: RegExp,
-  fallbackIndex = 0,
 ): string | undefined {
   const configured = process.env[envName]?.trim();
   if (configured) {
@@ -2053,10 +2052,11 @@ function findComfyNode(
     return configured;
   }
   const matches = Object.entries(workflow).filter(([, node]) => classTypes.includes(node.class_type));
-  const titled = titlePattern
-    ? matches.find(([, node]) => titlePattern.test(node._meta?.title || ''))
-    : undefined;
-  return (titled || matches[fallbackIndex])?.[0];
+  if (titlePattern) {
+    const titled = matches.find(([, node]) => titlePattern.test(node._meta?.title || ''));
+    if (titled) return titled[0];
+  }
+  return undefined;
 }
 
 function setComfyInput(
@@ -2086,13 +2086,12 @@ function applyCustomComfyInputs(
   negativePrompt: string,
   width: number,
   height: number,
-  seed: number,
+  seed: number | string,
 ): ComfyWorkflow {
   const cloned = validateWorkflow(JSON.parse(JSON.stringify(workflow)));
-  const textNodes = Object.entries(cloned).filter(([, node]) => node.class_type === 'CLIPTextEncode');
-  const promptNode = findComfyNode(cloned, 'COMFYUI_PROMPT_NODE_ID', ['CLIPTextEncode'], /story[_ -]?prompt|positive/i, 0);
-  const negativeNode = findComfyNode(cloned, 'COMFYUI_NEGATIVE_NODE_ID', ['CLIPTextEncode'], /negative/i, textNodes.length > 1 ? 1 : 0);
-  const seedNode = findComfyNode(cloned, 'COMFYUI_SEED_NODE_ID', ['KSampler', 'RandomNoise', 'Seed'], /seed|sampler/i);
+  const promptNode = findComfyNode(cloned, 'COMFYUI_PROMPT_NODE_ID', ['CLIPTextEncode'], /story[_ -]?prompt|positive/i);
+  const negativeNode = findComfyNode(cloned, 'COMFYUI_NEGATIVE_NODE_ID', ['CLIPTextEncode'], /negative/i);
+  const seedNode = findComfyNode(cloned, 'COMFYUI_SEED_NODE_ID', ['KSampler', 'KSamplerAdvanced', 'RandomNoise', 'Seed'], /seed|sampler/i);
   const checkpointNode = findComfyNode(cloned, 'COMFYUI_CKPT_NODE_ID', ['CheckpointLoaderSimple'], /checkpoint/i);
   const latentNode = findComfyNode(cloned, 'COMFYUI_LATENT_NODE_ID', ['EmptyLatentImage', 'EmptySD3LatentImage'], /latent|size/i);
 
@@ -2314,7 +2313,7 @@ async function pollActiveTasks() {
           status: 'succeeded',
           prompt: task.prompt,
           negativePrompt: task.negativePrompt,
-          seed: Number(task.seed),
+          seed: task.seed,
           model: task.model,
           width: task.width,
           height: task.height,
@@ -2434,7 +2433,7 @@ async function submitComfyTask(task: any) {
 
     if (!workflow) {
       // Rebuild and immediately persist to SQLite for compatibility/frozen principle
-      const seedVal = Number(task.seed) || Math.floor(Math.random() * 9007199254740991);
+      const seedVal = task.seed ? String(task.seed) : String(Math.floor(Math.random() * 9007199254740991));
       const customWorkflow = loadCustomComfyWorkflow();
       const checkpoint = customWorkflow ? '' : (task.model && task.model !== 'unknown' ? task.model : await getComfyCheckpoint());
       const workflowSnapshot = customWorkflow
@@ -2766,8 +2765,8 @@ app.post('/api/generate-image', async (req, res) => {
       }
 
       const workflowSnapshot = customWorkflow
-        ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, Number(taskSeed))
-        : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, Number(taskSeed));
+        ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, taskSeed)
+        : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
       const apiWorkflowJson = JSON.stringify(workflowSnapshot);
       const uiWorkflowJson = JSON.stringify(workflowSnapshot);
       const model = checkpoint || workflowCheckpoint(workflowSnapshot);
