@@ -112,6 +112,158 @@ export default function App() {
   const undoStackRef = useRef<any[]>([]);
   const activeIntervalsRef = useRef<{ [taskId: string]: NodeJS.Timeout }>({});
 
+  // ComfyUI Queue Polling state and callbacks
+  const [comfyTasks, setComfyTasks] = useState<any[]>([]);
+
+  const pollComfyTasks = React.useCallback(async () => {
+    if (!generatedScriptRef.current) return;
+    try {
+      const res = await fetch(`/api/comfyui/tasks?projectId=${generatedScriptRef.current.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setComfyTasks(data);
+      }
+    } catch (err) {
+      console.error("[Queue Polling Error]", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!generatedScript || imagePlatform !== 'comfyui') {
+      setComfyTasks([]);
+      return;
+    }
+    generatedScriptRef.current = generatedScript;
+    pollComfyTasks();
+    const interval = setInterval(pollComfyTasks, 2000);
+    return () => clearInterval(interval);
+  }, [generatedScript, imagePlatform, pollComfyTasks]);
+
+  const prevComfyTasksRef = useRef<any[]>([]);
+
+  useEffect(() => {
+    const prevTasks = prevComfyTasksRef.current;
+    const currentTasks = comfyTasks;
+    let shouldReloadScript = false;
+    
+    for (const task of currentTasks) {
+      const prevTask = prevTasks.find(t => t.id === task.id);
+      if (prevTask) {
+        if ((prevTask.status === 'pending' || prevTask.status === 'processing') && task.status === 'succeeded') {
+          shouldReloadScript = true;
+          break;
+        }
+      } else if (task.status === 'succeeded') {
+        shouldReloadScript = true;
+        break;
+      }
+    }
+
+    if (shouldReloadScript && generatedScript) {
+      console.log("[Queue] Task completed! Reloading script...");
+      fetch(`/api/generated-scripts/${generatedScript.id}`)
+        .then(res => { if (res.ok) return res.json(); })
+        .then(data => {
+          if (data) {
+            setGeneratedScript(data);
+            setGeneratedScripts(prev => prev.map(s => s.id === data.id ? data : s));
+          }
+        })
+        .catch(err => console.error("Error reloading script:", err));
+    }
+    prevComfyTasksRef.current = comfyTasks;
+  }, [comfyTasks, generatedScript]);
+
+  const handleRetryComfyTask = async (taskId: string) => {
+    try {
+      const res = await fetch(`/api/comfyui/tasks/${taskId}/retry`, { method: 'POST' });
+      if (res.ok) {
+        pollComfyTasks();
+      } else {
+        const err = await res.json();
+        alert(err.error || "重试失败");
+      }
+    } catch (e: any) {
+      alert("网络错误：" + e.message);
+    }
+  };
+
+  const handleCancelComfyTask = async (taskId: string) => {
+    try {
+      const res = await fetch(`/api/comfyui/tasks/${taskId}/cancel`, { method: 'POST' });
+      if (res.ok) {
+        pollComfyTasks();
+      } else {
+        const err = await res.json();
+        alert(err.error || "取消失败");
+      }
+    } catch (e: any) {
+      alert("网络错误：" + e.message);
+    }
+  };
+
+  const getShotTask = React.useMemo(() => {
+    return (shotId: string) => {
+      if (imagePlatform !== 'comfyui') return null;
+      const shotTasks = comfyTasks.filter(t => t.targetId === shotId);
+      if (!shotTasks.length) return null;
+      return shotTasks[shotTasks.length - 1];
+    };
+  }, [comfyTasks, imagePlatform]);
+
+  const getCharacterTask = React.useMemo(() => {
+    return (charId: string, viewType: string = 'avatar') => {
+      if (imagePlatform !== 'comfyui') return null;
+      const charTasks = comfyTasks.filter(t => t.targetId === charId && t.viewType === viewType);
+      if (!charTasks.length) return null;
+      return charTasks[charTasks.length - 1];
+    };
+  }, [comfyTasks, imagePlatform]);
+
+  const renderComfyTaskOverlay = (task: any) => {
+    if (!task) return null;
+    if (task.status === 'pending') {
+      return (
+        <div className="absolute inset-0 bg-slate-950/85 border border-slate-800 rounded-lg flex flex-col items-center justify-center p-1 z-10 text-center">
+          <Clock className="w-4 h-4 text-amber-500 animate-pulse mb-0.5" />
+          <span className="text-[9px] text-amber-405 font-medium scale-90">排队中</span>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleCancelComfyTask(task.id); }}
+            className="mt-1 px-1.5 py-0.5 bg-red-950 hover:bg-red-900 border border-red-900 text-red-200 rounded text-[8px] cursor-pointer font-semibold transition-colors"
+          >
+            取消
+          </button>
+        </div>
+      );
+    }
+    if (task.status === 'processing') {
+      return (
+        <div className="absolute inset-0 bg-slate-950/85 border border-slate-800 rounded-lg flex flex-col items-center justify-center p-1 z-10 text-center">
+          <Loader2 className="w-4 h-4 text-blue-400 animate-spin mb-0.5" />
+          <span className="text-[9px] text-blue-300 font-medium scale-90">生成中</span>
+        </div>
+      );
+    }
+    if (task.status === 'failed') {
+      return (
+        <div className="absolute inset-0 bg-slate-950/90 border border-slate-800 rounded-lg flex flex-col items-center justify-center p-1 z-10 text-center">
+          <span className="text-[8px] text-red-400 font-medium line-clamp-1 mb-0.5 scale-90" title={task.errorMsg}>
+            失败
+          </span>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleRetryComfyTask(task.id); }}
+            className="px-1.5 py-0.5 bg-blue-950 hover:bg-blue-900 border border-blue-900 text-blue-200 rounded text-[8px] cursor-pointer font-semibold transition-colors"
+          >
+            重试
+          </button>
+        </div>
+      );
+    }
+    return null;
+  };
+
   // Undo function
   const handleUndo = async () => {
     if (undoStackRef.current.length === 0 || !generatedScriptRef.current) return;
@@ -124,7 +276,7 @@ export default function App() {
     setGeneratedScript(updatedScript);
     setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
     
-    console.log(`[Undo] Reverting cell edits/drag to previous state. Remaining history states: ${undoStackRef.current.length}`);
+    console.log("[Undo] Reverting cell edits/drag to previous state. Remaining history states: " + undoStackRef.current.length);
 
     // Update DB
     try {
@@ -477,8 +629,42 @@ export default function App() {
 
   const handleGenerateShotImage = async (shot: Shot, idx: number) => {
     if (!generatedScript) return;
-    setGeneratingShotIndex(idx);
     
+    const imagePrompt = shot.description;
+    const negativePrompt = "low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark";
+    
+    if (imagePlatform === 'comfyui') {
+      try {
+        const res = await fetch("/api/generate-image", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            prompt: imagePrompt,
+            negativePrompt,
+            isCharacter: false,
+            style: getStyleEnglish(shot.style || "写实"),
+            platform: imagePlatform,
+            projectId: generatedScript.id,
+            targetType: 'shot',
+            targetId: shot.id,
+            viewType: 'main',
+            shotIndex: idx,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "生成图片任务提交失败");
+        }
+        pollComfyTasks();
+      } catch (err: any) {
+        alert(err.message || "提交任务失败");
+      }
+      return;
+    }
+
+    setGeneratingShotIndex(idx);
     try {
       const res = await fetch("/api/generate-image", {
         method: "POST",
@@ -486,10 +672,14 @@ export default function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          prompt: shot.description,
+          prompt: imagePrompt,
+          negativePrompt,
           isCharacter: false,
           style: getStyleEnglish(shot.style || "写实"),
-          platform: imagePlatform
+          platform: imagePlatform,
+          projectId: generatedScript.id,
+          targetType: 'shot',
+          shotIndex: idx,
         }),
       });
 
@@ -498,7 +688,8 @@ export default function App() {
         throw new Error(err.error || "生成图片失败");
       }
 
-      const { url } = await res.json();
+      const imageResult = await res.json();
+      const { url, generation } = imageResult;
 
       // Write back to DB
       const putRes = await fetch(`/api/generated-scripts/${generatedScript.id}/image`, {
@@ -508,7 +699,8 @@ export default function App() {
         },
         body: JSON.stringify({
           shotIndex: idx,
-          imageUrl: url
+          imageUrl: url,
+          generation,
         }),
       });
 
@@ -517,7 +709,9 @@ export default function App() {
         updatedShots[idx] = { 
           ...updatedShots[idx], 
           imageUrl: url, 
-          generatedImageUrl: url 
+          generatedImageUrl: url,
+          imageGeneration: generation,
+          imageGenerations: [...(updatedShots[idx].imageGenerations || []), generation],
         };
         const updatedScript = { ...generatedScript, newShots: updatedShots };
         setGeneratedScript(updatedScript);
@@ -525,6 +719,33 @@ export default function App() {
         setGeneratedScripts(prev => prev.map(s => s.id === generatedScript.id ? updatedScript : s));
       }
     } catch (err: any) {
+      const failedGeneration = {
+        provider: imagePlatform,
+        status: 'failed' as const,
+        prompt: imagePrompt,
+        negativePrompt,
+        width: 768,
+        height: 512,
+        projectId: generatedScript.id,
+        targetType: 'shot' as const,
+        shotIndex: idx,
+        createdAt: new Date().toISOString(),
+        error: err.message || 'Image generation failed',
+      };
+      await fetch(`/api/generated-scripts/${generatedScript.id}/image`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shotIndex: idx, generation: failedGeneration }),
+      }).catch(() => undefined);
+      const updatedShots = [...generatedScript.newShots];
+      updatedShots[idx] = {
+        ...updatedShots[idx],
+        imageGeneration: failedGeneration,
+        imageGenerations: [...(updatedShots[idx].imageGenerations || []), failedGeneration],
+      };
+      const updatedScript = { ...generatedScript, newShots: updatedShots };
+      setGeneratedScript(updatedScript);
+      setGeneratedScripts(prev => prev.map(s => s.id === generatedScript.id ? updatedScript : s));
       alert(err.message || "生成图片时出错");
     } finally {
       setGeneratingShotIndex(null);
@@ -991,8 +1212,40 @@ export default function App() {
 
   const handleGenerateCharacterAvatar = async (char: Character) => {
     if (!generatedScript) return;
-    setIsGeneratingCharImage(true);
+    const imagePrompt = `${char.name}, role is ${char.role}, appearance: ${char.clothing}, personality: ${char.personality}`;
+    const negativePrompt = "low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark";
 
+    if (imagePlatform === 'comfyui') {
+      try {
+        const res = await fetch("/api/generate-image", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            prompt: imagePrompt,
+            negativePrompt,
+            isCharacter: true,
+            platform: imagePlatform,
+            projectId: generatedScript.id,
+            targetType: 'character',
+            targetId: char.id,
+            viewType: 'avatar',
+            characterName: char.name,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "生成头像任务提交失败");
+        }
+        pollComfyTasks();
+      } catch (err: any) {
+        alert(err.message || "提交任务失败");
+      }
+      return;
+    }
+
+    setIsGeneratingCharImage(true);
     try {
       const res = await fetch("/api/generate-image", {
         method: "POST",
@@ -1000,9 +1253,13 @@ export default function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          prompt: `${char.name}, role is ${char.role}, appearance: ${char.clothing}, personality: ${char.personality}`,
+          prompt: imagePrompt,
+          negativePrompt,
           isCharacter: true,
-          platform: imagePlatform
+          platform: imagePlatform,
+          projectId: generatedScript.id,
+          targetType: 'character',
+          characterName: char.name,
         }),
       });
 
@@ -1049,7 +1306,6 @@ export default function App() {
     setIsGeneratingThreeViews(true);
 
     try {
-      // 1. First translate the character description into English (consistent base)
       console.log(`[Three-Views] Translating character description for "${char.name}"...`);
       let englishDescription = "";
       try {
@@ -1076,14 +1332,64 @@ export default function App() {
       }
       console.log(`[Three-Views] Translated character description: "${englishDescription}"`);
 
-      // 2. Setup prompts using the templates
       const promptFront = `${englishDescription}, front view only, single character standing pose, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
       const promptSide = `${englishDescription}, side view only, facing right, single character, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
       const promptBack = `${englishDescription}, back view only, character facing away from camera, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
 
+      if (imagePlatform === 'comfyui') {
+        await Promise.all([
+          fetch("/api/generate-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt: promptFront,
+              isCharacter: true,
+              skipTranslation: true,
+              platform: imagePlatform,
+              projectId: generatedScript.id,
+              targetType: 'character',
+              targetId: char.id,
+              viewType: 'front',
+              characterName: char.name
+            })
+          }).then(r => { if (!r.ok) throw new Error("正面图提交失败"); }),
+          fetch("/api/generate-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt: promptSide,
+              isCharacter: true,
+              skipTranslation: true,
+              platform: imagePlatform,
+              projectId: generatedScript.id,
+              targetType: 'character',
+              targetId: char.id,
+              viewType: 'side',
+              characterName: char.name
+            })
+          }).then(r => { if (!r.ok) throw new Error("侧面图提交失败"); }),
+          fetch("/api/generate-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt: promptBack,
+              isCharacter: true,
+              skipTranslation: true,
+              platform: imagePlatform,
+              projectId: generatedScript.id,
+              targetType: 'character',
+              targetId: char.id,
+              viewType: 'back',
+              characterName: char.name
+            })
+          }).then(r => { if (!r.ok) throw new Error("背面图提交失败"); })
+        ]);
+        pollComfyTasks();
+        return;
+      }
+
       console.log(`[Three-Views] Starting concurrent generation for Front, Side, Back (with skipTranslation: true)...`);
 
-      // 3. Concurrently fetch the three images from Pollinations AI
       const [frontUrl, sideUrl, backUrl] = await Promise.all([
         (async () => {
           const res = await fetch("/api/generate-image", {
@@ -1123,7 +1429,6 @@ export default function App() {
         back: backUrl
       };
 
-      // 4. Save to database
       const putRes = await fetch(`/api/generated-scripts/${generatedScript.id}/image`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1158,49 +1463,75 @@ export default function App() {
 
   const handleGenerateSingleView = async (char: Character, viewType: 'front' | 'side' | 'back') => {
     if (!generatedScript) return;
-    setGeneratingViews(prev => ({ ...prev, [viewType]: true }));
-
+    
+    // 1. First translate the character description into English (consistent base)
+    console.log(`[Three-Views] Translating character description for single view "${viewType}"...`);
+    let englishDescription = "";
     try {
-      // 1. First translate the character description into English (consistent base)
-      console.log(`[Three-Views] Translating character description for single view "${viewType}"...`);
-      let englishDescription = "";
+      const transRes = await fetch("/api/translate-character", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: char.name,
+          role: char.role,
+          clothing: char.clothing,
+          personality: char.personality
+        })
+      });
+      if (transRes.ok) {
+        const data = await transRes.json();
+        englishDescription = data.englishDescription;
+      }
+    } catch (err) {
+      console.warn("[Three-Views] Translation API failed, using local fallback", err);
+    }
+
+    if (!englishDescription) {
+      englishDescription = `${char.name}, role is ${char.role}, appearance: ${char.clothing}, personality: ${char.personality}`;
+    }
+
+    // 2. Setup specific view prompt
+    let prompt = "";
+    if (viewType === "front") {
+      prompt = `${englishDescription}, front view only, single character standing pose, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
+    } else if (viewType === "side") {
+      prompt = `${englishDescription}, side view only, facing right, single character, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
+    } else {
+      prompt = `${englishDescription}, back view only, character facing away from camera, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
+    }
+
+    if (imagePlatform === 'comfyui') {
       try {
-        const transRes = await fetch("/api/translate-character", {
+        const res = await fetch("/api/generate-image", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            name: char.name,
-            role: char.role,
-            clothing: char.clothing,
-            personality: char.personality
+            prompt,
+            isCharacter: true,
+            skipTranslation: true,
+            platform: imagePlatform,
+            projectId: generatedScript.id,
+            targetType: 'character',
+            targetId: char.id,
+            viewType,
+            characterName: char.name
           })
         });
-        if (transRes.ok) {
-          const data = await transRes.json();
-          englishDescription = data.englishDescription;
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || `生成${viewType === 'front' ? '正面' : viewType === 'side' ? '侧面' : '背面'}图任务提交失败`);
         }
-      } catch (err) {
-        console.warn("[Three-Views] Translation API failed, using local fallback", err);
+        pollComfyTasks();
+      } catch (err: any) {
+        alert(err.message || "提交任务失败");
       }
+      return;
+    }
 
-      if (!englishDescription) {
-        englishDescription = `${char.name}, role is ${char.role}, appearance: ${char.clothing}, personality: ${char.personality}`;
-      }
-      console.log(`[Three-Views] Translated character description: "${englishDescription}"`);
-
-      // 2. Setup specific view prompt
-      let prompt = "";
-      if (viewType === "front") {
-        prompt = `${englishDescription}, front view only, single character standing pose, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
-      } else if (viewType === "side") {
-        prompt = `${englishDescription}, side view only, facing right, single character, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
-      } else {
-        prompt = `${englishDescription}, back view only, character facing away from camera, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`;
-      }
-
+    setGeneratingViews(prev => ({ ...prev, [viewType]: true }));
+    try {
       console.log(`[Three-Views] Starting single view generation for ${viewType} (with skipTranslation: true)...`);
 
-      // 3. Fetch image from Pollinations AI
       const res = await fetch("/api/generate-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1216,7 +1547,6 @@ export default function App() {
         [viewType]: url
       };
 
-      // 4. Save to database
       const putRes = await fetch(`/api/generated-scripts/${generatedScript.id}/image`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1231,7 +1561,7 @@ export default function App() {
           if (c.name === char.name) {
             const updatedC = { ...c, views: viewsObj };
             if (viewType === "front") {
-              updatedC.avatarUrl = url; // Update avatar to front view if front is re-generated
+              updatedC.avatarUrl = url;
             }
             return updatedC;
           }
@@ -2412,8 +2742,9 @@ export default function App() {
                                 className="flex-shrink-0 w-64 bg-slate-900/60 p-4 rounded-xl border border-slate-800 hover:border-purple-500/35 hover:bg-slate-850/40 transition-all cursor-pointer flex flex-col gap-3 group"
                               >
                                 <div className="flex gap-3">
-                                  <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/5 shrink-0 bg-slate-950 flex items-center justify-center">
+                                  <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/5 shrink-0 bg-slate-950 flex items-center justify-center relative">
                                     {renderCharacterAvatar(char)}
+                                    {renderComfyTaskOverlay(getCharacterTask(char.id || '', 'avatar'))}
                                   </div>
                                   <div className="min-w-0 flex-1">
                                     <h5 className="text-xs font-bold text-white group-hover:text-purple-400 transition-colors truncate">{char.name}</h5>
@@ -2615,29 +2946,32 @@ export default function App() {
                                           )}
                                         </div>
                                         
-                                        {!shotImg && !isGenerating && (
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.preventDefault();
-                                              handleGenerateShotImage(shot, idx);
-                                            }}
-                                            disabled={generatingShotIndex !== null}
-                                            className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-850 disabled:text-slate-600 text-white rounded text-[10px] flex items-center gap-1 cursor-pointer shrink-0 transition-colors font-medium shadow-md hover:shadow-blue-900/30"
-                                          >
-                                            {isGenerating ? (
-                                              <>
-                                                <Loader2 className="w-3 h-3 animate-spin" />
-                                                <span>生成中...</span>
-                                              </>
-                                            ) : (
-                                              <>
-                                                <Sparkles className="w-3 h-3" />
-                                                <span>生成图片</span>
-                                              </>
-                                            )}
-                                          </button>
-                                        )}
+                                        <div className="relative min-w-[80px] min-h-[32px] flex justify-end">
+                                          {!shotImg && !isGenerating && (
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.preventDefault();
+                                                handleGenerateShotImage(shot, idx);
+                                              }}
+                                              disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
+                                              className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-850 disabled:text-slate-600 text-white rounded text-[10px] flex items-center gap-1 cursor-pointer shrink-0 transition-colors font-medium shadow-md hover:shadow-blue-900/30"
+                                            >
+                                              {isGenerating ? (
+                                                <>
+                                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                                  <span>生成中...</span>
+                                                </>
+                                              ) : (
+                                                <>
+                                                  <Sparkles className="w-3 h-3" />
+                                                  <span>生成图片</span>
+                                                </>
+                                              )}
+                                            </button>
+                                          )}
+                                          {renderComfyTaskOverlay(getShotTask(shot.id || ''))}
+                                        </div>
                                       </div>
                                     </td>
                                   </tr>
@@ -2673,6 +3007,7 @@ export default function App() {
                                                     className="rounded-lg border border-slate-800 shadow-lg cursor-pointer hover:border-blue-500/40 transition-all max-h-[270px] object-cover"
                                                     onClick={() => setActiveLightboxUrl(shotImg)}
                                                   />
+                                                  {renderComfyTaskOverlay(getShotTask(shot.id || ''))}
                                                 </div>
                                               )}
 
@@ -2942,7 +3277,8 @@ export default function App() {
                 <div className="flex gap-4 items-start">
                   <div className="w-20 h-20 rounded-xl overflow-hidden border border-white/10 shadow-lg shrink-0 bg-slate-950 relative group">
                     {renderCharacterAvatar(activeDrawerChar)}
-                    {(isGeneratingCharImage || isGeneratingThreeViews) && (
+                    {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'avatar'))}
+                    {(isGeneratingCharImage || isGeneratingThreeViews) && !getCharacterTask(activeDrawerChar.id || '', 'avatar') && (
                       <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
                         <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
                       </div>
@@ -3010,7 +3346,8 @@ export default function App() {
                               暂无图片
                             </div>
                           )}
-                          {(isGeneratingThreeViews || generatingViews.front) && (
+                          {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'front'))}
+                          {(isGeneratingThreeViews || generatingViews.front) && !getCharacterTask(activeDrawerChar.id || '', 'front') && (
                             <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-1.5">
                               <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
                               <span className="text-[8px] text-purple-300 font-sans scale-90">生成中</span>
@@ -3044,7 +3381,8 @@ export default function App() {
                               暂无图片
                             </div>
                           )}
-                          {(isGeneratingThreeViews || generatingViews.side) && (
+                          {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'side'))}
+                          {(isGeneratingThreeViews || generatingViews.side) && !getCharacterTask(activeDrawerChar.id || '', 'side') && (
                             <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-1.5">
                               <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
                               <span className="text-[8px] text-purple-300 font-sans scale-90">生成中</span>
@@ -3078,7 +3416,8 @@ export default function App() {
                               暂无图片
                             </div>
                           )}
-                          {(isGeneratingThreeViews || generatingViews.back) && (
+                          {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'back'))}
+                          {(isGeneratingThreeViews || generatingViews.back) && !getCharacterTask(activeDrawerChar.id || '', 'back') && (
                             <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-1.5">
                               <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
                               <span className="text-[8px] text-purple-300 font-sans scale-90">生成中</span>

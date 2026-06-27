@@ -17,3 +17,23 @@ https://ai.studio/apps/dc35e0da-a407-43b6-bf7e-ffd293baa8f7
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Local ComfyUI image generation
+
+1. Start ComfyUI (normally at `http://127.0.0.1:8188`) and make sure it has at least one checkpoint.
+2. Copy the ComfyUI settings from `.env.example` into your local `.env` file.
+3. In the storyboard UI, choose **ComfyUI (本地)** from the image platform menu.
+
+Without a custom workflow, the server submits a standard checkpoint text-to-image workflow. To use SDXL, Flux, LoRA, ControlNet, or another custom graph, export the workflow from ComfyUI in **API format** and save it as `comfyui_workflow.json` in the project root. Node IDs can be configured in `.env`; prompt, negative-prompt, sampler/seed, checkpoint, and latent-size nodes are auto-detected when possible.
+
+Completed images are copied into `uploads/projects/<projectId>/`, so saved storyboards do not depend on ComfyUI retaining its output directory. Generation times out after five minutes by default and can be adjusted with `COMFYUI_TIMEOUT_SECONDS`.
+
+### ComfyUI acceptance test
+
+Start the app and ComfyUI, create or select a project containing exactly one character and five shots, then run:
+
+```bash
+npm run test:comfyui:e2e -- <projectId>
+```
+
+The test records one expected failed request, then generates one character image and all five shot images. It persists each result and its prompt, negative prompt, seed, model, dimensions, target, status, and timestamp in SQLite. Generated files are stored under `uploads/projects/<projectId>/`.

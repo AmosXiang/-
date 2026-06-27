@@ -1,8 +1,11 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { spawn } from 'child_process';
+
+const projectRoot = fileURLToPath(new URL('.', import.meta.url));
 
 // Custom Vite plugin to launch the Express backend on dev server startup
 function expressServerPlugin() {
@@ -36,7 +39,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(projectRoot),
       },
     },
     server: {

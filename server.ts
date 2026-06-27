@@ -15,6 +15,11 @@ const execPromise = util.promisify(exec);
 
 dotenv.config();
 
+const configuredFfmpegPath = process.env.FFMPEG_PATH?.trim();
+const FFMPEG_COMMAND = configuredFfmpegPath
+  ? `"${configuredFfmpegPath.replace(/"/g, '\\"')}"`
+  : 'ffmpeg';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -35,6 +40,39 @@ dbSqlite.exec(`
     value TEXT
   )
 `);
+dbSqlite.exec(`
+  CREATE TABLE IF NOT EXISTS comfyui_tasks (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL,
+    targetId TEXT NOT NULL,
+    targetType TEXT NOT NULL,
+    viewType TEXT NOT NULL,
+    shotIndex INTEGER,
+    characterName TEXT,
+    prompt TEXT NOT NULL,
+    negativePrompt TEXT NOT NULL,
+    seed TEXT NOT NULL,
+    model TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    retryCount INTEGER DEFAULT 0,
+    retryOfTaskId TEXT,
+    supersededByTaskId TEXT,
+    error TEXT,
+    imageUrl TEXT,
+    apiWorkflowJson TEXT,
+    uiWorkflowJson TEXT,
+    missingSince TEXT,
+    recoveryCheckCount INTEGER DEFAULT 0,
+    createdAt TEXT NOT NULL,
+    submittedAt TEXT,
+    completedAt TEXT,
+    updatedAt TEXT NOT NULL
+  )
+`);
+dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON comfyui_tasks (status, createdAt)`);
+dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON comfyui_tasks (projectId, updatedAt)`);
 
 // Concurrent write queue
 const writeQueue = new PQueue({ concurrency: 1 });
@@ -47,8 +85,6 @@ async function mutateDb(mutator: (db: any) => void | Promise<void>) {
   });
 }
 
-
-// Middleware
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_DIR));
 
@@ -72,28 +108,28 @@ const upload = multer({
 
 const DEMO_TEMPLATE = {
   narrative: {
-    structure: "由三个主要空间（飞空舱舱、万米云空、异域雪山与深海糖果界）构成的四幕式时空穿梭结构，通过黑色漩涡传送门切换场景，表现小队从日常拌嘴到协同坠落、再到时空大反差环境滑稽自救，最终在远古遗迹废墟与异形怪兽决战的叙事起伏。",
-    rhythm: "视听上，前段以舱内跟拍对话为主，利用快节奏日常拌嘴建立羁绊；中段自舱门大开转为高速自由落体的高空惊险俯仰跟拍与第一人称极速穿梭，音乐从欢快日常转为震撼恢弘；后半段以不同重力/物质环境（雪山滑雪、深海物质转化、糖果王国鲜艳波普、沙漠废墟决战）进行快速交叉剪辑和定格剪辑，产生极佳的荒诞爆笑与热血对抗的起伏落差。",
-    climaxDesign: "爽点位置设置在：1. 少女帅气后仰跃下舱门的动作高潮；2. 两个大男人在雪崩中狼狈翻滚的滑稽搞笑冲突点；3. 穿越糖果界后的视觉与音响狂欢；4. 沙漠遗迹废墟顶端合力击杀超巨型异形领主时的热血爽感爆发点。"
+    structure: "ç”±ä¸‰ä¸ªä¸»è¦ç©ºé—´ï¼ˆé£žç©ºèˆ±èˆ±ã€ä¸‡ç±³äº‘ç©ºã€å¼‚åŸŸé›ªå±±ä¸Žæ·±æµ·ç³–æžœç•Œï¼‰æž„æˆçš„å››å¹•å¼æ—¶ç©ºç©¿æ¢­ç»“æž„ï¼Œé€šè¿‡é»‘è‰²æ¼©æ¶¡ä¼ é€é—¨åˆ‡æ¢åœºæ™¯ï¼Œè¡¨çŽ°å°é˜Ÿä»Žæ—¥å¸¸æ‹Œå˜´åˆ°ååŒå è½ã€å†åˆ°æ—¶ç©ºå¤§åå·®çŽ¯å¢ƒæ»‘ç¨½è‡ªæ•‘ï¼Œæœ€ç»ˆåœ¨è¿œå¤é—è¿¹åºŸå¢Ÿä¸Žå¼‚å½¢æ€ªå…½å†³æˆ˜çš„å™äº‹èµ·ä¼ã€‚",
+    rhythm: "è§†å¬ä¸Šï¼Œå‰æ®µä»¥èˆ±å†…è·Ÿæ‹å¯¹è¯ä¸ºä¸»ï¼Œåˆ©ç”¨å¿«èŠ‚å¥æ—¥å¸¸æ‹Œå˜´å»ºç«‹ç¾ç»Šï¼›ä¸­æ®µè‡ªèˆ±é—¨å¤§å¼€è½¬ä¸ºé«˜é€Ÿè‡ªç”±è½ä½“çš„é«˜ç©ºæƒŠé™©ä¿¯ä»°è·Ÿæ‹ä¸Žç¬¬ä¸€äººç§°æžé€Ÿç©¿æ¢­ï¼ŒéŸ³ä¹ä»Žæ¬¢å¿«æ—¥å¸¸è½¬ä¸ºéœ‡æ’¼æ¢å¼˜ï¼›åŽåŠæ®µä»¥ä¸åŒé‡åŠ›/ç‰©è´¨çŽ¯å¢ƒï¼ˆé›ªå±±æ»‘é›ªã€æ·±æµ·ç‰©è´¨è½¬åŒ–ã€ç³–æžœçŽ‹å›½é²œè‰³æ³¢æ™®ã€æ²™æ¼ åºŸå¢Ÿå†³æˆ˜ï¼‰è¿›è¡Œå¿«é€Ÿäº¤å‰å‰ªè¾‘å’Œå®šæ ¼å‰ªè¾‘ï¼Œäº§ç”Ÿæžä½³çš„è’è¯žçˆ†ç¬‘ä¸Žçƒ­è¡€å¯¹æŠ—çš„èµ·ä¼è½å·®ã€‚",
+    climaxDesign: "çˆ½ç‚¹ä½ç½®è®¾ç½®åœ¨ï¼š1. å°‘å¥³å¸…æ°”åŽä»°è·ƒä¸‹èˆ±é—¨çš„åŠ¨ä½œé«˜æ½®ï¼›2. ä¸¤ä¸ªå¤§ç”·äººåœ¨é›ªå´©ä¸­ç‹¼ç‹ˆç¿»æ»šçš„æ»‘ç¨½æžç¬‘å†²çªç‚¹ï¼›3. ç©¿è¶Šç³–æžœç•ŒåŽçš„è§†è§‰ä¸ŽéŸ³å“ç‹‚æ¬¢ï¼›4. æ²™æ¼ é—è¿¹åºŸå¢Ÿé¡¶ç«¯åˆåŠ›å‡»æ€è¶…å·¨åž‹å¼‚å½¢é¢†ä¸»æ—¶çš„çƒ­è¡€çˆ½æ„Ÿçˆ†å‘ç‚¹ã€‚"
   },
   characters: [
-    { name: "神秘少女", role: "主角/领航者", personality: "果断、冷酷腹黑、拥有召唤传送门的特殊异能，喜欢吐槽和看戏", clothing: "黑发、高底长靴、蒸汽朋克风机械挂饰皮衣" },
-    { name: "赫伯特教授", role: "知识担当/搞笑担当", personality: "自尊心极强、话痨、傲娇嘴硬、有恐高症且认死理", clothing: "金属框单片眼镜、复古呢子大衣、便携式气压罗盘" },
-    { name: "巴扎尔 (Bearded Warrior)", role: "战力担当/市井调剂", personality: "豪爽不羁、神经粗大、野性求生欲极强、爱贪便宜的络腮胡战士", clothing: "兽皮护肩、磨损严重的黄铜半身胸甲、腰挂短柄斧" }
+    { name: "ç¥žç§˜å°‘å¥³", role: "ä¸»è§’/é¢†èˆªè€…", personality: "æžœæ–­ã€å†·é…·è…¹é»‘ã€æ‹¥æœ‰å¬å”¤ä¼ é€é—¨çš„ç‰¹æ®Šå¼‚èƒ½ï¼Œå–œæ¬¢åæ§½å’Œçœ‹æˆ", clothing: "é»‘å‘ã€é«˜åº•é•¿é´ã€è’¸æ±½æœ‹å…‹é£Žæœºæ¢°æŒ‚é¥°çš®è¡£" },
+    { name: "èµ«ä¼¯ç‰¹æ•™æŽˆ", role: "çŸ¥è¯†æ‹…å½“/æžç¬‘æ‹…å½“", personality: "è‡ªå°Šå¿ƒæžå¼ºã€è¯ç—¨ã€å‚²å¨‡å˜´ç¡¬ã€æœ‰æé«˜ç—‡ä¸”è®¤æ­»ç†", clothing: "é‡‘å±žæ¡†å•ç‰‡çœ¼é•œã€å¤å¤å‘¢å­å¤§è¡£ã€ä¾¿æºå¼æ°”åŽ‹ç½—ç›˜" },
+    { name: "å·´æ‰Žå°” (Bearded Warrior)", role: "æˆ˜åŠ›æ‹…å½“/å¸‚äº•è°ƒå‰‚", personality: "è±ªçˆ½ä¸ç¾ã€ç¥žç»ç²—å¤§ã€é‡Žæ€§æ±‚ç”Ÿæ¬²æžå¼ºã€çˆ±è´ªä¾¿å®œçš„ç»œè…®èƒ¡æˆ˜å£«", clothing: "å…½çš®æŠ¤è‚©ã€ç£¨æŸä¸¥é‡çš„é»„é“œåŠèº«èƒ¸ç”²ã€è…°æŒ‚çŸ­æŸ„æ–§" }
   ],
   shots: [
-    { timestamp: "00:00 - 00:07", timeSeconds: 3, movement: "全景航拍转倾斜俯冲", composition: "对称构图及下三分法构图", emotion: "震撼、壮丽、充满冒险史诗感", description: "一艘巨大的蒸汽飞空艇在白云缭绕的崇山峻岭间飞行，随后镜头垂直向下，俯冲展现飞空艇的动力推进装置，奠定了影片宏大的奇幻工业世界观。" },
-    { timestamp: "00:07 - 00:27", timeSeconds: 15, movement: "低角度脚步跟拍至舱内推轨", composition: "利用两侧金属阀门与舱壁形成汇聚线/框架构图", emotion: "神秘、沉闷、暗流涌动", description: "舱内昏暗且充满金属感，神秘的黑发少女在前方走，沉重的厚底长靴发出回音。同行的赫伯特教授正在激烈地抱怨因迷路耽误了十二分钟。" },
-    { timestamp: "00:27 - 00:40", timeSeconds: 32, movement: "中景对话结合角色面部特写", composition: "黄金分割点构图，聚焦教授面部细节", emotion: "风趣、辩论气氛、日常拌嘴", description: "赫伯特教授嘴硬推眼镜，宣称自己的伪装计划完美无瑕。巴扎尔无情戳穿：你把伪造的单子交给了一个不识字、甚至把纸拿反了的守卫！" },
-    { timestamp: "00:40 - 00:57", timeSeconds: 48, movement: "定机位双人特写", composition: "强烈的左右对比构图，一糙一雅形成心理落差", emotion: "荒诞喜感、嫌弃", description: "巴扎尔毫不在意地用手指挖起鼻孔，教授感到极大生理不适。质问他是否在用手指挖鼻子，巴扎尔反讽说难道应该用叉子，教授则要求他保持‘基本文明’。" },
-    { timestamp: "00:57 - 01:13", timeSeconds: 65, movement: "通道透视拉推镜", composition: "三分法、通道透视，灯光摇曳", emotion: "诙谐、市井冒险气", description: "舱顶气阀喷出蒸汽，吊灯剧烈晃动。巴扎尔嬉皮笑脸说他在‘寻找宝藏’。教授吐槽‘在鼻子里？’巴扎尔回敬‘在里面找到的东西比你前三张地图还要多！’" },
-    { timestamp: "01:13 - 01:31", timeSeconds: 80, movement: "高低位垂直跟拍", composition: "纵向垂直分割画面，少女沿梯子下行", emotion: "欢乐、相互吐槽、羁绊加深", description: "少女沿铁梯轻盈走下，教授继续输出：‘如果谁活得像野兽，绝对是你，还记得吃生肉那次吗？’巴扎尔不甘示弱：‘那是蛋白质！你只是嫉妒我能消化。’" },
-    { timestamp: "01:31 - 01:56", timeSeconds: 105, movement: "第一人称开门到广角摇摄", composition: "框式逆光，地平线处于中下段，云海在阳光下波澜壮阔", emotion: "心旷神怡、波澜壮阔、危机临近", description: "少女利落拉开沉重舱门，狂风大作。外面是高达万米的高空云海，远处漂浮着一艘飞空帆船。少女回头抛下一句‘下去的时候尽量别叫’，十分挑衅。" },
-    { timestamp: "01:56 - 02:07", timeSeconds: 118, movement: "高速自由落体跟拍", composition: "俯仰视差，少女居中，放射线流线线条", emotion: "惊险、狂放、自由感", description: "少女张开双臂，优雅地向云海仰面坠下，动作潇洒完美。巴扎尔在甲板边哈哈大笑赞叹‘这才是我欣赏的女人！’，并戏谑教授是不是恐高。" },
-    { timestamp: "02:07 - 02:25", timeSeconds: 135, movement: "镜头急速推拉与搞笑定格", composition: "教授侧身近景，巴扎尔突然消失打破平衡", emotion: "滑稽、强作镇定、认命", description: "教授嘴硬：‘我只是在计算最佳降落角度！’巴扎尔大吼‘那你去算算这个吧！’说完后仰尖叫跳下。教授绝望自语‘我讨厌这个队伍’，也无奈跃下。" },
-    { timestamp: "02:25 - 03:24", timeSeconds: 165, movement: "高空平行摇摆跟拍", composition: "并列飞行，风阻形变，背景是无际蔚蓝和白云", emotion: "极度亢奋、强烈的速度和失重冲击", description: "三人如同鸟儿般穿过云海。巴扎尔大吼‘这才是生活！’，并疯狂嘲笑脸色煞白、还在手忙脚乱强装‘一切尽在掌握’的教授。少女则在一旁优雅滑行。" },
-    { timestamp: "03:24 - 03:39", timeSeconds: 210, movement: "特效穿越快摇", composition: "斜向对角线构图，洁白雪山与黑色风暴传送门对撞", emotion: "极速丝滑、环境异样的震撼", description: "少女在空中凭空召唤一个黑色漩涡传送门，穿过后瞬间落在一座巍峨的雪山上，她凭借重靴如同滑雪板一般在陡峭雪坡上极速画弧滑行。" },
-    { timestamp: "03:39 - 03:55", timeSeconds: 228, movement: "动态剪辑对比", composition: "左半边少女轻灵滑行，右半边两人狼狈翻滚", emotion: "滑稽搞笑、惊险万分", description: "两个大男人从传送门滚落砸进雪堆，惨遭雪崩式翻滚。教授绝望惨叫‘这不叫减速！这只是换了个姿势往下掉！’，巴扎尔嘴硬‘总比走路强！’" }
+    { timestamp: "00:00 - 00:07", timeSeconds: 3, movement: "å…¨æ™¯èˆªæ‹è½¬å€¾æ–œä¿¯å†²", composition: "å¯¹ç§°æž„å›¾åŠä¸‹ä¸‰åˆ†æ³•æž„å›¾", emotion: "éœ‡æ’¼ã€å£®ä¸½ã€å……æ»¡å†’é™©å²è¯—æ„Ÿ", description: "ä¸€è‰˜å·¨å¤§çš„è’¸æ±½é£žç©ºè‰‡åœ¨ç™½äº‘ç¼­ç»•çš„å´‡å±±å³»å²­é—´é£žè¡Œï¼ŒéšåŽé•œå¤´åž‚ç›´å‘ä¸‹ï¼Œä¿¯å†²å±•çŽ°é£žç©ºè‰‡çš„åŠ¨åŠ›æŽ¨è¿›è£…ç½®ï¼Œå¥ å®šäº†å½±ç‰‡å®å¤§çš„å¥‡å¹»å·¥ä¸šä¸–ç•Œè§‚ã€‚" },
+    { timestamp: "00:07 - 00:27", timeSeconds: 15, movement: "ä½Žè§’åº¦è„šæ­¥è·Ÿæ‹è‡³èˆ±å†…æŽ¨è½¨", composition: "åˆ©ç”¨ä¸¤ä¾§é‡‘å±žé˜€é—¨ä¸Žèˆ±å£å½¢æˆæ±‡èšçº¿/æ¡†æž¶æž„å›¾", emotion: "ç¥žç§˜ã€æ²‰é—·ã€æš—æµæ¶ŒåŠ¨", description: "èˆ±å†…æ˜æš—ä¸”å……æ»¡é‡‘å±žæ„Ÿï¼Œç¥žç§˜çš„é»‘å‘å°‘å¥³åœ¨å‰æ–¹èµ°ï¼Œæ²‰é‡çš„åŽšåº•é•¿é´å‘å‡ºå›žéŸ³ã€‚åŒè¡Œçš„èµ«ä¼¯ç‰¹æ•™æŽˆæ­£åœ¨æ¿€çƒˆåœ°æŠ±æ€¨å› è¿·è·¯è€½è¯¯äº†åäºŒåˆ†é’Ÿã€‚" },
+    { timestamp: "00:27 - 00:40", timeSeconds: 32, movement: "ä¸­æ™¯å¯¹è¯ç»“åˆè§’è‰²é¢éƒ¨ç‰¹å†™", composition: "é»„é‡‘åˆ†å‰²ç‚¹æž„å›¾ï¼Œèšç„¦æ•™æŽˆé¢éƒ¨ç»†èŠ‚", emotion: "é£Žè¶£ã€è¾©è®ºæ°”æ°›ã€æ—¥å¸¸æ‹Œå˜´", description: "èµ«ä¼¯ç‰¹æ•™æŽˆå˜´ç¡¬æŽ¨çœ¼é•œï¼Œå®£ç§°è‡ªå·±çš„ä¼ªè£…è®¡åˆ’å®Œç¾Žæ— ç‘•ã€‚å·´æ‰Žå°”æ— æƒ…æˆ³ç©¿ï¼šä½ æŠŠä¼ªé€ çš„å•å­äº¤ç»™äº†ä¸€ä¸ªä¸è¯†å­—ã€ç”šè‡³æŠŠçº¸æ‹¿åäº†çš„å®ˆå«ï¼" },
+    { timestamp: "00:40 - 00:57", timeSeconds: 48, movement: "å®šæœºä½åŒäººç‰¹å†™", composition: "å¼ºçƒˆçš„å·¦å³å¯¹æ¯”æž„å›¾ï¼Œä¸€ç³™ä¸€é›…å½¢æˆå¿ƒç†è½å·®", emotion: "è’è¯žå–œæ„Ÿã€å«Œå¼ƒ", description: "å·´æ‰Žå°”æ¯«ä¸åœ¨æ„åœ°ç”¨æ‰‹æŒ‡æŒ–èµ·é¼»å­”ï¼Œæ•™æŽˆæ„Ÿåˆ°æžå¤§ç”Ÿç†ä¸é€‚ã€‚è´¨é—®ä»–æ˜¯å¦åœ¨ç”¨æ‰‹æŒ‡æŒ–é¼»å­ï¼Œå·´æ‰Žå°”åè®½è¯´éš¾é“åº”è¯¥ç”¨å‰å­ï¼Œæ•™æŽˆåˆ™è¦æ±‚ä»–ä¿æŒâ€˜åŸºæœ¬æ–‡æ˜Žâ€™ã€‚" },
+    { timestamp: "00:57 - 01:13", timeSeconds: 65, movement: "é€šé“é€è§†æ‹‰æŽ¨é•œ", composition: "ä¸‰åˆ†æ³•ã€é€šé“é€è§†ï¼Œç¯å…‰æ‘‡æ›³", emotion: "è¯™è°ã€å¸‚äº•å†’é™©æ°”", description: "èˆ±é¡¶æ°”é˜€å–·å‡ºè’¸æ±½ï¼ŒåŠç¯å‰§çƒˆæ™ƒåŠ¨ã€‚å·´æ‰Žå°”å¬‰çš®ç¬‘è„¸è¯´ä»–åœ¨â€˜å¯»æ‰¾å®è—â€™ã€‚æ•™æŽˆåæ§½â€˜åœ¨é¼»å­é‡Œï¼Ÿâ€™å·´æ‰Žå°”å›žæ•¬â€˜åœ¨é‡Œé¢æ‰¾åˆ°çš„ä¸œè¥¿æ¯”ä½ å‰ä¸‰å¼ åœ°å›¾è¿˜è¦å¤šï¼â€™" },
+    { timestamp: "01:13 - 01:31", timeSeconds: 80, movement: "é«˜ä½Žä½åž‚ç›´è·Ÿæ‹", composition: "çºµå‘åž‚ç›´åˆ†å‰²ç”»é¢ï¼Œå°‘å¥³æ²¿æ¢¯å­ä¸‹è¡Œ", emotion: "æ¬¢ä¹ã€ç›¸äº’åæ§½ã€ç¾ç»ŠåŠ æ·±", description: "å°‘å¥³æ²¿é“æ¢¯è½»ç›ˆèµ°ä¸‹ï¼Œæ•™æŽˆç»§ç»­è¾“å‡ºï¼šâ€˜å¦‚æžœè°æ´»å¾—åƒé‡Žå…½ï¼Œç»å¯¹æ˜¯ä½ ï¼Œè¿˜è®°å¾—åƒç”Ÿè‚‰é‚£æ¬¡å—ï¼Ÿâ€™å·´æ‰Žå°”ä¸ç”˜ç¤ºå¼±ï¼šâ€˜é‚£æ˜¯è›‹ç™½è´¨ï¼ä½ åªæ˜¯å«‰å¦’æˆ‘èƒ½æ¶ˆåŒ–ã€‚â€™" },
+    { timestamp: "01:31 - 01:56", timeSeconds: 105, movement: "ç¬¬ä¸€äººç§°å¼€é—¨åˆ°å¹¿è§’æ‘‡æ‘„", composition: "æ¡†å¼é€†å…‰ï¼Œåœ°å¹³çº¿å¤„äºŽä¸­ä¸‹æ®µï¼Œäº‘æµ·åœ¨é˜³å…‰ä¸‹æ³¢æ¾œå£®é˜”", emotion: "å¿ƒæ—·ç¥žæ€¡ã€æ³¢æ¾œå£®é˜”ã€å±æœºä¸´è¿‘", description: "å°‘å¥³åˆ©è½æ‹‰å¼€æ²‰é‡èˆ±é—¨ï¼Œç‹‚é£Žå¤§ä½œã€‚å¤–é¢æ˜¯é«˜è¾¾ä¸‡ç±³çš„é«˜ç©ºäº‘æµ·ï¼Œè¿œå¤„æ¼‚æµ®ç€ä¸€è‰˜é£žç©ºå¸†èˆ¹ã€‚å°‘å¥³å›žå¤´æŠ›ä¸‹ä¸€å¥â€˜ä¸‹åŽ»çš„æ—¶å€™å°½é‡åˆ«å«â€™ï¼Œååˆ†æŒ‘è¡…ã€‚" },
+    { timestamp: "01:56 - 02:07", timeSeconds: 118, movement: "é«˜é€Ÿè‡ªç”±è½ä½“è·Ÿæ‹", composition: "ä¿¯ä»°è§†å·®ï¼Œå°‘å¥³å±…ä¸­ï¼Œæ”¾å°„çº¿æµçº¿çº¿æ¡", emotion: "æƒŠé™©ã€ç‹‚æ”¾ã€è‡ªç”±æ„Ÿ", description: "å°‘å¥³å¼ å¼€åŒè‡‚ï¼Œä¼˜é›…åœ°å‘äº‘æµ·ä»°é¢å ä¸‹ï¼ŒåŠ¨ä½œæ½‡æ´’å®Œç¾Žã€‚å·´æ‰Žå°”åœ¨ç”²æ¿è¾¹å“ˆå“ˆå¤§ç¬‘èµžå¹â€˜è¿™æ‰æ˜¯æˆ‘æ¬£èµçš„å¥³äººï¼â€™ï¼Œå¹¶æˆè°‘æ•™æŽˆæ˜¯ä¸æ˜¯æé«˜ã€‚" },
+    { timestamp: "02:07 - 02:25", timeSeconds: 135, movement: "é•œå¤´æ€¥é€ŸæŽ¨æ‹‰ä¸Žæžç¬‘å®šæ ¼", composition: "æ•™æŽˆä¾§èº«è¿‘æ™¯ï¼Œå·´æ‰Žå°”çªç„¶æ¶ˆå¤±æ‰“ç ´å¹³è¡¡", emotion: "æ»‘ç¨½ã€å¼ºä½œé•‡å®šã€è®¤å‘½", description: "æ•™æŽˆå˜´ç¡¬ï¼šâ€˜æˆ‘åªæ˜¯åœ¨è®¡ç®—æœ€ä½³é™è½è§’åº¦ï¼â€™å·´æ‰Žå°”å¤§å¼â€˜é‚£ä½ åŽ»ç®—ç®—è¿™ä¸ªå§ï¼â€™è¯´å®ŒåŽä»°å°–å«è·³ä¸‹ã€‚æ•™æŽˆç»æœ›è‡ªè¯­â€˜æˆ‘è®¨åŽŒè¿™ä¸ªé˜Ÿä¼â€™ï¼Œä¹Ÿæ— å¥ˆè·ƒä¸‹ã€‚" },
+    { timestamp: "02:25 - 03:24", timeSeconds: 165, movement: "é«˜ç©ºå¹³è¡Œæ‘‡æ‘†è·Ÿæ‹", composition: "å¹¶åˆ—é£žè¡Œï¼Œé£Žé˜»å½¢å˜ï¼ŒèƒŒæ™¯æ˜¯æ— é™…è”šè“å’Œç™½äº‘", emotion: "æžåº¦äº¢å¥‹ã€å¼ºçƒˆçš„é€Ÿåº¦å’Œå¤±é‡å†²å‡»", description: "ä¸‰äººå¦‚åŒé¸Ÿå„¿èˆ¬ç©¿è¿‡äº‘æµ·ã€‚å·´æ‰Žå°”å¤§å¼â€˜è¿™æ‰æ˜¯ç”Ÿæ´»ï¼â€™ï¼Œå¹¶ç–¯ç‹‚å˜²ç¬‘è„¸è‰²ç…žç™½ã€è¿˜åœ¨æ‰‹å¿™è„šä¹±å¼ºè£…â€˜ä¸€åˆ‡å°½åœ¨æŽŒæ¡â€™çš„æ•™æŽˆã€‚å°‘å¥³åˆ™åœ¨ä¸€æ—ä¼˜é›…æ»‘è¡Œã€‚" },
+    { timestamp: "03:24 - 03:39", timeSeconds: 210, movement: "ç‰¹æ•ˆç©¿è¶Šå¿«æ‘‡", composition: "æ–œå‘å¯¹è§’çº¿æž„å›¾ï¼Œæ´ç™½é›ªå±±ä¸Žé»‘è‰²é£Žæš´ä¼ é€é—¨å¯¹æ’ž", emotion: "æžé€Ÿä¸æ»‘ã€çŽ¯å¢ƒå¼‚æ ·çš„éœ‡æ’¼", description: "å°‘å¥³åœ¨ç©ºä¸­å‡­ç©ºå¬å”¤ä¸€ä¸ªé»‘è‰²æ¼©æ¶¡ä¼ é€é—¨ï¼Œç©¿è¿‡åŽçž¬é—´è½åœ¨ä¸€åº§å·å³¨çš„é›ªå±±ä¸Šï¼Œå¥¹å‡­å€Ÿé‡é´å¦‚åŒæ»‘é›ªæ¿ä¸€èˆ¬åœ¨é™¡å³­é›ªå¡ä¸Šæžé€Ÿç”»å¼§æ»‘è¡Œã€‚" },
+    { timestamp: "03:39 - 03:55", timeSeconds: 228, movement: "åŠ¨æ€å‰ªè¾‘å¯¹æ¯”", composition: "å·¦åŠè¾¹å°‘å¥³è½»çµæ»‘è¡Œï¼Œå³åŠè¾¹ä¸¤äººç‹¼ç‹ˆç¿»æ»š", emotion: "æ»‘ç¨½æžç¬‘ã€æƒŠé™©ä¸‡åˆ†", description: "ä¸¤ä¸ªå¤§ç”·äººä»Žä¼ é€é—¨æ»šè½ç ¸è¿›é›ªå †ï¼Œæƒ¨é­é›ªå´©å¼ç¿»æ»šã€‚æ•™æŽˆç»æœ›æƒ¨å«â€˜è¿™ä¸å«å‡é€Ÿï¼è¿™åªæ˜¯æ¢äº†ä¸ªå§¿åŠ¿å¾€ä¸‹æŽ‰ï¼â€™ï¼Œå·´æ‰Žå°”å˜´ç¡¬â€˜æ€»æ¯”èµ°è·¯å¼ºï¼â€™" }
   ]
 };
 
@@ -214,6 +250,53 @@ function writeDb(data: any) {
   }
 }
 
+// Helper: one-time static migration to ensure all existing shots/characters have UUIDs
+function migrateDatabaseIds() {
+  console.log('[SQLite Migration] Checking for missing Shot/Character IDs...');
+  try {
+    const getStmt = dbSqlite.prepare('SELECT value FROM store WHERE key = ?');
+    const scriptsRow = getStmt.get('generated_scripts') as { value: string } | undefined;
+    if (!scriptsRow) return;
+
+    const generated_scripts = JSON.parse(scriptsRow.value);
+    if (!Array.isArray(generated_scripts)) return;
+
+    let modified = false;
+    for (const script of generated_scripts) {
+      if (script.newShots) {
+        for (const shot of script.newShots) {
+          if (!shot.id) {
+            shot.id = crypto.randomUUID();
+            modified = true;
+          }
+        }
+      }
+      if (script.newCharacters) {
+        for (const char of script.newCharacters) {
+          if (!char.id) {
+            char.id = crypto.randomUUID();
+            modified = true;
+          }
+        }
+      }
+    }
+
+    if (modified) {
+      console.log('[SQLite Migration] Found missing IDs. Performing atomic migration transaction...');
+      const transaction = dbSqlite.transaction(() => {
+        const updateStmt = dbSqlite.prepare('INSERT OR REPLACE INTO store (key, value) VALUES (?, ?)');
+        updateStmt.run('generated_scripts', JSON.stringify(generated_scripts));
+      });
+      transaction();
+      console.log('[SQLite Migration] Database ID migration complete.');
+    } else {
+      console.log('[SQLite Migration] All Shot/Character IDs are up to date.');
+    }
+  } catch (err) {
+    console.error('[SQLite Migration Error]', err);
+  }
+}
+
 
 // Helper: optimize prompt with Gemini
 async function optimizePrompt(rawPrompt: string, isCharacter: boolean, style?: string): Promise<string> {
@@ -249,24 +332,24 @@ async function optimizePrompt(rawPrompt: string, isCharacter: boolean, style?: s
 const responseSchema = {
   type: 'OBJECT',
   properties: {
-    title: { type: 'STRING', description: '视频的标题/名称' },
-    genre: { type: 'STRING', description: '视频的类型/流派，例如：剧情、科幻、悬疑、纪录片、广告等' },
+    title: { type: 'STRING', description: 'è§†é¢‘çš„æ ‡é¢˜/åç§°' },
+    genre: { type: 'STRING', description: 'è§†é¢‘çš„ç±»åž‹/æµæ´¾ï¼Œä¾‹å¦‚ï¼šå‰§æƒ…ã€ç§‘å¹»ã€æ‚¬ç–‘ã€çºªå½•ç‰‡ã€å¹¿å‘Šç­‰' },
     tags: {
       type: 'ARRAY',
       items: { type: 'STRING' },
-      description: '视频的标签，例如：紧张、唯美、快节奏、感人等'
+      description: 'è§†é¢‘çš„æ ‡ç­¾ï¼Œä¾‹å¦‚ï¼šç´§å¼ ã€å”¯ç¾Žã€å¿«èŠ‚å¥ã€æ„Ÿäººç­‰'
     },
     shots: {
       type: 'ARRAY',
       items: {
         type: 'OBJECT',
         properties: {
-          timestamp: { type: 'STRING', description: '镜头的时间戳范围，例如 00:00 - 00:05' },
-          timeSeconds: { type: 'INTEGER', description: '该镜头在视频中开始的秒数' },
-          movement: { type: 'STRING', description: '运镜方式，例如：固定镜头、全景跟拍、低角度手持等' },
-          composition: { type: 'STRING', description: '画面构图，例如：三分法、中心构图、框架构图等' },
-          emotion: { type: 'STRING', description: '镜头传达的情绪，例如：震撼、平静、神秘、滑稽等' },
-          description: { type: 'STRING', description: '该镜头画面的具体内容和情节描述' }
+          timestamp: { type: 'STRING', description: 'é•œå¤´çš„æ—¶é—´æˆ³èŒƒå›´ï¼Œä¾‹å¦‚ 00:00 - 00:05' },
+          timeSeconds: { type: 'INTEGER', description: 'è¯¥é•œå¤´åœ¨è§†é¢‘ä¸­å¼€å§‹çš„ç§’æ•°' },
+          movement: { type: 'STRING', description: 'è¿é•œæ–¹å¼ï¼Œä¾‹å¦‚ï¼šå›ºå®šé•œå¤´ã€å…¨æ™¯è·Ÿæ‹ã€ä½Žè§’åº¦æ‰‹æŒç­‰' },
+          composition: { type: 'STRING', description: 'ç”»é¢æž„å›¾ï¼Œä¾‹å¦‚ï¼šä¸‰åˆ†æ³•ã€ä¸­å¿ƒæž„å›¾ã€æ¡†æž¶æž„å›¾ç­‰' },
+          emotion: { type: 'STRING', description: 'é•œå¤´ä¼ è¾¾çš„æƒ…ç»ªï¼Œä¾‹å¦‚ï¼šéœ‡æ’¼ã€å¹³é™ã€ç¥žç§˜ã€æ»‘ç¨½ç­‰' },
+          description: { type: 'STRING', description: 'è¯¥é•œå¤´ç”»é¢çš„å…·ä½“å†…å®¹å’Œæƒ…èŠ‚æè¿°' }
         },
         required: ['timestamp', 'timeSeconds', 'movement', 'composition', 'emotion', 'description']
       }
@@ -276,10 +359,10 @@ const responseSchema = {
       items: {
         type: 'OBJECT',
         properties: {
-          name: { type: 'STRING', description: '角色姓名或代号/外观特征代称，例如：黑发少女、教授、高大守卫' },
-          role: { type: 'STRING', description: '角色戏份或定位，例如：主角、反面人物、背景路人' },
-          personality: { type: 'STRING', description: '角色性格特点描述' },
-          clothing: { type: 'STRING', description: '角色的服装、服饰及外貌特征' }
+          name: { type: 'STRING', description: 'è§’è‰²å§“åæˆ–ä»£å·/å¤–è§‚ç‰¹å¾ä»£ç§°ï¼Œä¾‹å¦‚ï¼šé»‘å‘å°‘å¥³ã€æ•™æŽˆã€é«˜å¤§å®ˆå«' },
+          role: { type: 'STRING', description: 'è§’è‰²æˆä»½æˆ–å®šä½ï¼Œä¾‹å¦‚ï¼šä¸»è§’ã€åé¢äººç‰©ã€èƒŒæ™¯è·¯äºº' },
+          personality: { type: 'STRING', description: 'è§’è‰²æ€§æ ¼ç‰¹ç‚¹æè¿°' },
+          clothing: { type: 'STRING', description: 'è§’è‰²çš„æœè£…ã€æœé¥°åŠå¤–è²Œç‰¹å¾' }
         },
         required: ['name', 'role', 'personality', 'clothing']
       }
@@ -287,9 +370,9 @@ const responseSchema = {
     narrative: {
       type: 'OBJECT',
       properties: {
-        structure: { type: 'STRING', description: '故事的三幕剧结构分析（如开端、高潮、结局）' },
-        rhythm: { type: 'STRING', description: '视频整体的剪辑节奏、视听搭配与节奏起伏特点' },
-        climaxDesign: { type: 'STRING', description: '分析故事的爽点位置、戏剧冲突高潮点以及是如何设计的' }
+        structure: { type: 'STRING', description: 'æ•…äº‹çš„ä¸‰å¹•å‰§ç»“æž„åˆ†æžï¼ˆå¦‚å¼€ç«¯ã€é«˜æ½®ã€ç»“å±€ï¼‰' },
+        rhythm: { type: 'STRING', description: 'è§†é¢‘æ•´ä½“çš„å‰ªè¾‘èŠ‚å¥ã€è§†å¬æ­é…ä¸ŽèŠ‚å¥èµ·ä¼ç‰¹ç‚¹' },
+        climaxDesign: { type: 'STRING', description: 'åˆ†æžæ•…äº‹çš„çˆ½ç‚¹ä½ç½®ã€æˆå‰§å†²çªé«˜æ½®ç‚¹ä»¥åŠæ˜¯å¦‚ä½•è®¾è®¡çš„' }
       },
       required: ['structure', 'rhythm', 'climaxDesign']
     }
@@ -447,16 +530,16 @@ app.post('/api/analyze', async (req, res) => {
     }
     console.log('[Gemini] File is active on Gemini. Starting analysis...');
 
-    let prompt = `你是一个专业的影视分析大师。请仔细观看这段视频，并输出一个详细的中文视频结构化分析报告。
-请严格按照提供的 JSON Schema 输出，必须包含以下内容：
-1. 镜头列表 (shots)：请以每个“物理剪辑点 (Cut Point / Edit Point)”为单位识别分镜，最小分析粒度为1秒。绝对不要合并内容相似或连续发生的相邻镜头。每一次画面切换/物理剪辑发生后，必须单独输出一条镜头记录。每个镜头需要包含时间范围（如 00:00 - 00:05，起止时间要精准对齐物理剪辑点）、该镜头在视频中开始的秒数 (timeSeconds, 整数，表示距视频开头的秒数)、运镜方式、画面构图、情绪基调以及具体的画面内容情节描述。
-2. 人物画像 (characters)：如果视频中出现主要人物，请提取所有主要角色的姓名或外观代称、角色身份定位、性格特征、服装描述。若无角色或人物，可为空列表。
-3. 叙事与爽点 (narrative)：深入分析故事的故事结构（如三幕剧结构）、剪辑与视听节奏特点、爽点设计与冲突爆点位置。
+    let prompt = `ä½ æ˜¯ä¸€ä¸ªä¸“ä¸šçš„å½±è§†åˆ†æžå¤§å¸ˆã€‚è¯·ä»”ç»†è§‚çœ‹è¿™æ®µè§†é¢‘ï¼Œå¹¶è¾“å‡ºä¸€ä¸ªè¯¦ç»†çš„ä¸­æ–‡è§†é¢‘ç»“æž„åŒ–åˆ†æžæŠ¥å‘Šã€‚
+è¯·ä¸¥æ ¼æŒ‰ç…§æä¾›çš„ JSON Schema è¾“å‡ºï¼Œå¿…é¡»åŒ…å«ä»¥ä¸‹å†…å®¹ï¼š
+1. é•œå¤´åˆ—è¡¨ (shots)ï¼šè¯·ä»¥æ¯ä¸ªâ€œç‰©ç†å‰ªè¾‘ç‚¹ (Cut Point / Edit Point)â€ä¸ºå•ä½è¯†åˆ«åˆ†é•œï¼Œæœ€å°åˆ†æžç²’åº¦ä¸º1ç§’ã€‚ç»å¯¹ä¸è¦åˆå¹¶å†…å®¹ç›¸ä¼¼æˆ–è¿žç»­å‘ç”Ÿçš„ç›¸é‚»é•œå¤´ã€‚æ¯ä¸€æ¬¡ç”»é¢åˆ‡æ¢/ç‰©ç†å‰ªè¾‘å‘ç”ŸåŽï¼Œå¿…é¡»å•ç‹¬è¾“å‡ºä¸€æ¡é•œå¤´è®°å½•ã€‚æ¯ä¸ªé•œå¤´éœ€è¦åŒ…å«æ—¶é—´èŒƒå›´ï¼ˆå¦‚ 00:00 - 00:05ï¼Œèµ·æ­¢æ—¶é—´è¦ç²¾å‡†å¯¹é½ç‰©ç†å‰ªè¾‘ç‚¹ï¼‰ã€è¯¥é•œå¤´åœ¨è§†é¢‘ä¸­å¼€å§‹çš„ç§’æ•° (timeSeconds, æ•´æ•°ï¼Œè¡¨ç¤ºè·è§†é¢‘å¼€å¤´çš„ç§’æ•°)ã€è¿é•œæ–¹å¼ã€ç”»é¢æž„å›¾ã€æƒ…ç»ªåŸºè°ƒä»¥åŠå…·ä½“çš„ç”»é¢å†…å®¹æƒ…èŠ‚æè¿°ã€‚
+2. äººç‰©ç”»åƒ (characters)ï¼šå¦‚æžœè§†é¢‘ä¸­å‡ºçŽ°ä¸»è¦äººç‰©ï¼Œè¯·æå–æ‰€æœ‰ä¸»è¦è§’è‰²çš„å§“åæˆ–å¤–è§‚ä»£ç§°ã€è§’è‰²èº«ä»½å®šä½ã€æ€§æ ¼ç‰¹å¾ã€æœè£…æè¿°ã€‚è‹¥æ— è§’è‰²æˆ–äººç‰©ï¼Œå¯ä¸ºç©ºåˆ—è¡¨ã€‚
+3. å™äº‹ä¸Žçˆ½ç‚¹ (narrative)ï¼šæ·±å…¥åˆ†æžæ•…äº‹çš„æ•…äº‹ç»“æž„ï¼ˆå¦‚ä¸‰å¹•å‰§ç»“æž„ï¼‰ã€å‰ªè¾‘ä¸Žè§†å¬èŠ‚å¥ç‰¹ç‚¹ã€çˆ½ç‚¹è®¾è®¡ä¸Žå†²çªçˆ†ç‚¹ä½ç½®ã€‚
 
-请确保分析细致入微、条理清晰，严格遵守物理剪辑分镜划分规则。`;
+è¯·ç¡®ä¿åˆ†æžç»†è‡´å…¥å¾®ã€æ¡ç†æ¸…æ™°ï¼Œä¸¥æ ¼éµå®ˆç‰©ç†å‰ªè¾‘åˆ†é•œåˆ’åˆ†è§„åˆ™ã€‚`;
 
     if (shortDramaMode) {
-      prompt += `\n特别注意：这是竖屏短剧，每3-5秒一个镜头，按台词停顿和情绪转折切分。`;
+      prompt += `\nç‰¹åˆ«æ³¨æ„ï¼šè¿™æ˜¯ç«–å±çŸ­å‰§ï¼Œæ¯3-5ç§’ä¸€ä¸ªé•œå¤´ï¼ŒæŒ‰å°è¯åœé¡¿å’Œæƒ…ç»ªè½¬æŠ˜åˆ‡åˆ†ã€‚`;
       console.log('[Gemini] Short Drama Mode enabled for video analysis prompt.');
     }
 
@@ -503,7 +586,7 @@ app.post('/api/analyze', async (req, res) => {
       filepath: filepath,
       url: `/uploads/${filename}`,
       title: title || analysisResult.title || filename,
-      genre: analysisResult.genre || '剧情',
+      genre: analysisResult.genre || 'å‰§æƒ…',
       tags: analysisResult.tags || [],
       analysis: {
         shots: analysisResult.shots || [],
@@ -566,9 +649,11 @@ app.delete('/api/videos/:id', async (req, res) => {
 // 7. POST /api/generate-script - Generate new script from template
 app.post('/api/generate-script', async (req, res) => {
   const { templateId, topic, preferences, shortDramaMode } = req.body;
+  const requestedShotCount = Math.max(0, Math.min(30, Number(preferences?.shotCount) || 0));
+  const requestedCharacterCount = Math.max(0, Math.min(10, Number(preferences?.characterCount) || 0));
   
   if (!topic) {
-    return res.status(400).json({ error: '新故事主题/设定是必需的。' });
+    return res.status(400).json({ error: 'æ–°æ•…äº‹ä¸»é¢˜/è®¾å®šæ˜¯å¿…éœ€çš„ã€‚' });
   }
   
   try {
@@ -589,20 +674,20 @@ app.post('/api/generate-script', async (req, res) => {
     
     const ai = new GoogleGenAI({ apiKey });
     
-    let prompt = `你是一个业界顶级的影视金牌编剧和分镜导演。
-现在，我们要以一个现有的视频分析数据作为“创意骨架与节奏模板”，为你指定的一个新故事设定创作一套全新且高质量的影视剧本、角色卡片和分镜脚本。
+    let prompt = `ä½ æ˜¯ä¸€ä¸ªä¸šç•Œé¡¶çº§çš„å½±è§†é‡‘ç‰Œç¼–å‰§å’Œåˆ†é•œå¯¼æ¼”ã€‚
+çŽ°åœ¨ï¼Œæˆ‘ä»¬è¦ä»¥ä¸€ä¸ªçŽ°æœ‰çš„è§†é¢‘åˆ†æžæ•°æ®ä½œä¸ºâ€œåˆ›æ„éª¨æž¶ä¸ŽèŠ‚å¥æ¨¡æ¿â€ï¼Œä¸ºä½ æŒ‡å®šçš„ä¸€ä¸ªæ–°æ•…äº‹è®¾å®šåˆ›ä½œä¸€å¥—å…¨æ–°ä¸”é«˜è´¨é‡çš„å½±è§†å‰§æœ¬ã€è§’è‰²å¡ç‰‡å’Œåˆ†é•œè„šæœ¬ã€‚
 
-【新故事设定/主题】
+ã€æ–°æ•…äº‹è®¾å®š/ä¸»é¢˜ã€‘
 ${topic}
 
-【模板视频数据】
-1. 叙事节奏与爽点：
-   - 三幕结构：${templateData.narrative.structure}
-   - 视听节奏：${templateData.narrative.rhythm}
-   - 爽点冲突设计：${templateData.narrative.climaxDesign || (templateData.narrative as any).climaxDesign}
-2. 模板人物关系与定位：
+ã€æ¨¡æ¿è§†é¢‘æ•°æ®ã€‘
+1. å™äº‹èŠ‚å¥ä¸Žçˆ½ç‚¹ï¼š
+   - ä¸‰å¹•ç»“æž„ï¼š${templateData.narrative.structure}
+   - è§†å¬èŠ‚å¥ï¼š${templateData.narrative.rhythm}
+   - çˆ½ç‚¹å†²çªè®¾è®¡ï¼š${templateData.narrative.climaxDesign || (templateData.narrative as any).climaxDesign}
+2. æ¨¡æ¿äººç‰©å…³ç³»ä¸Žå®šä½ï¼š
    ${JSON.stringify(templateData.characters, null, 2)}
-3. 模板分镜序列与运镜美学：
+3. æ¨¡æ¿åˆ†é•œåºåˆ—ä¸Žè¿é•œç¾Žå­¦ï¼š
    ${JSON.stringify(templateData.shots.map(s => ({
      timestamp: s.timestamp,
      timeSeconds: s.timeSeconds,
@@ -612,55 +697,64 @@ ${topic}
      description: s.description
    })), null, 2)}
 
-【创作要求】
-1. **结构与运镜继承**：新剧本的分镜节奏、转折起伏和叙事阶段必须严格对应模板视频的分镜脉络！例如：如果模板视频在第1个分镜是“航拍展现宏大世界观”，那新故事的第1个分镜也应当是用宏大的运镜 and 画面构图展现你的新主题世界观；如果模板在某处发生了空间穿梭或狼狈滑倒的情节，新剧本也应当在对应镜头设计出相同张力节奏的事件。
-2. **人物映射**：新故事中的主要角色和人物关系应当与模板中的性格特征形成鲜明映射（如：一个冷面领航者、一个傲娇学者、一个豪爽糙汉战士），但角色的名称、服饰装备、台词细节必须完全原创并对齐新的主题设定。
-3. **内容高度原创**：镜头的情节说明、台词、情感变化必须生动有趣、符合你资深编剧的身份。禁止原样照抄模板中 steampunk/飞空艇/雪山等特有词汇，必须对齐新故事的主题设定进行深度创作。
+ã€åˆ›ä½œè¦æ±‚ã€‘
+1. **ç»“æž„ä¸Žè¿é•œç»§æ‰¿**ï¼šæ–°å‰§æœ¬çš„åˆ†é•œèŠ‚å¥ã€è½¬æŠ˜èµ·ä¼å’Œå™äº‹é˜¶æ®µå¿…é¡»ä¸¥æ ¼å¯¹åº”æ¨¡æ¿è§†é¢‘çš„åˆ†é•œè„‰ç»œï¼ä¾‹å¦‚ï¼šå¦‚æžœæ¨¡æ¿è§†é¢‘åœ¨ç¬¬1ä¸ªåˆ†é•œæ˜¯â€œèˆªæ‹å±•çŽ°å®å¤§ä¸–ç•Œè§‚â€ï¼Œé‚£æ–°æ•…äº‹çš„ç¬¬1ä¸ªåˆ†é•œä¹Ÿåº”å½“æ˜¯ç”¨å®å¤§çš„è¿é•œ and ç”»é¢æž„å›¾å±•çŽ°ä½ çš„æ–°ä¸»é¢˜ä¸–ç•Œè§‚ï¼›å¦‚æžœæ¨¡æ¿åœ¨æŸå¤„å‘ç”Ÿäº†ç©ºé—´ç©¿æ¢­æˆ–ç‹¼ç‹ˆæ»‘å€’çš„æƒ…èŠ‚ï¼Œæ–°å‰§æœ¬ä¹Ÿåº”å½“åœ¨å¯¹åº”é•œå¤´è®¾è®¡å‡ºç›¸åŒå¼ åŠ›èŠ‚å¥çš„äº‹ä»¶ã€‚
+2. **äººç‰©æ˜ å°„**ï¼šæ–°æ•…äº‹ä¸­çš„ä¸»è¦è§’è‰²å’Œäººç‰©å…³ç³»åº”å½“ä¸Žæ¨¡æ¿ä¸­çš„æ€§æ ¼ç‰¹å¾å½¢æˆé²œæ˜Žæ˜ å°„ï¼ˆå¦‚ï¼šä¸€ä¸ªå†·é¢é¢†èˆªè€…ã€ä¸€ä¸ªå‚²å¨‡å­¦è€…ã€ä¸€ä¸ªè±ªçˆ½ç³™æ±‰æˆ˜å£«ï¼‰ï¼Œä½†è§’è‰²çš„åç§°ã€æœé¥°è£…å¤‡ã€å°è¯ç»†èŠ‚å¿…é¡»å®Œå…¨åŽŸåˆ›å¹¶å¯¹é½æ–°çš„ä¸»é¢˜è®¾å®šã€‚
+3. **å†…å®¹é«˜åº¦åŽŸåˆ›**ï¼šé•œå¤´çš„æƒ…èŠ‚è¯´æ˜Žã€å°è¯ã€æƒ…æ„Ÿå˜åŒ–å¿…é¡»ç”ŸåŠ¨æœ‰è¶£ã€ç¬¦åˆä½ èµ„æ·±ç¼–å‰§çš„èº«ä»½ã€‚ç¦æ­¢åŽŸæ ·ç…§æŠ„æ¨¡æ¿ä¸­ steampunk/é£žç©ºè‰‡/é›ªå±±ç­‰ç‰¹æœ‰è¯æ±‡ï¼Œå¿…é¡»å¯¹é½æ–°æ•…äº‹çš„ä¸»é¢˜è®¾å®šè¿›è¡Œæ·±åº¦åˆ›ä½œã€‚
 
-请严格按照提供的 JSON Schema 输出中文分析结果。`;
+è¯·ä¸¥æ ¼æŒ‰ç…§æä¾›çš„ JSON Schema è¾“å‡ºä¸­æ–‡åˆ†æžç»“æžœã€‚`;
 
     if (shortDramaMode) {
-      prompt += `\n\n【短剧模式启用】\n重要要求：这是竖屏短剧，每3-5秒一个镜头，按台词停顿和情绪转折切分。`;
+      prompt += `\n\nã€çŸ­å‰§æ¨¡å¼å¯ç”¨ã€‘\né‡è¦è¦æ±‚ï¼šè¿™æ˜¯ç«–å±çŸ­å‰§ï¼Œæ¯3-5ç§’ä¸€ä¸ªé•œå¤´ï¼ŒæŒ‰å°è¯åœé¡¿å’Œæƒ…ç»ªè½¬æŠ˜åˆ‡åˆ†ã€‚`;
       console.log('[Script Generator] Short Drama Mode enabled for script writing prompt.');
+    }
+
+    if (requestedShotCount) {
+      prompt += `\n\nMANDATORY OUTPUT CONSTRAINT: Return exactly ${requestedShotCount} storyboard shots in newShots. Do not return more or fewer shots.`;
+    }
+    if (requestedCharacterCount) {
+      prompt += `\nMANDATORY OUTPUT CONSTRAINT: Return exactly ${requestedCharacterCount} principal character(s) in newCharacters and keep the same character identity consistent across every shot.`;
     }
 
     const generatedScriptSchema = {
       type: 'OBJECT',
       properties: {
-        newTitle: { type: 'STRING', description: '全新剧本的标题' },
+        newTitle: { type: 'STRING', description: 'å…¨æ–°å‰§æœ¬çš„æ ‡é¢˜' },
         newNarrative: {
           type: 'OBJECT',
           properties: {
-            structure: { type: 'STRING', description: '新剧本的三幕叙事结构设计（对照模板结构的起承转合）' },
-            rhythm: { type: 'STRING', description: '新剧本的情节与动作节奏规划（对照模板的节奏特点）' },
-            climaxDesign: { type: 'STRING', description: '新剧本的冲突爽点位置与爆发设计说明' }
+            structure: { type: 'STRING', description: 'æ–°å‰§æœ¬çš„ä¸‰å¹•å™äº‹ç»“æž„è®¾è®¡ï¼ˆå¯¹ç…§æ¨¡æ¿ç»“æž„çš„èµ·æ‰¿è½¬åˆï¼‰' },
+            rhythm: { type: 'STRING', description: 'æ–°å‰§æœ¬çš„æƒ…èŠ‚ä¸ŽåŠ¨ä½œèŠ‚å¥è§„åˆ’ï¼ˆå¯¹ç…§æ¨¡æ¿çš„èŠ‚å¥ç‰¹ç‚¹ï¼‰' },
+            climaxDesign: { type: 'STRING', description: 'æ–°å‰§æœ¬çš„å†²çªçˆ½ç‚¹ä½ç½®ä¸Žçˆ†å‘è®¾è®¡è¯´æ˜Ž' }
           },
           required: ['structure', 'rhythm', 'climaxDesign']
         },
         newCharacters: {
           type: 'ARRAY',
+          ...(requestedCharacterCount ? { minItems: requestedCharacterCount, maxItems: requestedCharacterCount } : {}),
           items: {
             type: 'OBJECT',
             properties: {
-              name: { type: 'STRING', description: '新故事中的角色姓名或代称' },
-              role: { type: 'STRING', description: '新角色定位（对应模板中某个人物的角色定位与冲突关系）' },
-              personality: { type: 'STRING', description: '新角色的性格特征' },
-              clothing: { type: 'STRING', description: '新角色的服装/服饰/外貌设定描述' }
+              name: { type: 'STRING', description: 'æ–°æ•…äº‹ä¸­çš„è§’è‰²å§“åæˆ–ä»£ç§°' },
+              role: { type: 'STRING', description: 'æ–°è§’è‰²å®šä½ï¼ˆå¯¹åº”æ¨¡æ¿ä¸­æŸä¸ªäººç‰©çš„è§’è‰²å®šä½ä¸Žå†²çªå…³ç³»ï¼‰' },
+              personality: { type: 'STRING', description: 'æ–°è§’è‰²çš„æ€§æ ¼ç‰¹å¾' },
+              clothing: { type: 'STRING', description: 'æ–°è§’è‰²çš„æœè£…/æœé¥°/å¤–è²Œè®¾å®šæè¿°' }
             },
             required: ['name', 'role', 'personality', 'clothing']
           }
         },
         newShots: {
           type: 'ARRAY',
+          ...(requestedShotCount ? { minItems: requestedShotCount, maxItems: requestedShotCount } : {}),
           items: {
             type: 'OBJECT',
             properties: {
-              timestamp: { type: 'STRING', description: '镜头的模拟时间戳，如 00:00 - 00:05' },
-              timeSeconds: { type: 'INTEGER', description: '镜头的开始秒数（整数）' },
-              movement: { type: 'STRING', description: '该镜头的运镜方式，如全景跟拍、推轨特写等（需继承模板的镜头语言）' },
-              composition: { type: 'STRING', description: '该镜头的画面构图方式，如三分法、框式构图等（需继承模板的构图美学）' },
-              emotion: { type: 'STRING', description: '该镜头传达的情绪，如震撼、神秘、紧张等' },
-              description: { type: 'STRING', description: '镜头下的具体情节动作描述、人物对话以及音效规划' }
+              timestamp: { type: 'STRING', description: 'é•œå¤´çš„æ¨¡æ‹Ÿæ—¶é—´æˆ³ï¼Œå¦‚ 00:00 - 00:05' },
+              timeSeconds: { type: 'INTEGER', description: 'é•œå¤´çš„å¼€å§‹ç§’æ•°ï¼ˆæ•´æ•°ï¼‰' },
+              movement: { type: 'STRING', description: 'è¯¥é•œå¤´çš„è¿é•œæ–¹å¼ï¼Œå¦‚å…¨æ™¯è·Ÿæ‹ã€æŽ¨è½¨ç‰¹å†™ç­‰ï¼ˆéœ€ç»§æ‰¿æ¨¡æ¿çš„é•œå¤´è¯­è¨€ï¼‰' },
+              composition: { type: 'STRING', description: 'è¯¥é•œå¤´çš„ç”»é¢æž„å›¾æ–¹å¼ï¼Œå¦‚ä¸‰åˆ†æ³•ã€æ¡†å¼æž„å›¾ç­‰ï¼ˆéœ€ç»§æ‰¿æ¨¡æ¿çš„æž„å›¾ç¾Žå­¦ï¼‰' },
+              emotion: { type: 'STRING', description: 'è¯¥é•œå¤´ä¼ è¾¾çš„æƒ…ç»ªï¼Œå¦‚éœ‡æ’¼ã€ç¥žç§˜ã€ç´§å¼ ç­‰' },
+              description: { type: 'STRING', description: 'é•œå¤´ä¸‹çš„å…·ä½“æƒ…èŠ‚åŠ¨ä½œæè¿°ã€äººç‰©å¯¹è¯ä»¥åŠéŸ³æ•ˆè§„åˆ’' }
             },
             required: ['timestamp', 'timeSeconds', 'movement', 'composition', 'emotion', 'description']
           }
@@ -694,16 +788,18 @@ ${topic}
     const scriptRecord = {
       id: Date.now().toString(),
       templateId: templateId || 'demo',
-      templateTitle: templateId === 'demo' ? '演示分镜模板' : (db.videos.find((v: any) => v.id === templateId)?.title || '未知模板'),
+      templateTitle: templateId === 'demo' ? 'æ¼”ç¤ºåˆ†é•œæ¨¡æ¿' : (db.videos.find((v: any) => v.id === templateId)?.title || 'æœªçŸ¥æ¨¡æ¿'),
       topic: topic,
       createdAt: new Date().toISOString(),
       newTitle: result.newTitle,
       newNarrative: result.newNarrative,
       newCharacters: result.newCharacters.map((c: any) => ({
+        id: crypto.randomUUID(),
         ...c,
         avatarUrl: ''
       })),
       newShots: result.newShots.map((s: any) => ({
+        id: crypto.randomUUID(),
         ...s,
         imageUrl: ''
       }))
@@ -796,10 +892,10 @@ app.put('/api/generated-scripts/:id', async (req, res) => {
 app.put('/api/generated-scripts/:id/image', async (req, res) => {
   try {
     const { id } = req.params;
-    const { shotIndex, characterName, imageUrl, views } = req.body;
+    const { shotIndex, characterName, imageUrl, views, generation } = req.body;
     
-    if (!imageUrl && !views) {
-      return res.status(400).json({ error: 'imageUrl or views is required' });
+    if (!imageUrl && !views && !generation) {
+      return res.status(400).json({ error: 'imageUrl, views, or generation is required' });
     }
     
     let found = false;
@@ -816,8 +912,15 @@ app.put('/api/generated-scripts/:id/image', async (req, res) => {
       
       if (typeof shotIndex === 'number') {
         if (script.newShots && script.newShots[shotIndex]) {
-          script.newShots[shotIndex].imageUrl = imageUrl;
-          script.newShots[shotIndex].generatedImageUrl = imageUrl;
+          const shot = script.newShots[shotIndex];
+          if (imageUrl) {
+            shot.imageUrl = imageUrl;
+            shot.generatedImageUrl = imageUrl;
+          }
+          if (generation) {
+            shot.imageGeneration = generation;
+            shot.imageGenerations = [...(shot.imageGenerations || []), generation];
+          }
         } else {
           errorMsg = 'Shot index not found';
           return;
@@ -833,6 +936,10 @@ app.put('/api/generated-scripts/:id/image', async (req, res) => {
             if (views.front) {
               char.avatarUrl = views.front; // Default front view as avatarUrl
             }
+          }
+          if (generation) {
+            char.imageGeneration = generation;
+            char.imageGenerations = [...(char.imageGenerations || []), generation];
           }
         } else {
           errorMsg = 'Character not found';
@@ -874,7 +981,7 @@ app.post('/api/translate-character', async (req, res) => {
   const ai = new GoogleGenAI({ apiKey });
   const systemPrompt = `You are an expert prompt engineer. Translate the following Chinese character profile into a highly detailed, concise, and professional English description (under 80 words) optimized for image generation. Focus strictly on appearance, hairstyle, face, clothing, and character archetype. Do not include camera directions, views, backgrounds, or styles. Output only the pure English description, no other text, prefix, or explanation.`;
 
-  const rawInput = `姓名: ${name}\n角色: ${role}\n外貌服饰: ${clothing}\n性格特质: ${personality}`;
+  const rawInput = `å§“å: ${name}\nè§’è‰²: ${role}\nå¤–è²Œæœé¥°: ${clothing}\næ€§æ ¼ç‰¹è´¨: ${personality}`;
 
   try {
     const response = await ai.models.generateContent({
@@ -1063,7 +1170,7 @@ function escapeDrawtextText(text: string): string {
   if (!text) return '';
   return text
     .replace(/'/g, '"') // Replace single quotes with double quotes
-    .replace(/:/g, '：') // Replace English colons with Chinese colons
+    .replace(/:/g, 'ï¼š') // Replace English colons with Chinese colons
     .replace(/\\/g, '')  // Remove backslashes
     .replace(/\n/g, ' ') // Replace newlines with space
     .trim();
@@ -1350,7 +1457,7 @@ app.get('/api/animation-status/:taskId', async (req, res) => {
       const mockTemplatePath = path.join(videosDir, 'mock_template.mp4');
       if (!fs.existsSync(mockTemplatePath)) {
         console.log(`[Kling Mock] Generating mock video template at ${mockTemplatePath}...`);
-        const generateCmd = `ffmpeg -f lavfi -i "mandelbrot=size=1280x720:rate=25" -t 4 -c:v libx264 -pix_fmt yuv420p -an -y "${mockTemplatePath}"`;
+        const generateCmd = `${FFMPEG_COMMAND} -f lavfi -i "mandelbrot=size=1280x720:rate=25" -t 4 -c:v libx264 -pix_fmt yuv420p -an -y "${mockTemplatePath}"`;
         await execPromise(generateCmd);
       }
 
@@ -1523,7 +1630,7 @@ app.post('/api/generate-video', async (req, res) => {
 
       const mockTemplatePath = path.join(videosDir, 'mock_template.mp4');
       if (!fs.existsSync(mockTemplatePath)) {
-        const generateCmd = `ffmpeg -f lavfi -i "mandelbrot=size=1280x720:rate=25" -t 4 -c:v libx264 -pix_fmt yuv420p -an -y "${mockTemplatePath}"`;
+        const generateCmd = `${FFMPEG_COMMAND} -f lavfi -i "mandelbrot=size=1280x720:rate=25" -t 4 -c:v libx264 -pix_fmt yuv420p -an -y "${mockTemplatePath}"`;
         await execPromise(generateCmd);
       }
 
@@ -1699,15 +1806,21 @@ app.post('/api/compile-preview', async (req, res) => {
       // Escape text for drawtext
       const escapedText = escapeDrawtextText(shot.description || '');
       
+      // Cross-platform font file path (PingFang for macOS, Microsoft YaHei for Windows, fall back to default for others)
+      let fontfile = '/System/Library/Fonts/PingFang.ttc';
+      if (process.platform === 'win32') {
+        fontfile = 'C\\:/Windows/Fonts/msyh.ttc';
+      }
+
       // Scale to 1280x720, apply transitions, and draw Chinese subtitle overlay
-      const vfString = `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d=0.5,fade=t=out:st=${duration - 0.5}:d=0.5,drawtext=fontfile='/System/Library/Fonts/PingFang.ttc':text='${escapedText}':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=h-80`;
+      const vfString = `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d=0.5,fade=t=out:st=${duration - 0.5}:d=0.5,drawtext=fontfile='${fontfile}':text='${escapedText}':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=h-80`;
       
       const localInputVideoPath = shot.videoUrl ? path.join(__dirname, shot.videoUrl.substring(1)) : '';
       const hasVideo = localInputVideoPath && fs.existsSync(localInputVideoPath);
 
       if (hasVideo) {
         console.log(`[Animatic] Compiling shot ${i + 1} using generated video clip: ${shot.videoUrl}`);
-        const cmd = `ffmpeg -i "${localInputVideoPath}" -an -t ${duration} -vf "${vfString}" -c:v libx264 -pix_fmt yuv420p -y "${localVidPath}"`;
+        const cmd = `${FFMPEG_COMMAND} -i "${localInputVideoPath}" -an -t ${duration} -vf "${vfString}" -c:v libx264 -pix_fmt yuv420p -y "${localVidPath}"`;
         await execPromise(cmd);
       } else {
         const imageUrl = shot.generatedImageUrl || shot.imageUrl;
@@ -1720,7 +1833,7 @@ app.post('/api/compile-preview', async (req, res) => {
         await downloadShotImage(imageUrl, localImgPath);
         
         console.log(`[Animatic] Encoding shot ${i + 1} video chunk from image...`);
-        const cmd = `ffmpeg -loop 1 -i "${localImgPath}" -t ${duration} -vf "${vfString}" -c:v libx264 -pix_fmt yuv420p -y "${localVidPath}"`;
+        const cmd = `${FFMPEG_COMMAND} -loop 1 -i "${localImgPath}" -t ${duration} -vf "${vfString}" -c:v libx264 -pix_fmt yuv420p -y "${localVidPath}"`;
         await execPromise(cmd);
       }
       
@@ -1734,7 +1847,7 @@ app.post('/api/compile-preview', async (req, res) => {
     
     // Concatenate chunks (no re-encoding, extremely fast)
     const combinedVidPath = path.join(tempDir, 'combined.mp4');
-    const concatCmd = `ffmpeg -f concat -safe 0 -i "${concatFilePath}" -c copy -y "${combinedVidPath}"`;
+    const concatCmd = `${FFMPEG_COMMAND} -f concat -safe 0 -i "${concatFilePath}" -c copy -y "${combinedVidPath}"`;
     console.log(`[Animatic] Concatenating all video chunks...`);
     await execPromise(concatCmd);
     
@@ -1747,7 +1860,7 @@ app.post('/api/compile-preview', async (req, res) => {
       const bgmPath = path.join(UPLOADS_DIR, bgmFilename);
       if (fs.existsSync(bgmPath)) {
         console.log(`[Animatic] Mixing BGM: ${bgmFilename}...`);
-        const bgmCmd = `ffmpeg -i "${combinedVidPath}" -stream_loop -1 -i "${bgmPath}" -filter_complex "[1:a]afade=t=out:st=${totalDuration - 1.5}:d=1.5[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -shortest -y "${finalVidPath}"`;
+        const bgmCmd = `${FFMPEG_COMMAND} -i "${combinedVidPath}" -stream_loop -1 -i "${bgmPath}" -filter_complex "[1:a]afade=t=out:st=${totalDuration - 1.5}:d=1.5[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -shortest -y "${finalVidPath}"`;
         await execPromise(bgmCmd);
       } else {
         console.warn(`[Animatic] BGM file not found at ${bgmPath}, compiling without BGM`);
@@ -1755,7 +1868,7 @@ app.post('/api/compile-preview', async (req, res) => {
       }
     } else {
       console.log(`[Animatic] Compiling with silent audio...`);
-      const silentCmd = `ffmpeg -i "${combinedVidPath}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v copy -c:a aac -shortest -y "${finalVidPath}"`;
+      const silentCmd = `${FFMPEG_COMMAND} -i "${combinedVidPath}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v copy -c:a aac -shortest -y "${finalVidPath}"`;
       try {
         await execPromise(silentCmd);
       } catch (e) {
@@ -1783,9 +1896,723 @@ app.post('/api/compile-preview', async (req, res) => {
 });
 
 
-// 11. POST /api/generate-image - Generate image using Pollinations AI or Kling AI
+type ComfyNode = {
+  class_type: string;
+  inputs: Record<string, any>;
+  _meta?: { title?: string };
+};
+
+type ComfyWorkflow = Record<string, ComfyNode>;
+
+type ComfyImageOutput = {
+  filename: string;
+  subfolder?: string;
+  type?: string;
+};
+
+type ImageTargetContext = {
+  projectId?: string;
+  targetType?: 'shot' | 'character';
+  shotIndex?: number;
+  characterName?: string;
+};
+
+const DEFAULT_COMFY_NEGATIVE_PROMPT =
+  'low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark';
+
+function comfyBaseUrl(): string {
+  const configured = (process.env.COMFYUI_API_URL || 'http://127.0.0.1:8188').replace(/\/+$/, '');
+  const parsed = new URL(configured);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('COMFYUI_API_URL must use http or https');
+  }
+  return configured;
+}
+
+async function comfyFetch(relativePath: string, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${comfyBaseUrl()}${relativePath}`, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 500);
+      throw new Error(`ComfyUI HTTP ${response.status}: ${detail || response.statusText}`);
+    }
+    return response;
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`ComfyUI request timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function validateWorkflow(value: unknown): ComfyWorkflow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('ComfyUI workflow must be an API-format JSON object');
+  }
+  const workflow = value as Record<string, any>;
+  const entries = Object.entries(workflow);
+  if (!entries.length) throw new Error('ComfyUI workflow is empty');
+  for (const [nodeId, node] of entries) {
+    if (!node || typeof node !== 'object' || typeof node.class_type !== 'string' || !node.inputs || typeof node.inputs !== 'object') {
+      throw new Error(`ComfyUI node ${nodeId} is not in API format (class_type/inputs missing)`);
+    }
+  }
+  return workflow as ComfyWorkflow;
+}
+
+function loadCustomComfyWorkflow(): ComfyWorkflow | null {
+  const workflowPath = path.resolve(__dirname, process.env.COMFYUI_WORKFLOW_PATH || 'comfyui_workflow.json');
+  if (!fs.existsSync(workflowPath)) return null;
+  const parsed = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+  // Accept a raw API export and the { prompt: ... } wrapper returned by /history.
+  return validateWorkflow(parsed?.prompt || parsed);
+}
+
+async function getComfyCheckpoint(): Promise<string> {
+  const configured = process.env.COMFYUI_CKPT_NAME?.trim();
+  if (configured) return configured;
+  const response = await comfyFetch('/object_info/CheckpointLoaderSimple', {}, 10_000);
+  const info: any = await response.json();
+  const choices = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0];
+  if (!Array.isArray(choices) || !choices.length) {
+    throw new Error('ComfyUI has no available checkpoint; install one or set COMFYUI_CKPT_NAME');
+  }
+  return String(choices[0]);
+}
+
+function buildDefaultComfyWorkflow(
+  checkpoint: string,
+  prompt: string,
+  negativePrompt: string,
+  width: number,
+  height: number,
+  seed: number,
+): ComfyWorkflow {
+  const steps = Math.max(4, Math.min(100, Number(process.env.COMFYUI_STEPS) || 24));
+  const cfg = Math.max(1, Math.min(30, Number(process.env.COMFYUI_CFG) || 7));
+  return {
+    '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: checkpoint } },
+    '2': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['1', 1] }, _meta: { title: 'STORY_PROMPT' } },
+    '3': { class_type: 'CLIPTextEncode', inputs: { text: negativePrompt, clip: ['1', 1] }, _meta: { title: 'STORY_NEGATIVE' } },
+    '4': { class_type: 'EmptyLatentImage', inputs: { width, height, batch_size: 1 } },
+    '5': {
+      class_type: 'KSampler',
+      inputs: {
+        seed,
+        steps,
+        cfg,
+        sampler_name: process.env.COMFYUI_SAMPLER || 'euler',
+        scheduler: process.env.COMFYUI_SCHEDULER || 'normal',
+        denoise: 1,
+        model: ['1', 0],
+        positive: ['2', 0],
+        negative: ['3', 0],
+        latent_image: ['4', 0],
+      },
+    },
+    '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
+    '7': { class_type: 'SaveImage', inputs: { filename_prefix: 'story-bank/generated', images: ['6', 0] } },
+  };
+}
+
+function findComfyNode(
+  workflow: ComfyWorkflow,
+  envName: string,
+  classTypes: string[],
+  titlePattern?: RegExp,
+  fallbackIndex = 0,
+): string | undefined {
+  const configured = process.env[envName]?.trim();
+  if (configured) {
+    if (!workflow[configured]) throw new Error(`${envName} points to missing ComfyUI node ${configured}`);
+    return configured;
+  }
+  const matches = Object.entries(workflow).filter(([, node]) => classTypes.includes(node.class_type));
+  const titled = titlePattern
+    ? matches.find(([, node]) => titlePattern.test(node._meta?.title || ''))
+    : undefined;
+  return (titled || matches[fallbackIndex])?.[0];
+}
+
+function setComfyInput(
+  workflow: ComfyWorkflow,
+  nodeId: string | undefined,
+  candidateKeys: string[],
+  value: any,
+  required: boolean,
+  label: string,
+): void {
+  if (!nodeId) {
+    if (required) throw new Error(`Cannot locate the ComfyUI ${label} node; configure its node ID in .env`);
+    return;
+  }
+  const node = workflow[nodeId];
+  const key = candidateKeys.find(candidate => Object.prototype.hasOwnProperty.call(node.inputs, candidate));
+  if (!key) {
+    if (required) throw new Error(`ComfyUI ${label} node ${nodeId} has no supported input (${candidateKeys.join(', ')})`);
+    return;
+  }
+  node.inputs[key] = value;
+}
+
+function applyCustomComfyInputs(
+  workflow: ComfyWorkflow,
+  prompt: string,
+  negativePrompt: string,
+  width: number,
+  height: number,
+  seed: number,
+): ComfyWorkflow {
+  const cloned = validateWorkflow(JSON.parse(JSON.stringify(workflow)));
+  const textNodes = Object.entries(cloned).filter(([, node]) => node.class_type === 'CLIPTextEncode');
+  const promptNode = findComfyNode(cloned, 'COMFYUI_PROMPT_NODE_ID', ['CLIPTextEncode'], /story[_ -]?prompt|positive/i, 0);
+  const negativeNode = findComfyNode(cloned, 'COMFYUI_NEGATIVE_NODE_ID', ['CLIPTextEncode'], /negative/i, textNodes.length > 1 ? 1 : 0);
+  const seedNode = findComfyNode(cloned, 'COMFYUI_SEED_NODE_ID', ['KSampler', 'RandomNoise', 'Seed'], /seed|sampler/i);
+  const checkpointNode = findComfyNode(cloned, 'COMFYUI_CKPT_NODE_ID', ['CheckpointLoaderSimple'], /checkpoint/i);
+  const latentNode = findComfyNode(cloned, 'COMFYUI_LATENT_NODE_ID', ['EmptyLatentImage', 'EmptySD3LatentImage'], /latent|size/i);
+
+  setComfyInput(cloned, promptNode, ['text', 'prompt', 'positive'], prompt, true, 'prompt');
+  if (negativeNode && negativeNode !== promptNode) {
+    setComfyInput(cloned, negativeNode, ['text', 'prompt', 'negative'], negativePrompt, false, 'negative prompt');
+  }
+  setComfyInput(cloned, seedNode, ['seed', 'noise_seed'], seed, true, 'seed');
+  if (process.env.COMFYUI_CKPT_NAME?.trim()) {
+    setComfyInput(cloned, checkpointNode, ['ckpt_name', 'checkpoint'], process.env.COMFYUI_CKPT_NAME.trim(), true, 'checkpoint');
+  }
+  setComfyInput(cloned, latentNode, ['width'], width, false, 'width');
+  setComfyInput(cloned, latentNode, ['height'], height, false, 'height');
+  return cloned;
+}
+
+function comfyErrorMessage(record: any): string {
+  const messages = record?.status?.messages;
+  if (Array.isArray(messages)) {
+    for (const message of [...messages].reverse()) {
+      const detail = Array.isArray(message) ? message[1] : message;
+      if (detail?.exception_message || detail?.error) {
+        return String(detail.exception_message || detail.error).slice(0, 500);
+      }
+    }
+  }
+  return 'ComfyUI generation failed; check the ComfyUI console for details';
+}
+
+async function waitForComfyImage(promptId: string): Promise<ComfyImageOutput> {
+  const timeoutSeconds = Math.max(10, Math.min(900, Number(process.env.COMFYUI_TIMEOUT_SECONDS) || 300));
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  while (Date.now() < deadline) {
+    const response = await comfyFetch(`/history/${encodeURIComponent(promptId)}`, {}, 10_000);
+    const history: any = await response.json();
+    const record = history?.[promptId];
+    if (record) {
+      if (record.status?.status_str === 'error') throw new Error(comfyErrorMessage(record));
+      const images: ComfyImageOutput[] = [];
+      for (const output of Object.values(record.outputs || {}) as any[]) {
+        for (const image of output?.images || []) {
+          if (image?.filename) images.push(image);
+        }
+      }
+      if (images.length) return images[0];
+      if (record.status?.completed) throw new Error('ComfyUI completed without producing an image');
+    }
+    await new Promise(resolve => setTimeout(resolve, 1_500));
+  }
+  throw new Error(`ComfyUI generation timed out after ${timeoutSeconds} seconds`);
+}
+
+function safePathSegment(value: unknown, fallback: string): string {
+  const safe = String(value ?? '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return safe || fallback;
+}
+
+function workflowCheckpoint(workflow: ComfyWorkflow): string {
+  const loader = Object.values(workflow).find(node => node.class_type === 'CheckpointLoaderSimple');
+  return String(loader?.inputs?.ckpt_name || process.env.COMFYUI_CKPT_NAME || 'custom-workflow');
+}
+
+async function persistComfyImage(image: ComfyImageOutput, context: ImageTargetContext): Promise<string> {
+  const query = new URLSearchParams({
+    filename: image.filename,
+    subfolder: image.subfolder || '',
+    type: image.type || 'output',
+  });
+  const response = await comfyFetch(`/view?${query.toString()}`, {}, 30_000);
+  const contentType = (response.headers.get('content-type') || '').split(';')[0].toLowerCase();
+  const extensions: Record<string, string> = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+  };
+  if (!extensions[contentType]) throw new Error(`ComfyUI returned unsupported content type: ${contentType || 'unknown'}`);
+  const maxBytes = Math.max(1, Number(process.env.COMFYUI_MAX_IMAGE_MB) || 30) * 1024 * 1024;
+  const declaredSize = Number(response.headers.get('content-length') || 0);
+  if (declaredSize > maxBytes) throw new Error('ComfyUI image exceeds the configured size limit');
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!buffer.length || buffer.length > maxBytes) throw new Error('ComfyUI returned an empty or oversized image');
+
+  const projectId = safePathSegment(context.projectId, 'unassigned');
+  const targetDir = context.targetType === 'shot'
+    ? path.join('shots', String(Math.max(0, Number(context.shotIndex) || 0) + 1).padStart(2, '0'))
+    : path.join('characters', safePathSegment(context.characterName, 'character'));
+  const relativeDir = path.join('projects', projectId, targetDir);
+  const imagesDir = path.join(UPLOADS_DIR, relativeDir);
+  fs.mkdirSync(imagesDir, { recursive: true });
+  const hash = crypto.createHash('sha256').update(buffer).digest('hex');
+  const filename = `comfyui-${hash}${extensions[contentType]}`;
+  const destination = path.join(imagesDir, filename);
+  if (!fs.existsSync(destination)) fs.writeFileSync(destination, buffer);
+  return `/uploads/${relativeDir.replace(/\\/g, '/')}/${filename}`;
+}
+
+async function generateWithComfyUI(
+  prompt: string,
+  negativePrompt: string,
+  width: number,
+  height: number,
+  requestedSeed?: unknown,
+  context: ImageTargetContext = {},
+): Promise<{ url: string; seed: number; promptId: string; model: string }> {
+  const parsedSeed = Number(requestedSeed);
+  const seed = Number.isSafeInteger(parsedSeed) && parsedSeed >= 0
+    ? parsedSeed
+    : Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n);
+  const customWorkflow = loadCustomComfyWorkflow();
+  const checkpoint = customWorkflow ? undefined : await getComfyCheckpoint();
+  const workflow = customWorkflow
+    ? applyCustomComfyInputs(customWorkflow, prompt, negativePrompt, width, height, seed)
+    : buildDefaultComfyWorkflow(checkpoint!, prompt, negativePrompt, width, height, seed);
+  const model = checkpoint || workflowCheckpoint(workflow);
+  const clientId = crypto.randomUUID();
+  const response = await comfyFetch('/prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: workflow, client_id: clientId }),
+  });
+  const result: any = await response.json();
+  if (!result?.prompt_id) {
+    const detail = result?.error || result?.node_errors;
+    throw new Error(`ComfyUI did not accept the workflow${detail ? `: ${JSON.stringify(detail).slice(0, 500)}` : ''}`);
+  }
+  const image = await waitForComfyImage(result.prompt_id);
+  return { url: await persistComfyImage(image, context), seed, promptId: result.prompt_id, model };
+}
+
+app.get('/api/comfyui/status', async (_req, res) => {
+  const baseUrl = comfyBaseUrl();
+  try {
+    await comfyFetch('/system_stats', {}, 5_000);
+    const checkpoint = await getComfyCheckpoint();
+    return res.json({ available: true, baseUrl, checkpoint });
+  } catch (error: any) {
+    return res.json({
+      available: false,
+      baseUrl,
+      error: error?.message || 'Unable to connect to ComfyUI',
+    });
+  }
+});
+
+// --- ComfyUI Queue Worker and Tasks Endpoints ---
+
+async function checkComfyTaskState(promptId: string): Promise<
+  | { status: 'succeeded'; image: any }
+  | { status: 'failed'; error: string }
+  | { status: 'processing' }
+  | { status: 'network_error' }
+  | { status: 'missing' }
+> {
+  try {
+    // 1. Check history
+    const historyRes = await comfyFetch(`/history/${promptId}`, {}, 5_000);
+    const history = await historyRes.json();
+    const record = history?.[promptId];
+    if (record) {
+      if (record.status?.status_str === 'error') {
+        return { status: 'failed', error: comfyErrorMessage(record) };
+      }
+      const images: any[] = [];
+      for (const output of Object.values(record.outputs || {}) as any[]) {
+        for (const image of output?.images || []) {
+          if (image?.filename) images.push(image);
+        }
+      }
+      if (images.length) {
+        return { status: 'succeeded', image: images[0] };
+      }
+      if (record.status?.completed) {
+        return { status: 'failed', error: 'ComfyUI completed without producing an image' };
+      }
+    }
+
+    // 2. Check queue
+    const queueRes = await comfyFetch('/queue', {}, 5_000);
+    const queue = await queueRes.json();
+    
+    const running = queue.queue_running || [];
+    const pending = queue.queue_pending || [];
+    
+    const inRunning = running.some((item: any) => item[1] === promptId);
+    const inPending = pending.some((item: any) => item[1] === promptId);
+    
+    if (inRunning || inPending) {
+      return { status: 'processing' };
+    }
+
+    // 3. Not in history and not in queue
+    return { status: 'missing' };
+  } catch (err: any) {
+    const isNetwork = err.code === 'ECONNREFUSED' || err.message.includes('fetch');
+    if (isNetwork) {
+      return { status: 'network_error' };
+    }
+    return { status: 'failed', error: err.message || 'Unknown error' };
+  }
+}
+
+async function pollActiveTasks() {
+  const activeTasks = dbSqlite.prepare("SELECT * FROM comfyui_tasks WHERE status = 'processing'").all() as any[];
+  for (const task of activeTasks) {
+    try {
+      const state = await checkComfyTaskState(task.id);
+      if (state.status === 'succeeded') {
+        console.log(`[Worker] Task ${task.id} succeeded. Fetching image...`);
+        const image = state.image;
+        const imageUrl = await persistComfyImage(image, {
+          projectId: task.projectId,
+          targetType: task.targetType,
+          shotIndex: task.shotIndex,
+          characterName: task.characterName,
+        });
+
+        const generation = {
+          provider: 'comfyui',
+          status: 'succeeded',
+          prompt: task.prompt,
+          negativePrompt: task.negativePrompt,
+          seed: Number(task.seed),
+          model: task.model,
+          width: task.width,
+          height: task.height,
+          promptId: task.id,
+          projectId: task.projectId,
+          targetType: task.targetType,
+          ...(task.shotIndex !== null ? { shotIndex: task.shotIndex } : {}),
+          ...(task.characterName ? { characterName: task.characterName } : {}),
+          createdAt: task.createdAt,
+        };
+
+        // Mutate DB and complete task in a single write queue block (atomic update of script + task status)
+        await mutateDb(async (db) => {
+          // Check task status first inside transaction to verify it wasn't cancelled/superseded!
+          const currentTask = dbSqlite.prepare("SELECT status FROM comfyui_tasks WHERE id = ?").get(task.id) as { status: string } | undefined;
+          if (!currentTask || currentTask.status !== 'processing') {
+            console.log(`[Worker] Task ${task.id} status was changed to ${currentTask?.status || 'deleted'} before write back. Skipping.`);
+            return;
+          }
+
+          // Update script
+          const scriptIndex = db.generated_scripts.findIndex((s: any) => s.id === task.projectId);
+          if (scriptIndex !== -1) {
+            const script = db.generated_scripts[scriptIndex];
+            if (task.targetType === 'shot') {
+              const shot = script.newShots?.find((s: any) => s.id === task.targetId);
+              if (shot) {
+                shot.imageUrl = imageUrl;
+                shot.generatedImageUrl = imageUrl;
+                shot.imageGeneration = generation;
+                shot.imageGenerations = [...(shot.imageGenerations || []), generation];
+              }
+            } else if (task.targetType === 'character') {
+              const char = script.newCharacters?.find((c: any) => c.id === task.targetId);
+              if (char) {
+                if (task.viewType && task.viewType !== 'avatar') {
+                  if (!char.views) char.views = {};
+                  char.views[task.viewType] = imageUrl;
+                  if (task.viewType === 'front') {
+                    char.avatarUrl = imageUrl;
+                  }
+                } else {
+                  char.avatarUrl = imageUrl;
+                }
+                char.imageGeneration = generation;
+                char.imageGenerations = [...(char.imageGenerations || []), generation];
+              }
+            }
+            db.generated_scripts[scriptIndex] = script;
+          }
+
+          // Complete task status to succeeded
+          dbSqlite.prepare(`
+            UPDATE comfyui_tasks
+            SET status = 'succeeded', imageUrl = ?, completedAt = ?, updatedAt = ?
+            WHERE id = ? AND status = 'processing'
+          `).run(imageUrl, new Date().toISOString(), new Date().toISOString(), task.id);
+        });
+
+      } else if (state.status === 'processing') {
+        // Reset missing counters if found active in ComfyUI queue
+        if (task.missingSince || task.recoveryCheckCount > 0) {
+          dbSqlite.prepare(`
+            UPDATE comfyui_tasks SET missingSince = NULL, recoveryCheckCount = 0, updatedAt = ? WHERE id = ?
+          `).run(new Date().toISOString(), task.id);
+        }
+      } else if (state.status === 'network_error') {
+        // ComfyUI disconnected, do nothing (keep state)
+        console.warn(`[Worker] ComfyUI disconnected. Keeping task ${task.id} in processing status.`);
+      } else if (state.status === 'missing') {
+        // Increment missing counter
+        let missingSince = task.missingSince;
+        if (!missingSince) {
+          missingSince = new Date().toISOString();
+        }
+        const count = (task.recoveryCheckCount || 0) + 1;
+        
+        dbSqlite.prepare(`
+          UPDATE comfyui_tasks
+          SET missingSince = ?, recoveryCheckCount = ?, updatedAt = ?
+          WHERE id = ?
+        `).run(missingSince, count, new Date().toISOString(), task.id);
+
+        const elapsed = Date.now() - new Date(missingSince).getTime();
+        if (count >= 5 && elapsed >= 60_000) {
+          console.log(`[Worker] Task ${task.id} is confirmed lost after ${count} checks and ${elapsed}ms. Resetting to pending.`);
+          dbSqlite.prepare(`
+            UPDATE comfyui_tasks
+            SET status = 'pending', missingSince = NULL, recoveryCheckCount = 0, error = 'ComfyUI task lost', updatedAt = ?
+            WHERE id = ? AND status = 'processing'
+          `).run(new Date().toISOString(), task.id);
+        }
+      } else if (state.status === 'failed') {
+        console.log(`[Worker] Task ${task.id} failed in ComfyUI: ${state.error}`);
+        dbSqlite.prepare(`
+          UPDATE comfyui_tasks
+          SET status = 'failed', error = ?, completedAt = ?, updatedAt = ?
+          WHERE id = ? AND status = 'processing'
+        `).run(state.error, new Date().toISOString(), new Date().toISOString(), task.id);
+      }
+    } catch (err: any) {
+      console.error(`[Worker] Error checking state for task ${task.id}:`, err);
+    }
+  }
+}
+
+async function submitComfyTask(task: any) {
+  try {
+    const seed = Number(task.seed);
+    const customWorkflow = task.apiWorkflowJson ? JSON.parse(task.apiWorkflowJson) : loadCustomComfyWorkflow();
+    const checkpoint = customWorkflow ? undefined : await getComfyCheckpoint();
+    const workflow = customWorkflow
+      ? applyCustomComfyInputs(customWorkflow, task.prompt, task.negativePrompt, task.width, task.height, seed)
+      : buildDefaultComfyWorkflow(checkpoint!, task.prompt, task.negativePrompt, task.width, task.height, seed);
+      
+    const clientId = crypto.randomUUID();
+    
+    console.log(`[Worker] Submitting workflow to ComfyUI for task ${task.id} with prompt: "${task.prompt.slice(0, 100)}..."`);
+    
+    const response = await comfyFetch('/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: workflow, client_id: clientId, prompt_id: task.id }),
+    });
+    
+    const result: any = await response.json();
+    if (!result?.prompt_id) {
+      const detail = result?.error || result?.node_errors;
+      throw new Error(`ComfyUI did not accept the workflow: ${JSON.stringify(detail).slice(0, 500)}`);
+    }
+    
+    console.log(`[Worker] Task ${task.id} accepted by ComfyUI successfully.`);
+  } catch (err: any) {
+    console.error(`[Worker] Failed to submit task ${task.id} to ComfyUI:`, err.message);
+    const isNetwork = err.code === 'ECONNREFUSED' || err.message.includes('fetch');
+    if (isNetwork) {
+      console.warn(`[Worker] Re-queuing task ${task.id} due to connection error.`);
+      dbSqlite.prepare(`
+        UPDATE comfyui_tasks SET status = 'pending', updatedAt = ? WHERE id = ?
+      `).run(new Date().toISOString(), task.id);
+    } else {
+      dbSqlite.prepare(`
+        UPDATE comfyui_tasks SET status = 'failed', error = ?, completedAt = ?, updatedAt = ? WHERE id = ?
+      `).run(err.message, new Date().toISOString(), new Date().toISOString(), task.id);
+    }
+  }
+}
+
+let workerInterval: NodeJS.Timeout | null = null;
+let isProcessingQueue = false;
+
+function startComfyWorker() {
+  if (workerInterval) return;
+  console.log('[Worker] Starting ComfyUI queue worker...');
+  
+  workerInterval = setInterval(async () => {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+    
+    try {
+      // 1. Process active tasks
+      await pollActiveTasks();
+      
+      // 2. Concurrency limit 1 check
+      const activeCountRow = dbSqlite.prepare("SELECT COUNT(*) as count FROM comfyui_tasks WHERE status = 'processing'").get() as any;
+      const activeCount = activeCountRow ? activeCountRow.count : 0;
+      
+      if (activeCount < 1) {
+        const nextTask = dbSqlite.prepare(`
+          SELECT * FROM comfyui_tasks
+          WHERE status = 'pending'
+          ORDER BY createdAt ASC
+          LIMIT 1
+        `).get() as any;
+        
+        if (nextTask) {
+          const updateResult = dbSqlite.prepare(`
+            UPDATE comfyui_tasks
+            SET status = 'processing', submittedAt = ?, updatedAt = ?
+            WHERE id = ? AND status = 'pending'
+          `).run(new Date().toISOString(), new Date().toISOString(), nextTask.id);
+          
+          if (updateResult.changes === 1) {
+            console.log(`[Worker] Atomically locked task ${nextTask.id} for execution.`);
+            await submitComfyTask(nextTask);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Worker Error]', err);
+    } finally {
+      isProcessingQueue = false;
+    }
+  }, 1500);
+}
+
+// --- End of ComfyUI Queue Worker ---
+
+// ComfyUI Tasks endpoints
+app.get('/api/comfyui/tasks', (req, res) => {
+  const projectId = req.query.projectId;
+  if (!projectId) {
+    return res.status(400).json({ error: 'projectId is required' });
+  }
+  try {
+    const tasks = dbSqlite.prepare(`
+      SELECT * FROM comfyui_tasks
+      WHERE projectId = ?
+      ORDER BY createdAt ASC
+    `).all(projectId);
+    return res.json(tasks);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/comfyui/tasks/:id/retry', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const oldTask = dbSqlite.prepare("SELECT * FROM comfyui_tasks WHERE id = ?").get(id) as any;
+    if (!oldTask) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const newTaskId = crypto.randomUUID();
+    const tx = dbSqlite.transaction(() => {
+      // Cancel active tasks in the same slot
+      dbSqlite.prepare(`
+        UPDATE comfyui_tasks
+        SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by retry task', completedAt = ?, updatedAt = ?
+        WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
+      `).run(newTaskId, new Date().toISOString(), new Date().toISOString(), oldTask.targetId, oldTask.viewType);
+
+      // Insert new task with retryCount incremented
+      dbSqlite.prepare(`
+        INSERT INTO comfyui_tasks (
+          id, projectId, targetId, targetType, viewType, shotIndex, characterName,
+          prompt, negativePrompt, seed, model, width, height, status, retryCount, retryOfTaskId,
+          apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        newTaskId,
+        oldTask.projectId,
+        oldTask.targetId,
+        oldTask.targetType,
+        oldTask.viewType,
+        oldTask.shotIndex,
+        oldTask.characterName,
+        oldTask.prompt,
+        oldTask.negativePrompt,
+        oldTask.seed,
+        oldTask.model,
+        oldTask.width,
+        oldTask.height,
+        'pending',
+        (oldTask.retryCount || 0) + 1,
+        oldTask.id,
+        oldTask.apiWorkflowJson,
+        oldTask.uiWorkflowJson,
+        new Date().toISOString(),
+        new Date().toISOString()
+      );
+    });
+    tx();
+
+    console.log(`[Queue] Retried task ${id} as new task ${newTaskId}`);
+    return res.json({ success: true, taskId: newTaskId });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/comfyui/tasks/:id/cancel', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const task = dbSqlite.prepare("SELECT * FROM comfyui_tasks WHERE id = ?").get(id) as any;
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    if (task.status === 'succeeded' || task.status === 'failed' || task.status === 'cancelled') {
+      return res.json({ success: true, message: 'Task is already completed or cancelled' });
+    }
+
+    // Cancel locally in SQLite first
+    dbSqlite.prepare(`
+      UPDATE comfyui_tasks
+      SET status = 'cancelled', completedAt = ?, updatedAt = ?
+      WHERE id = ?
+    `).run(new Date().toISOString(), new Date().toISOString(), id);
+
+    // Best-effort cancel on ComfyUI if task is processing
+    if (task.status === 'processing') {
+      console.log(`[Queue] Best-effort delete from ComfyUI queue for cancelled task ${id}`);
+      comfyFetch('/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delete: [id] })
+      }).catch(err => {
+        console.warn(`[Queue] Failed to delete task ${id} from ComfyUI queue:`, err.message);
+      });
+    }
+
+    console.log(`[Queue] Cancelled task ${id} successfully.`);
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 11. POST /api/generate-image - Generate image using Pollinations AI, Kling AI, or local ComfyUI
 app.post('/api/generate-image', async (req, res) => {
-  const { prompt, style, isCharacter, skipTranslation, platform } = req.body;
+  const {
+    prompt, style, isCharacter, skipTranslation, platform, negativePrompt, negative_prompt, seed,
+    projectId, targetType, shotIndex, characterName,
+  } = req.body;
   
   if (!prompt) {
     return res.status(400).json({ error: 'Prompt is required' });
@@ -1798,6 +2625,82 @@ app.post('/api/generate-image', async (req, res) => {
       optimizedPrompt = await optimizePrompt(prompt, !!isCharacter, style);
     } else {
       console.log(`[Generate Image] Skipping translation. Using direct prompt: "${prompt}"`);
+    }
+
+    if (platform === 'comfyui') {
+      const requestedWidth = Number(req.body.width) || (isCharacter ? 512 : 768);
+      const requestedHeight = Number(req.body.height) || (isCharacter ? 768 : 512);
+      const width = Math.max(256, Math.min(2048, Math.floor(requestedWidth / 64) * 64));
+      const height = Math.max(256, Math.min(2048, Math.floor(requestedHeight / 64) * 64));
+      
+      const taskId = crypto.randomUUID();
+      const taskSeed = seed ? String(seed) : String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n));
+      const comfyNegative = String(negativePrompt || negative_prompt || DEFAULT_COMFY_NEGATIVE_PROMPT);
+
+      const targetId = req.body.targetId || (targetType === 'shot' ? `shot_${shotIndex}` : `char_${characterName}`);
+      const viewType = req.body.viewType || (targetType === 'shot' ? 'main' : 'avatar');
+
+      // Load template workflows for snapshotting
+      const customWorkflow = loadCustomComfyWorkflow();
+      const checkpoint = customWorkflow ? '' : await getComfyCheckpoint();
+      const workflowSnapshot = customWorkflow
+        ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, taskSeed)
+        : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
+      const apiWorkflowJson = JSON.stringify(workflowSnapshot);
+      const uiWorkflowJson = JSON.stringify(workflowSnapshot);
+      const model = checkpoint || workflowCheckpoint(workflowSnapshot);
+
+      // Run database transactions to insert new task AND cancel old tasks in same slot
+      const tx = dbSqlite.transaction(() => {
+        // Cancel existing pending or processing tasks for the same slot
+        dbSqlite.prepare(`
+          UPDATE comfyui_tasks
+          SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by new task', completedAt = ?, updatedAt = ?
+          WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
+        `).run(taskId, new Date().toISOString(), new Date().toISOString(), targetId, viewType);
+
+        // Insert new pending task
+        dbSqlite.prepare(`
+          INSERT INTO comfyui_tasks (
+            id, projectId, targetId, targetType, viewType, shotIndex, characterName,
+            prompt, negativePrompt, seed, model, width, height, status, retryCount,
+            apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          taskId,
+          String(projectId || ''),
+          targetId,
+          targetType || (isCharacter ? 'character' : 'shot'),
+          viewType,
+          typeof shotIndex === 'number' ? shotIndex : null,
+          characterName ? String(characterName) : null,
+          optimizedPrompt,
+          comfyNegative,
+          taskSeed,
+          model,
+          width,
+          height,
+          'pending',
+          Number(req.body.retryCount) || 0,
+          apiWorkflowJson,
+          uiWorkflowJson,
+          new Date().toISOString(),
+          new Date().toISOString()
+        );
+      });
+      tx();
+
+      console.log(`[Queue] Enqueued ComfyUI task ${taskId} for target ${targetId} (${viewType})`);
+
+      return res.json({
+        success: true,
+        taskId,
+        status: 'pending',
+        provider: 'comfyui',
+        seed: taskSeed,
+        width,
+        height
+      });
     }
 
     const useKling = platform === 'kling';
@@ -1920,12 +2823,6 @@ app.post('/api/generate-image', async (req, res) => {
   }
 });
 
-
-
-
-
-
-
 // If in production, serve the frontend dist folder
 if (process.env.NODE_ENV === 'production') {
   const DIST_DIR = path.join(__dirname, 'dist');
@@ -1939,6 +2836,7 @@ if (process.env.NODE_ENV === 'production') {
 try {
   console.log('[SQLite] Initializing database and running migration check...');
   readDb();
+  migrateDatabaseIds();
 } catch (e) {
   console.error('[SQLite] Initialization failed:', e);
 }
@@ -1946,4 +2844,5 @@ try {
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
+  startComfyWorker();
 });
