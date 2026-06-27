@@ -1987,6 +1987,24 @@ async function getComfyCheckpoint(): Promise<string> {
   return String(choices[0]);
 }
 
+async function getComfyCheckpointsList(): Promise<string[]> {
+  try {
+    const response = await comfyFetch('/object_info/CheckpointLoaderSimple', {}, 5000);
+    if (response.ok) {
+      const info: any = await response.json();
+      const choices = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0];
+      if (Array.isArray(choices) && choices.length) {
+        return choices.map(String);
+      }
+    }
+  } catch (err) {
+    console.error('[ComfyUI] Failed to fetch checkpoints list:', err);
+  }
+  const configured = process.env.COMFYUI_CKPT_NAME?.trim();
+  if (configured) return [configured];
+  return [];
+}
+
 function buildDefaultComfyWorkflow(
   checkpoint: string,
   prompt: string,
@@ -2405,12 +2423,35 @@ async function pollActiveTasks() {
 
 async function submitComfyTask(task: any) {
   try {
-    const seed = Number(task.seed);
-    const customWorkflow = task.apiWorkflowJson ? JSON.parse(task.apiWorkflowJson) : loadCustomComfyWorkflow();
-    const checkpoint = customWorkflow ? undefined : await getComfyCheckpoint();
-    const workflow = customWorkflow
-      ? applyCustomComfyInputs(customWorkflow, task.prompt, task.negativePrompt, task.width, task.height, seed)
-      : buildDefaultComfyWorkflow(checkpoint!, task.prompt, task.negativePrompt, task.width, task.height, seed);
+    let workflow: any;
+    if (task.apiWorkflowJson) {
+      try {
+        workflow = JSON.parse(task.apiWorkflowJson);
+      } catch (err) {
+        console.warn(`[Worker] Failed to parse apiWorkflowJson for task ${task.id}, rebuilding...`);
+      }
+    }
+
+    if (!workflow) {
+      // Rebuild and immediately persist to SQLite for compatibility/frozen principle
+      const seedVal = Number(task.seed) || Math.floor(Math.random() * 9007199254740991);
+      const customWorkflow = loadCustomComfyWorkflow();
+      const checkpoint = customWorkflow ? '' : (task.model && task.model !== 'unknown' ? task.model : await getComfyCheckpoint());
+      const workflowSnapshot = customWorkflow
+        ? applyCustomComfyInputs(customWorkflow, task.prompt, task.negativePrompt, task.width, task.height, seedVal)
+        : buildDefaultComfyWorkflow(checkpoint, task.prompt, task.negativePrompt, task.width, task.height, seedVal);
+      
+      workflow = workflowSnapshot;
+      const apiJson = JSON.stringify(workflowSnapshot);
+      const uiJson = JSON.stringify(workflowSnapshot);
+      const finalModel = checkpoint || workflowCheckpoint(workflowSnapshot);
+
+      dbSqlite.prepare(`
+        UPDATE comfyui_tasks
+        SET apiWorkflowJson = ?, uiWorkflowJson = ?, model = ?, seed = ?, updatedAt = ?
+        WHERE id = ?
+      `).run(apiJson, uiJson, finalModel, String(seedVal), new Date().toISOString(), task.id);
+    }
       
     const clientId = crypto.randomUUID();
     
@@ -2508,6 +2549,72 @@ app.get('/api/comfyui/tasks', (req, res) => {
       ORDER BY createdAt ASC
     `).all(projectId);
     return res.json(tasks);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/comfyui/checkpoints', async (req, res) => {
+  try {
+    const list = await getComfyCheckpointsList();
+    return res.json({ checkpoints: list });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/comfyui/workflow-info', (req, res) => {
+  try {
+    const customWorkflow = loadCustomComfyWorkflow();
+    if (!customWorkflow) {
+      return res.json({
+        isCustom: false,
+        supported: {
+          prompt: true,
+          negativePrompt: true,
+          seed: true,
+          model: true,
+          width: true,
+          height: true
+        }
+      });
+    }
+
+    const checkpointNode = findComfyNode(customWorkflow, 'COMFYUI_CKPT_NODE_ID', ['CheckpointLoaderSimple'], /checkpoint/i);
+    const positiveNode = findComfyNode(customWorkflow, 'COMFYUI_PROMPT_NODE_ID', ['CLIPTextEncode'], /positive|prompt/i);
+    const negativeNode = findComfyNode(customWorkflow, 'COMFYUI_NEGATIVE_NODE_ID', ['CLIPTextEncode'], /negative/i);
+    const seedNode = findComfyNode(customWorkflow, 'COMFYUI_SEED_NODE_ID', ['KSampler', 'KSamplerAdvanced'], /seed/i);
+    const latentNode = findComfyNode(customWorkflow, 'COMFYUI_LATENT_NODE_ID', ['EmptyLatentImage', 'EmptySD3LatentImage'], /latent|size/i);
+
+    return res.json({
+      isCustom: true,
+      supported: {
+        model: !!checkpointNode,
+        prompt: !!positiveNode,
+        negativePrompt: !!negativeNode,
+        seed: !!seedNode,
+        width: !!latentNode,
+        height: !!latentNode
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/comfyui/tasks/last-succeeded', (req, res) => {
+  const { targetId, viewType } = req.query;
+  if (!targetId || !viewType) {
+    return res.status(400).json({ error: 'targetId and viewType are required' });
+  }
+  try {
+    const row = dbSqlite.prepare(`
+      SELECT * FROM comfyui_tasks
+      WHERE targetId = ? AND viewType = ? AND status = 'succeeded'
+      ORDER BY createdAt DESC
+      LIMIT 1
+    `).get(targetId, viewType) as any;
+    return res.json(row || {});
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -2633,8 +2740,10 @@ app.post('/api/generate-image', async (req, res) => {
       const width = Math.max(256, Math.min(2048, Math.floor(requestedWidth / 64) * 64));
       const height = Math.max(256, Math.min(2048, Math.floor(requestedHeight / 64) * 64));
       
-      const taskId = crypto.randomUUID();
-      const taskSeed = seed ? String(seed) : String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n));
+      const seedMode = req.body.seedMode;
+      const taskSeed = (seedMode === 'random' || !seed)
+        ? String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n))
+        : String(seed);
       const comfyNegative = String(negativePrompt || negative_prompt || DEFAULT_COMFY_NEGATIVE_PROMPT);
 
       const targetId = req.body.targetId || (targetType === 'shot' ? `shot_${shotIndex}` : `char_${characterName}`);
@@ -2642,13 +2751,28 @@ app.post('/api/generate-image', async (req, res) => {
 
       // Load template workflows for snapshotting
       const customWorkflow = loadCustomComfyWorkflow();
-      const checkpoint = customWorkflow ? '' : await getComfyCheckpoint();
+      
+      let checkpoint = '';
+      if (!customWorkflow) {
+        const available = await getComfyCheckpointsList();
+        if (req.body.model) {
+          if (available.length > 0 && !available.includes(req.body.model)) {
+            return res.status(400).json({ error: `Model '${req.body.model}' is not available in ComfyUI checkpoints.` });
+          }
+          checkpoint = req.body.model;
+        } else {
+          checkpoint = await getComfyCheckpoint();
+        }
+      }
+
       const workflowSnapshot = customWorkflow
-        ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, taskSeed)
-        : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
+        ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, Number(taskSeed))
+        : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, Number(taskSeed));
       const apiWorkflowJson = JSON.stringify(workflowSnapshot);
       const uiWorkflowJson = JSON.stringify(workflowSnapshot);
       const model = checkpoint || workflowCheckpoint(workflowSnapshot);
+
+      const taskId = crypto.randomUUID();
 
       // Run database transactions to insert new task AND cancel old tasks in same slot
       const tx = dbSqlite.transaction(() => {

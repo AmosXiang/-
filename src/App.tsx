@@ -82,7 +82,39 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [shotSearchQuery, setShotSearchQuery] = useState<string>("");
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
-  const [imagePlatform, setImagePlatform] = useState<'pollinations' | 'kling'>('pollinations');
+  const [imagePlatform, setImagePlatform] = useState<'pollinations' | 'kling' | 'comfyui'>('pollinations');
+  const [comfyModalOpen, setComfyModalOpen] = useState<boolean>(false);
+  const [comfyModalTarget, setComfyModalTarget] = useState<{
+    targetId: string;
+    viewType: string;
+    targetType: 'shot' | 'character';
+    shotIndex?: number;
+    characterName?: string;
+    defaultPrompt: string;
+  } | null>(null);
+  const [comfyParams, setComfyParams] = useState<{
+    prompt: string;
+    negativePrompt: string;
+    seedMode: 'keep' | 'random';
+    seed: string;
+    model: string;
+    width: number;
+    height: number;
+  }>({
+    prompt: "",
+    negativePrompt: "",
+    seedMode: "keep",
+    seed: "",
+    model: "",
+    width: 768,
+    height: 512
+  });
+  const [availableCheckpoints, setAvailableCheckpoints] = useState<string[]>([]);
+  const [workflowSupport, setWorkflowSupport] = useState<any>({
+    isCustom: false,
+    supported: { prompt: true, negativePrompt: true, seed: true, model: true, width: true, height: true }
+  });
+  const [modelError, setModelError] = useState<string>("");
   const [showJsonModal, setShowJsonModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [audioMuted, setAudioMuted] = useState<boolean>(true);
@@ -114,6 +146,137 @@ export default function App() {
 
   // ComfyUI Queue Polling state and callbacks
   const [comfyTasks, setComfyTasks] = useState<any[]>([]);
+
+  const handleOpenComfyParams = async (targetId: string, viewType: string, targetType: 'shot' | 'character', shotIndex?: number, characterName?: string, defaultPrompt?: string) => {
+    let checkpointsList: string[] = [];
+    try {
+      const res = await fetch("/api/comfyui/checkpoints");
+      if (res.ok) {
+        const data = await res.json();
+        checkpointsList = data.checkpoints || [];
+        setAvailableCheckpoints(checkpointsList);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    let supportInfo = {
+      isCustom: false,
+      supported: { prompt: true, negativePrompt: true, seed: true, model: true, width: true, height: true }
+    };
+    try {
+      const res = await fetch("/api/comfyui/workflow-info");
+      if (res.ok) {
+        supportInfo = await res.json();
+        setWorkflowSupport(supportInfo);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    let lastParams: any = null;
+    try {
+      const res = await fetch(`/api/comfyui/tasks/last-succeeded?targetId=${targetId}&viewType=${viewType}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.id) {
+          lastParams = data;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    const finalPrompt = lastParams ? lastParams.prompt : (defaultPrompt || "");
+    const finalNegative = lastParams ? lastParams.negativePrompt : "";
+    const finalSeed = lastParams ? String(lastParams.seed) : "";
+    const finalModel = lastParams ? lastParams.model : "";
+    const finalWidth = lastParams ? lastParams.width : (targetType === 'character' ? 512 : 768);
+    const finalHeight = lastParams ? lastParams.height : (targetType === 'character' ? 768 : 512);
+
+    let mErr = "";
+    let selectedModel = finalModel;
+    if (supportInfo.supported.model) {
+      if (finalModel) {
+        if (checkpointsList.length > 0 && !checkpointsList.includes(finalModel)) {
+          mErr = "模型不可用，请重新选择";
+          selectedModel = "";
+        }
+      } else {
+        selectedModel = checkpointsList[0] || "";
+      }
+    }
+
+    setModelError(mErr);
+    setComfyParams({
+      prompt: finalPrompt,
+      negativePrompt: finalNegative,
+      seedMode: "keep",
+      seed: finalSeed,
+      model: selectedModel,
+      width: finalWidth,
+      height: finalHeight
+    });
+
+    setComfyModalTarget({
+      targetId,
+      viewType,
+      targetType,
+      shotIndex,
+      characterName,
+      defaultPrompt: defaultPrompt || ""
+    });
+    setComfyModalOpen(true);
+  };
+
+  const handleRegenerateWithParams = async () => {
+    if (!comfyModalTarget || !generatedScript) return;
+    if (workflowSupport.supported.prompt && !comfyParams.prompt.trim()) {
+      alert("提示词不能为空");
+      return;
+    }
+    if (workflowSupport.supported.width && (isNaN(comfyParams.width) || comfyParams.width < 256 || comfyParams.width > 2048)) {
+      alert("宽度必须在 256 到 2048 之间");
+      return;
+    }
+    if (workflowSupport.supported.height && (isNaN(comfyParams.height) || comfyParams.height < 256 || comfyParams.height > 2048)) {
+      alert("高度必须在 256 到 2048 之间");
+      return;
+    }
+    if (workflowSupport.supported.model && modelError) {
+      alert("选定的模型当前不可用，请重新选择可用模型");
+      return;
+    }
+    setComfyModalOpen(false);
+    try {
+      const res = await fetch("/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: comfyParams.prompt,
+          negativePrompt: comfyParams.negativePrompt,
+          seedMode: comfyParams.seedMode,
+          seed: comfyParams.seedMode === 'keep' ? comfyParams.seed : undefined,
+          model: comfyParams.model,
+          width: comfyParams.width,
+          height: comfyParams.height,
+          projectId: generatedScript.id,
+          targetType: comfyModalTarget.targetType,
+          targetId: comfyModalTarget.targetId,
+          viewType: comfyModalTarget.viewType,
+          shotIndex: comfyModalTarget.shotIndex,
+          characterName: comfyModalTarget.characterName,
+          platform: "comfyui",
+          skipTranslation: true
+        })
+      });
+      if (res.ok) {
+        pollComfyTasks();
+      }
+    } catch (e) {
+      console.error("重新生成请求失败:", e);
+    }
+  };
 
   const pollComfyTasks = React.useCallback(async () => {
     if (!generatedScriptRef.current) return;
@@ -2654,11 +2817,12 @@ export default function App() {
                           <span className="text-[10px] text-slate-400 font-medium select-none">生图平台:</span>
                           <select
                             value={imagePlatform}
-                            onChange={(e) => setImagePlatform(e.target.value as 'pollinations' | 'kling')}
+                            onChange={(e) => setImagePlatform(e.target.value as 'pollinations' | 'kling' | 'comfyui')}
                             className="bg-transparent border-none text-slate-200 text-xs outline-none cursor-pointer font-medium p-0 focus:ring-0 focus:outline-none"
                           >
                             <option value="pollinations" className="bg-slate-900 text-slate-200">Pollinations</option>
                             <option value="kling" className="bg-slate-900 text-slate-200">Kling AI (可灵)</option>
+                            <option value="comfyui" className="bg-slate-900 text-slate-200">ComfyUI (本地)</option>
                           </select>
                         </div>
                         <button
@@ -2948,27 +3112,40 @@ export default function App() {
                                         
                                         <div className="relative min-w-[80px] min-h-[32px] flex justify-end">
                                           {!shotImg && !isGenerating && (
-                                            <button
-                                              type="button"
-                                              onClick={(e) => {
-                                                e.preventDefault();
-                                                handleGenerateShotImage(shot, idx);
-                                              }}
-                                              disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
-                                              className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-850 disabled:text-slate-600 text-white rounded text-[10px] flex items-center gap-1 cursor-pointer shrink-0 transition-colors font-medium shadow-md hover:shadow-blue-900/30"
-                                            >
-                                              {isGenerating ? (
-                                                <>
-                                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                                  <span>生成中...</span>
-                                                </>
-                                              ) : (
-                                                <>
-                                                  <Sparkles className="w-3 h-3" />
-                                                  <span>生成图片</span>
-                                                </>
+                                            <div className="flex gap-1.5 justify-end w-full">
+                                              {imagePlatform === 'comfyui' && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleOpenComfyParams(shot.id || '', 'main', 'shot', idx, undefined, shot.description || '')}
+                                                  disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
+                                                  className="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-850 disabled:text-slate-600 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-colors border border-slate-700 font-medium"
+                                                  title="调整参数"
+                                                >
+                                                  <Sliders className="w-3.5 h-3.5" />
+                                                </button>
                                               )}
-                                            </button>
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.preventDefault();
+                                                  handleGenerateShotImage(shot, idx);
+                                                }}
+                                                disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
+                                                className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-850 disabled:text-slate-600 text-white rounded text-[10px] flex items-center gap-1 cursor-pointer shrink-0 transition-colors font-medium shadow-md hover:shadow-blue-900/30"
+                                              >
+                                                {isGenerating ? (
+                                                  <>
+                                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                                    <span>生成中...</span>
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    <Sparkles className="w-3 h-3" />
+                                                    <span>生成图片</span>
+                                                  </>
+                                                )}
+                                              </button>
+                                            </div>
                                           )}
                                           {renderComfyTaskOverlay(getShotTask(shot.id || ''))}
                                         </div>
@@ -3042,10 +3219,22 @@ export default function App() {
                                                   </select>
                                                 </div>
                                                 <div className="w-[1px] h-3.5 bg-slate-800"></div>
+                                                {imagePlatform === 'comfyui' && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => handleOpenComfyParams(shot.id || '', 'main', 'shot', idx, undefined, shot.description || '')}
+                                                    disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
+                                                    className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-850 disabled:text-slate-600 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"
+                                                    title="调整参数"
+                                                  >
+                                                    <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                                                    <span>调整参数</span>
+                                                  </button>
+                                                )}
                                                 <button
                                                   type="button"
                                                   onClick={() => handleGenerateShotImage(shot, idx)}
-                                                  disabled={generatingShotIndex !== null}
+                                                  disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
                                                   className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-850 disabled:text-slate-600 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"
                                                 >
                                                   <Sparkles className="w-3 h-3 text-yellow-400" />
@@ -3278,6 +3467,20 @@ export default function App() {
                   <div className="w-20 h-20 rounded-xl overflow-hidden border border-white/10 shadow-lg shrink-0 bg-slate-950 relative group">
                     {renderCharacterAvatar(activeDrawerChar)}
                     {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'avatar'))}
+                    {imagePlatform === 'comfyui' && (
+                      <button
+                        onClick={() => {
+                          const defaultPrompt = activeDrawerChar.clothing 
+                            ? `${activeDrawerChar.clothing}, character concept art, neutral pose, plain dark studio background`
+                            : "character concept art, neutral pose, plain dark studio background";
+                          handleOpenComfyParams(activeDrawerChar.id || '', 'avatar', 'character', undefined, activeDrawerChar.name, defaultPrompt);
+                        }}
+                        title="调整参数"
+                        className="absolute bottom-1 right-1 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-350 hover:text-white rounded border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity z-20 cursor-pointer"
+                      >
+                        <Sliders className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     {(isGeneratingCharImage || isGeneratingThreeViews) && !getCharacterTask(activeDrawerChar.id || '', 'avatar') && (
                       <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
                         <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
@@ -3347,6 +3550,20 @@ export default function App() {
                             </div>
                           )}
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'front'))}
+                          {imagePlatform === 'comfyui' && (
+                            <button
+                              onClick={() => {
+                                const defaultPrompt = activeDrawerChar.clothing 
+                                  ? `${activeDrawerChar.clothing}, front view only, single character standing pose, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`
+                                  : "front view only, single character standing pose, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet";
+                                handleOpenComfyParams(activeDrawerChar.id || '', 'front', 'character', undefined, activeDrawerChar.name, defaultPrompt);
+                              }}
+                              title="调整参数"
+                              className="absolute bottom-1 right-1 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
+                            >
+                              <Sliders className="w-3 h-3" />
+                            </button>
+                          )}
                           {(isGeneratingThreeViews || generatingViews.front) && !getCharacterTask(activeDrawerChar.id || '', 'front') && (
                             <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-1.5">
                               <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
@@ -3382,6 +3599,20 @@ export default function App() {
                             </div>
                           )}
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'side'))}
+                          {imagePlatform === 'comfyui' && (
+                            <button
+                              onClick={() => {
+                                const defaultPrompt = activeDrawerChar.clothing 
+                                  ? `${activeDrawerChar.clothing}, side view only, facing right, single character, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`
+                                  : "side view only, facing right, single character, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet";
+                                handleOpenComfyParams(activeDrawerChar.id || '', 'side', 'character', undefined, activeDrawerChar.name, defaultPrompt);
+                              }}
+                              title="调整参数"
+                              className="absolute bottom-1 right-1 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
+                            >
+                              <Sliders className="w-3 h-3" />
+                            </button>
+                          )}
                           {(isGeneratingThreeViews || generatingViews.side) && !getCharacterTask(activeDrawerChar.id || '', 'side') && (
                             <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-1.5">
                               <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
@@ -3417,6 +3648,20 @@ export default function App() {
                             </div>
                           )}
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'back'))}
+                          {imagePlatform === 'comfyui' && (
+                            <button
+                              onClick={() => {
+                                const defaultPrompt = activeDrawerChar.clothing 
+                                  ? `${activeDrawerChar.clothing}, back view only, character facing away from camera, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet`
+                                  : "back view only, character facing away from camera, full body, white background, character concept art, anime style, isolated, white background, no side-by-side, no multi-view sheet";
+                                handleOpenComfyParams(activeDrawerChar.id || '', 'back', 'character', undefined, activeDrawerChar.name, defaultPrompt);
+                              }}
+                              title="调整参数"
+                              className="absolute bottom-1 right-1 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
+                            >
+                              <Sliders className="w-3 h-3" />
+                            </button>
+                          )}
                           {(isGeneratingThreeViews || generatingViews.back) && !getCharacterTask(activeDrawerChar.id || '', 'back') && (
                             <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-1.5">
                               <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
@@ -3778,6 +4023,220 @@ export default function App() {
                     确认合成
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* COMFYUI PARAMETER TUNING DIALOG */}
+      <AnimatePresence>
+        {comfyModalOpen && comfyModalTarget && (
+          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              {/* Header */}
+              <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/20">
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-blue-400" />
+                  <h3 className="text-sm font-bold text-white">调整 ComfyUI 生成参数</h3>
+                </div>
+                <button
+                  onClick={() => setComfyModalOpen(false)}
+                  className="text-slate-400 hover:text-white cursor-pointer transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Form Content */}
+              <div className="p-5 overflow-y-auto space-y-4 text-xs text-slate-350 custom-scrollbar">
+                {/* Custom Workflow Info */}
+                {workflowSupport.isCustom && (
+                  <div className="bg-blue-950/30 border border-blue-900/50 p-2.5 rounded-lg text-[10px] text-blue-400">
+                    ℹ️ 当前正在使用自定义工作流。部分参数由工作流本身控制，未映射的参数已被禁用。
+                  </div>
+                )}
+
+                {/* Prompt */}
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="font-semibold text-slate-400">提示词 (Prompt):</span>
+                    {!workflowSupport.supported.prompt && (
+                      <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>
+                    )}
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={comfyParams.prompt}
+                    onChange={(e) => setComfyParams(prev => ({ ...prev, prompt: e.target.value }))}
+                    disabled={!workflowSupport.supported.prompt}
+                    className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none disabled:bg-slate-950/50 disabled:text-slate-650 disabled:border-slate-900 transition-all font-sans resize-none text-slate-200"
+                    placeholder="输入生图提示词..."
+                  />
+                </div>
+
+                {/* Negative Prompt */}
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="font-semibold text-slate-400">反向提示词 (Negative Prompt):</span>
+                    {!workflowSupport.supported.negativePrompt && (
+                      <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>
+                    )}
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={comfyParams.negativePrompt}
+                    onChange={(e) => setComfyParams(prev => ({ ...prev, negativePrompt: e.target.value }))}
+                    disabled={!workflowSupport.supported.negativePrompt}
+                    className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none disabled:bg-slate-950/50 disabled:text-slate-650 disabled:border-slate-900 transition-all font-sans resize-none text-slate-200"
+                    placeholder="输入反向提示词（负面提示）..."
+                  />
+                </div>
+
+                {/* Model Selection Dropdown */}
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="font-semibold text-slate-400">生成模型 (Checkpoint):</span>
+                    {!workflowSupport.supported.model && (
+                      <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>
+                    )}
+                  </div>
+                  {workflowSupport.supported.model ? (
+                    <div className="space-y-1.5">
+                      <select
+                        value={comfyParams.model}
+                        onChange={(e) => {
+                          setComfyParams(prev => ({ ...prev, model: e.target.value }));
+                          setModelError("");
+                        }}
+                        className={`w-full bg-slate-950 border ${modelError ? 'border-rose-500 focus:border-rose-500' : 'border-slate-850 hover:border-slate-800 focus:border-blue-500'} rounded px-2.5 py-1.5 focus:outline-none transition-all cursor-pointer text-slate-250`}
+                      >
+                        {availableCheckpoints.map((ckpt, index) => (
+                          <option key={index} value={ckpt} className="bg-slate-950 text-slate-200">
+                            {ckpt}
+                          </option>
+                        ))}
+                      </select>
+                      {modelError && (
+                        <div className="text-[10px] text-rose-500 font-medium">{modelError}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      disabled
+                      value="由自定义工作流指定"
+                      className="w-full bg-slate-950/50 border border-slate-900 text-slate-600 rounded px-2.5 py-1.5 cursor-not-allowed"
+                    />
+                  )}
+                </div>
+
+                {/* Seed Selection */}
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="font-semibold text-slate-400">随机种子 (Seed):</span>
+                    {!workflowSupport.supported.seed && (
+                      <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>
+                    )}
+                  </div>
+                  <div className="flex gap-4 items-center bg-slate-950 border border-slate-850 p-2 rounded-lg">
+                    <label className="flex items-center gap-1.5 cursor-pointer disabled:opacity-50 text-slate-200">
+                      <input
+                        type="radio"
+                        name="seedMode"
+                        checked={comfyParams.seedMode === 'keep'}
+                        onChange={() => setComfyParams(prev => ({ ...prev, seedMode: 'keep' }))}
+                        disabled={!workflowSupport.supported.seed}
+                        className="text-blue-600 focus:ring-0 focus:outline-none bg-slate-950 border-slate-800 cursor-pointer"
+                      />
+                      <span>保持原 Seed</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer disabled:opacity-50 text-slate-200">
+                      <input
+                        type="radio"
+                        name="seedMode"
+                        checked={comfyParams.seedMode === 'random'}
+                        onChange={() => setComfyParams(prev => ({ ...prev, seedMode: 'random' }))}
+                        disabled={!workflowSupport.supported.seed}
+                        className="text-blue-600 focus:ring-0 focus:outline-none bg-slate-950 border-slate-800 cursor-pointer"
+                      />
+                      <span>随机 Seed</span>
+                    </label>
+                  </div>
+                  {comfyParams.seedMode === 'keep' && workflowSupport.supported.seed && (
+                    <input
+                      type="text"
+                      value={comfyParams.seed}
+                      onChange={(e) => setComfyParams(prev => ({ ...prev, seed: e.target.value.replace(/\\D/g, '') }))}
+                      disabled={!workflowSupport.supported.seed}
+                      className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none font-mono disabled:text-slate-650 text-slate-200"
+                      placeholder="旧任务 Seed 将被自动沿用"
+                    />
+                  )}
+                </div>
+
+                {/* Width & Height Selection */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-slate-400">图片宽度 (Width):</span>
+                      {!workflowSupport.supported.width && (
+                        <span className="text-[10px] text-amber-500 font-medium">禁用</span>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      value={comfyParams.width}
+                      min={256}
+                      max={2048}
+                      step={64}
+                      onChange={(e) => setComfyParams(prev => ({ ...prev, width: parseInt(e.target.value) || 0 }))}
+                      disabled={!workflowSupport.supported.width}
+                      className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none disabled:bg-slate-950/50 disabled:text-slate-650 text-slate-200"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-slate-400">图片高度 (Height):</span>
+                      {!workflowSupport.supported.height && (
+                        <span className="text-[10px] text-amber-500 font-medium">禁用</span>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      value={comfyParams.height}
+                      min={256}
+                      max={2048}
+                      step={64}
+                      onChange={(e) => setComfyParams(prev => ({ ...prev, height: parseInt(e.target.value) || 0 }))}
+                      disabled={!workflowSupport.supported.height}
+                      className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none disabled:bg-slate-950/50 disabled:text-slate-650 text-slate-200"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="p-4 border-t border-slate-800 bg-slate-950/30 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setComfyModalOpen(false)}
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-350 rounded-xl text-xs font-semibold cursor-pointer active:scale-95 transition-all border border-slate-770"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRegenerateWithParams}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-semibold cursor-pointer active:scale-95 transition-all shadow-lg shadow-indigo-950/20"
+                >
+                  重新生成
+                </button>
               </div>
             </motion.div>
           </div>
