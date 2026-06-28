@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
+    "build": "vite build --configLoader runner",
     "preview": "vite preview",
     "clean": "node -e \"const fs = require('fs'); fs.rmSync('dist', { recursive: true, force: true }); fs.rmSync('server.js', { force: true });\"",
     "lint": "tsc --noEmit",
@@ -19,11 +19,13 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
+    "motion": "^12.42.0",
     "multer": "^2.2.0",
     "p-queue": "^9.3.0",
-    "react": "^19.0.1",
-    "react-dom": "^19.0.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "sharp": "^0.35.2",
+    "streampng-v2": "^2.1.0",
     "vite": "^6.2.3"
   },
   "devDependencies": {

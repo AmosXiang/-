@@ -4,12 +4,17 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { GoogleGenAI } from '@google/genai';
 import { exec } from 'child_process';
 import util from 'util';
 import crypto from 'crypto';
 import Database from 'better-sqlite3';
 import PQueue from 'p-queue';
+import sharp, { type Metadata } from 'sharp';
+
+const require = createRequire(import.meta.url);
+const StreamPng = require('streampng-v2');
 
 const execPromise = util.promisify(exec);
 
@@ -73,6 +78,25 @@ dbSqlite.exec(`
 `);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON comfyui_tasks (status, createdAt)`);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON comfyui_tasks (projectId, updatedAt)`);
+
+// Backward-compatible ComfyUI manual-import migration. Existing rows remain queue-originated.
+const comfyTaskColumns = new Set(
+  (dbSqlite.prepare('PRAGMA table_info(comfyui_tasks)').all() as Array<{ name: string }>).map(column => column.name)
+);
+if (!comfyTaskColumns.has('origin')) {
+  dbSqlite.exec("ALTER TABLE comfyui_tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'queue'");
+}
+if (!comfyTaskColumns.has('importedFromTaskId')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN importedFromTaskId TEXT');
+}
+if (!comfyTaskColumns.has('importSha256')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN importSha256 TEXT');
+}
+dbSqlite.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_comfy_manual_import_unique
+  ON comfyui_tasks (importedFromTaskId, importSha256)
+  WHERE origin = 'manual_import'
+`);
 
 // Concurrent write queue
 const writeQueue = new PQueue({ concurrency: 1 });
@@ -2679,6 +2703,387 @@ function startComfyWorker() {
 // --- End of ComfyUI Queue Worker ---
 
 // ComfyUI Tasks endpoints
+const DEFAULT_PARAMETER_NODE_IDS = Object.freeze({
+  positivePrompt: '2',
+  negativePrompt: '3',
+  sampler: '5',
+  checkpoint: '1',
+  latent: '4',
+});
+
+const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
+const MAX_IMPORT_METADATA_BYTES = 5 * 1024 * 1024;
+const MAX_IMPORT_CHUNK_BYTES = 8 * 1024 * 1024;
+
+class ImportResultError extends Error {
+  constructor(public status: number, message: string, public code?: string) {
+    super(message);
+  }
+}
+
+function taskParameterNodeIds(uiWorkflow: any): Record<keyof typeof DEFAULT_PARAMETER_NODE_IDS, string> {
+  const embedded = uiWorkflow?.extra?.aiVideoWorkbench?.parameterNodeIds;
+  if (embedded) {
+    const result: any = {};
+    for (const key of Object.keys(DEFAULT_PARAMETER_NODE_IDS) as Array<keyof typeof DEFAULT_PARAMETER_NODE_IDS>) {
+      const value = embedded[key];
+      if (value === undefined || value === null || String(value).trim() === '') {
+        throw new ImportResultError(422, `Workflow node mapping '${key}' is missing.`);
+      }
+      result[key] = String(value);
+    }
+    return result;
+  }
+
+  // Legacy built-in snapshots use these exact, stable node IDs. Never infer by selecting the first node of a type.
+  const expectedTypes: Record<string, string> = {
+    '1': 'CheckpointLoaderSimple',
+    '2': 'CLIPTextEncode',
+    '3': 'CLIPTextEncode',
+    '4': 'EmptyLatentImage',
+    '5': 'KSampler',
+  };
+  const nodes = new Map((uiWorkflow?.nodes || []).map((node: any) => [String(node.id), node.type]));
+  if (!Object.entries(expectedTypes).every(([id, type]) => nodes.get(id) === type)) {
+    throw new ImportResultError(422, 'Workflow has no explicit parameter node mapping and is not a built-in workflow snapshot.');
+  }
+  return { ...DEFAULT_PARAMETER_NODE_IDS };
+}
+
+function exportedUiWorkflow(task: any): any {
+  let workflow: any;
+  try {
+    workflow = JSON.parse(task.uiWorkflowJson);
+  } catch {
+    throw new ImportResultError(409, `Task '${task.id}' UI workflow JSON is corrupted or invalid.`);
+  }
+  let parameterNodeIds: Record<keyof typeof DEFAULT_PARAMETER_NODE_IDS, string>;
+  try {
+    parameterNodeIds = taskParameterNodeIds(workflow);
+  } catch (error) {
+    // Some records created by older builds accidentally stored the API workflow in uiWorkflowJson.
+    // Rebuild only when apiWorkflowJson is unmistakably the built-in 1..7 workflow; never guess custom nodes.
+    let apiWorkflow: any;
+    try {
+      apiWorkflow = JSON.parse(task.apiWorkflowJson || '');
+    } catch {
+      throw error;
+    }
+    const expectedApiTypes: Record<string, string> = {
+      '1': 'CheckpointLoaderSimple',
+      '2': 'CLIPTextEncode',
+      '3': 'CLIPTextEncode',
+      '4': 'EmptyLatentImage',
+      '5': 'KSampler',
+      '6': 'VAEDecode',
+      '7': 'SaveImage',
+    };
+    if (!Object.entries(expectedApiTypes).every(([id, type]) => apiWorkflow?.[id]?.class_type === type)) {
+      throw error;
+    }
+    workflow = buildDefaultUIWorkflow(task.model, task.prompt, task.negativePrompt, task.width, task.height, task.seed);
+    parameterNodeIds = { ...DEFAULT_PARAMETER_NODE_IDS };
+  }
+  workflow.extra = {
+    ...(workflow.extra && typeof workflow.extra === 'object' ? workflow.extra : {}),
+    aiVideoWorkbench: {
+      schemaVersion: 1,
+      sourceTaskId: task.id,
+      projectId: task.projectId,
+      targetId: task.targetId,
+      targetType: task.targetType,
+      viewType: task.viewType,
+      parameterNodeIds,
+    },
+  };
+  return workflow;
+}
+
+function targetImageDirectory(task: any): { absolute: string; relative: string } {
+  const projectId = safePathSegment(task.projectId, 'unassigned');
+  const targetDir = task.targetType === 'shot'
+    ? path.join('shots', String(Math.max(0, Number(task.shotIndex) || 0) + 1).padStart(2, '0'))
+    : path.join('characters', safePathSegment(task.characterName, 'character'));
+  const relative = path.join('projects', projectId, targetDir);
+  return { absolute: path.join(UPLOADS_DIR, relative), relative };
+}
+
+const importResultStorage = multer.diskStorage({
+  destination: (req, _file, cb) => {
+    try {
+      const task = dbSqlite.prepare('SELECT * FROM comfyui_tasks WHERE id = ?').get(req.params.sourceTaskId) as any;
+      if (!task) return cb(new ImportResultError(404, `Source task '${req.params.sourceTaskId}' not found.`), '');
+      if (task.status !== 'succeeded') return cb(new ImportResultError(409, 'Source task must be succeeded before importing a result.'), '');
+      const destination = targetImageDirectory(task).absolute;
+      fs.mkdirSync(destination, { recursive: true });
+      return cb(null, destination);
+    } catch (error: any) {
+      return cb(error, '');
+    }
+  },
+  filename: (_req, _file, cb) => cb(null, `.comfy-import-${crypto.randomUUID()}.tmp`),
+});
+
+const importResultUpload = multer({
+  storage: importResultStorage,
+  limits: { fileSize: MAX_IMPORT_BYTES, files: 1, fields: 2 },
+}).single('file');
+
+function removeFileQuietly(filePath?: string) {
+  if (!filePath) return;
+  try {
+    fs.unlinkSync(filePath);
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') console.warn(`[ComfyUI Import] Could not remove temporary file ${filePath}:`, error);
+  }
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('data', chunk => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+async function validatePngStream(filePath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const source = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
+    const parser = new StreamPng();
+    let settled = false;
+    let sawIend = false;
+    const fail = (error: any) => {
+      if (settled) return;
+      settled = true;
+      source.destroy();
+      reject(error);
+    };
+
+    // Keep parsing memory bounded. streampng-v2 normally retains every chunk to support rewriting;
+    // imports only need validation, so retain just small presence markers and the IHDR object.
+    parser.addChunk = function addValidationChunk(chunk: any) {
+      if (chunk.type === 'IHDR') this.IHDR = [chunk];
+      else if (!this[chunk.type]) this[chunk.type] = [true];
+      return this;
+    };
+    const processChunk = parser.process.bind(parser);
+    parser.process = function boundedProcess() {
+      try {
+        if (this.parser.position() >= 8 && this.parser.remaining() >= 4) {
+          const chunkLength = this.parser.peak(4).readUInt32BE(0);
+          if (chunkLength > MAX_IMPORT_CHUNK_BYTES) {
+            throw new Error(`PNG chunk exceeds the ${MAX_IMPORT_CHUNK_BYTES / 1024 / 1024}MB safety limit`);
+          }
+        }
+        return processChunk();
+      } catch (error) {
+        fail(error);
+        return this;
+      }
+    };
+    parser.on('chunk', (chunk: any) => {
+      try {
+        const actual = chunk.crc;
+        const computed = chunk.getComputedCrc();
+        if (!Buffer.isBuffer(actual) || !Buffer.isBuffer(computed) || !actual.equals(computed)) {
+          throw new Error(`CRC mismatch in ${chunk.type || 'unknown'} chunk`);
+        }
+        if (chunk.type === 'IEND') sawIend = true;
+      } catch (error) {
+        fail(error);
+      }
+    });
+    parser.on('error', fail);
+    source.on('error', fail);
+    source.on('end', () => {
+      setImmediate(() => {
+        if (settled) return;
+        const remaining = Number(parser.parser?.remaining?.() || 0);
+        if (!sawIend || remaining !== 0) {
+          fail(new Error(!sawIend ? 'PNG ended before a complete IEND chunk' : 'PNG contains trailing or incomplete chunk data'));
+          return;
+        }
+        settled = true;
+        resolve();
+      });
+    });
+    source.pipe(parser);
+  });
+}
+
+function requireMappedNode(
+  apiWorkflow: any,
+  uiWorkflow: any,
+  nodeId: string,
+  label: string,
+  acceptedTypes: string[],
+): any {
+  const apiNode = apiWorkflow?.[nodeId];
+  if (!apiNode || typeof apiNode !== 'object') {
+    throw new ImportResultError(422, `Mapped ${label} node '${nodeId}' is missing from PNG prompt metadata.`);
+  }
+  if (!acceptedTypes.includes(apiNode.class_type)) {
+    throw new ImportResultError(422, `Mapped ${label} node '${nodeId}' has invalid type '${apiNode.class_type || 'unknown'}'.`);
+  }
+  const uiMatches = (uiWorkflow?.nodes || []).filter((node: any) => String(node.id) === nodeId);
+  if (uiMatches.length !== 1 || !acceptedTypes.includes(uiMatches[0]?.type)) {
+    throw new ImportResultError(422, `Mapped ${label} node '${nodeId}' is missing, duplicated, or has an invalid UI workflow type.`);
+  }
+  return apiNode;
+}
+
+async function readImportedPng(filePath: string, sourceTask: any) {
+  const handle = await fs.promises.open(filePath, 'r');
+  try {
+    const signature = Buffer.alloc(8);
+    const { bytesRead } = await handle.read(signature, 0, 8, 0);
+    const expected = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    if (bytesRead !== 8 || !signature.equals(expected)) {
+      throw new ImportResultError(422, 'Uploaded file does not have a valid PNG signature.');
+    }
+  } finally {
+    await handle.close();
+  }
+
+  try {
+    // Dedicated chunk parsing validates every CRC and boundary from a disk stream.
+    await validatePngStream(filePath);
+  } catch (error: any) {
+    throw new ImportResultError(422, `Invalid PNG chunk structure or CRC: ${error?.message || 'validation failed'}`);
+  }
+
+  let metadata: Metadata;
+  try {
+    // sharp delegates PNG chunk, CRC, compression and bounds validation to maintained libvips/libpng.
+    // metadata() reads headers/text metadata without decoding the full pixel raster.
+    metadata = await sharp(filePath, { failOn: 'warning' }).metadata();
+  } catch (error: any) {
+    throw new ImportResultError(422, `Invalid or corrupted PNG: ${error?.message || 'metadata parsing failed'}`);
+  }
+  if (metadata.format !== 'png') throw new ImportResultError(422, 'Uploaded file is not a real PNG image.');
+
+  const comments = metadata.comments || [];
+  const metadataBytes = comments.reduce((sum, item) => sum + Buffer.byteLength(item.keyword || '') + Buffer.byteLength(item.text || ''), 0);
+  if (metadataBytes > MAX_IMPORT_METADATA_BYTES) {
+    throw new ImportResultError(422, 'PNG metadata exceeds the 5MB decompressed limit.');
+  }
+  const byKeyword = (keyword: string) => comments.filter(item => item.keyword === keyword);
+  const promptComments = byKeyword('prompt');
+  const workflowComments = byKeyword('workflow');
+  if (promptComments.length !== 1 || workflowComments.length !== 1) {
+    throw new ImportResultError(422, 'PNG must contain exactly one valid prompt and one valid workflow metadata entry.');
+  }
+
+  let apiWorkflow: any;
+  let uiWorkflow: any;
+  try {
+    apiWorkflow = JSON.parse(promptComments[0].text);
+    uiWorkflow = JSON.parse(workflowComments[0].text);
+  } catch {
+    throw new ImportResultError(422, 'PNG prompt or workflow metadata is not valid JSON.');
+  }
+
+  const provenance = uiWorkflow?.extra?.aiVideoWorkbench;
+  if (!provenance || provenance.schemaVersion !== 1) {
+    throw new ImportResultError(422, 'Workflow is missing supported aiVideoWorkbench provenance metadata.');
+  }
+  const identityFields = ['sourceTaskId', 'projectId', 'targetId', 'targetType', 'viewType'] as const;
+  for (const field of identityFields) {
+    if (String(provenance[field] ?? '') !== String(sourceTask[field] ?? (field === 'sourceTaskId' ? sourceTask.id : ''))) {
+      const expected = field === 'sourceTaskId' ? sourceTask.id : sourceTask[field];
+      if (String(provenance[field] ?? '') !== String(expected ?? '')) {
+        throw new ImportResultError(422, `Workflow provenance '${field}' does not match the source task.`);
+      }
+    }
+  }
+
+  const ids = taskParameterNodeIds(uiWorkflow);
+  const positive = requireMappedNode(apiWorkflow, uiWorkflow, ids.positivePrompt, 'positive prompt', ['CLIPTextEncode']);
+  const negative = requireMappedNode(apiWorkflow, uiWorkflow, ids.negativePrompt, 'negative prompt', ['CLIPTextEncode']);
+  const sampler = requireMappedNode(apiWorkflow, uiWorkflow, ids.sampler, 'sampler', ['KSampler', 'KSamplerAdvanced']);
+  const checkpoint = requireMappedNode(apiWorkflow, uiWorkflow, ids.checkpoint, 'checkpoint', ['CheckpointLoaderSimple']);
+  const latent = requireMappedNode(apiWorkflow, uiWorkflow, ids.latent, 'latent', ['EmptyLatentImage', 'EmptySD3LatentImage']);
+
+  const prompt = positive.inputs?.text;
+  const negativePrompt = negative.inputs?.text;
+  const seed = sampler.class_type === 'KSamplerAdvanced' ? sampler.inputs?.noise_seed : sampler.inputs?.seed;
+  const model = checkpoint.inputs?.ckpt_name;
+  const width = Number(latent.inputs?.width);
+  const height = Number(latent.inputs?.height);
+  if (typeof prompt !== 'string' || typeof negativePrompt !== 'string') {
+    throw new ImportResultError(422, 'Mapped prompt nodes do not contain text inputs.');
+  }
+  if ((typeof seed !== 'string' && typeof seed !== 'number') || String(seed).trim() === '') {
+    throw new ImportResultError(422, 'Mapped sampler node does not contain a valid seed.');
+  }
+  if (typeof model !== 'string' || !model.trim()) {
+    throw new ImportResultError(422, 'Mapped checkpoint node does not contain a valid model name.');
+  }
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 32768 || height > 32768) {
+    throw new ImportResultError(422, 'Mapped latent node does not contain valid width and height values.');
+  }
+  return { apiWorkflow, uiWorkflow, prompt, negativePrompt, seed: String(seed), model, width, height };
+}
+
+function updateImportedSlot(scripts: any[], task: any, imageUrl: string, generation: any) {
+  const script = scripts.find((item: any) => String(item.id) === String(task.projectId));
+  if (!script) throw new ImportResultError(422, 'The source task project no longer exists.');
+  if (task.targetType === 'shot') {
+    if (task.viewType !== 'main') throw new ImportResultError(422, `Unsupported shot slot '${task.viewType}'.`);
+    const shot = script.newShots?.find((item: any) => String(item.id) === String(task.targetId));
+    if (!shot) throw new ImportResultError(422, 'The source shot slot no longer exists.');
+    shot.imageUrl = imageUrl;
+    shot.generatedImageUrl = imageUrl;
+    shot.imageGeneration = generation;
+    shot.imageGenerations = [...(shot.imageGenerations || []), generation];
+    return;
+  }
+  if (task.targetType === 'character') {
+    if (!['avatar', 'front', 'side', 'back'].includes(task.viewType)) {
+      throw new ImportResultError(422, `Unsupported character slot '${task.viewType}'.`);
+    }
+    const character = script.newCharacters?.find((item: any) => String(item.id) === String(task.targetId));
+    if (!character) throw new ImportResultError(422, 'The source character slot no longer exists.');
+    if (task.viewType === 'avatar') {
+      character.avatarUrl = imageUrl;
+    } else {
+      character.views = { ...(character.views || {}), [task.viewType]: imageUrl };
+      if (task.viewType === 'front') character.avatarUrl = imageUrl;
+    }
+    character.imageGeneration = generation;
+    character.imageGenerations = [...(character.imageGenerations || []), generation];
+    return;
+  }
+  throw new ImportResultError(422, `Unsupported target type '${task.targetType}'.`);
+}
+
+function publicComfyTask(task: any) {
+  let hasUiWorkflow = false;
+  try {
+    exportedUiWorkflow(task);
+    hasUiWorkflow = true;
+  } catch {
+    hasUiWorkflow = false;
+  }
+  const { apiWorkflowJson: _apiWorkflowJson, uiWorkflowJson: _uiWorkflowJson, ...publicTask } = task;
+  return { ...publicTask, hasUiWorkflow };
+}
+
+function storedGeneratedScript(projectId: string) {
+  const row = dbSqlite.prepare("SELECT value FROM store WHERE key = 'generated_scripts'").get() as { value: string } | undefined;
+  let scripts: any[];
+  try {
+    scripts = row ? JSON.parse(row.value) : [];
+  } catch {
+    throw new ImportResultError(500, 'Stored project data is corrupted.');
+  }
+  const script = scripts.find(item => String(item.id) === String(projectId));
+  if (!script) throw new ImportResultError(422, 'The source task project no longer exists.');
+  return script;
+}
+
 app.get('/api/comfyui/tasks', (req, res) => {
   const projectId = req.query.projectId;
   if (!projectId) {
@@ -2690,17 +3095,15 @@ app.get('/api/comfyui/tasks', (req, res) => {
         id, projectId, targetId, targetType, viewType, shotIndex, characterName,
         prompt, negativePrompt, seed, model, width, height, status, retryCount,
         retryOfTaskId, supersededByTaskId, error, recoveryCheckCount, missingSince,
+        origin, importedFromTaskId, importSha256, imageUrl,
         createdAt, submittedAt, completedAt, updatedAt,
-        (uiWorkflowJson IS NOT NULL AND uiWorkflowJson != '') as hasUiWorkflow
+        apiWorkflowJson, uiWorkflowJson
       FROM comfyui_tasks
       WHERE projectId = ?
       ORDER BY createdAt ASC
     `).all(projectId) as any[];
 
-    const mapped = tasks.map(t => ({
-      ...t,
-      hasUiWorkflow: !!t.hasUiWorkflow
-    }));
+    const mapped = tasks.map(publicComfyTask);
     return res.json(mapped);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -2726,12 +3129,7 @@ app.get('/api/comfyui/tasks/:taskId/export-workflow', (req, res) => {
       return res.status(409).json({ error: `Task '${taskId}' does not have a valid ComfyUI UI workflow.` });
     }
 
-    // Verify it is valid JSON
-    try {
-      JSON.parse(task.uiWorkflowJson);
-    } catch (e) {
-      return res.status(409).json({ error: `Task '${taskId}' UI workflow JSON is corrupted or invalid.` });
-    }
+    const workflow = exportedUiWorkflow(task);
 
     const safeTargetType = safePathSegment(task.targetType, 'unknown');
     const safeViewType = safePathSegment(task.viewType, 'main');
@@ -2739,10 +3137,211 @@ app.get('/api/comfyui/tasks/:taskId/export-workflow', (req, res) => {
 
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    return res.send(task.uiWorkflowJson);
+    return res.send(JSON.stringify(workflow, null, 2));
   } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+    return res.status(err instanceof ImportResultError ? err.status : 500).json({ error: err.message });
   }
+});
+
+app.post('/api/comfyui/tasks/:sourceTaskId/import-result', (req, res) => {
+  let uploadedPath: string | undefined;
+  let finalPath: string | undefined;
+  let requestAborted = false;
+  req.once('aborted', () => {
+    requestAborted = true;
+    removeFileQuietly(uploadedPath || req.file?.path);
+  });
+
+  importResultUpload(req, res, async uploadError => {
+    uploadedPath = req.file?.path;
+    try {
+      if (uploadError) {
+        if (uploadError instanceof multer.MulterError && uploadError.code === 'LIMIT_FILE_SIZE') {
+          throw new ImportResultError(413, 'PNG file exceeds the 50MB upload limit.');
+        }
+        throw uploadError;
+      }
+      if (requestAborted) throw new ImportResultError(400, 'Upload request was interrupted.');
+      if (!req.file || !uploadedPath) throw new ImportResultError(400, "A PNG file is required in the 'file' field.");
+
+      const sourceTask = dbSqlite.prepare('SELECT * FROM comfyui_tasks WHERE id = ?').get(req.params.sourceTaskId) as any;
+      if (!sourceTask) throw new ImportResultError(404, `Source task '${req.params.sourceTaskId}' not found.`);
+      if (sourceTask.status !== 'succeeded') throw new ImportResultError(409, 'Source task must be succeeded before importing a result.');
+
+      const imported = await readImportedPng(uploadedPath, sourceTask);
+      const importSha256 = await sha256File(uploadedPath);
+      const existing = dbSqlite.prepare(`
+        SELECT * FROM comfyui_tasks
+        WHERE origin = 'manual_import' AND importedFromTaskId = ? AND importSha256 = ?
+      `).get(sourceTask.id, importSha256) as any;
+      if (existing) {
+        removeFileQuietly(uploadedPath);
+        return res.json({
+          success: true,
+          duplicate: true,
+          taskId: existing.id,
+          projectId: existing.projectId,
+          targetId: existing.targetId,
+          targetType: existing.targetType,
+          viewType: existing.viewType,
+          task: publicComfyTask(existing),
+          imageUrl: existing.imageUrl,
+          updatedScript: storedGeneratedScript(existing.projectId),
+          parameters: {
+            prompt: existing.prompt,
+            negativePrompt: existing.negativePrompt,
+            seed: existing.seed,
+            model: existing.model,
+            width: existing.width,
+            height: existing.height,
+          },
+        });
+      }
+
+      const newTaskId = crypto.randomUUID();
+      const paths = targetImageDirectory(sourceTask);
+      const finalFilename = `comfyui-import-${importSha256}-${newTaskId}.png`;
+      finalPath = path.join(paths.absolute, finalFilename);
+      fs.renameSync(uploadedPath, finalPath);
+      uploadedPath = undefined;
+      const imageUrl = `/uploads/${paths.relative.replace(/\\/g, '/')}/${finalFilename}`;
+      const now = new Date().toISOString();
+      const force = req.query.force === 'true' || req.body?.force === 'true';
+
+      const transaction = dbSqlite.transaction(() => {
+        const lockedSource = dbSqlite.prepare('SELECT * FROM comfyui_tasks WHERE id = ?').get(sourceTask.id) as any;
+        if (!lockedSource || lockedSource.status !== 'succeeded') {
+          throw new ImportResultError(409, 'Source task is no longer a succeeded task.');
+        }
+        const racedDuplicate = dbSqlite.prepare(`
+          SELECT * FROM comfyui_tasks
+          WHERE origin = 'manual_import' AND importedFromTaskId = ? AND importSha256 = ?
+        `).get(lockedSource.id, importSha256) as any;
+        if (racedDuplicate) {
+          return {
+            duplicate: racedDuplicate,
+            task: racedDuplicate,
+            updatedScript: storedGeneratedScript(racedDuplicate.projectId),
+          };
+        }
+
+        const latest = dbSqlite.prepare(`
+          SELECT id FROM comfyui_tasks
+          WHERE projectId = ? AND targetId = ? AND targetType = ? AND viewType = ? AND status = 'succeeded'
+          ORDER BY COALESCE(completedAt, createdAt) DESC, createdAt DESC, rowid DESC
+          LIMIT 1
+        `).get(lockedSource.projectId, lockedSource.targetId, lockedSource.targetType, lockedSource.viewType) as any;
+        if (!force && latest && latest.id !== lockedSource.id) {
+          throw new ImportResultError(409, 'A newer successful result exists for this slot. Confirm force import to replace it.', 'STALE_SOURCE');
+        }
+
+        const scriptsRow = dbSqlite.prepare("SELECT value FROM store WHERE key = 'generated_scripts'").get() as { value: string } | undefined;
+        let scripts: any[];
+        try {
+          scripts = scriptsRow ? JSON.parse(scriptsRow.value) : [];
+        } catch {
+          throw new ImportResultError(500, 'Stored project data is corrupted.');
+        }
+        const generation = {
+          provider: 'comfyui',
+          origin: 'manual_import',
+          status: 'succeeded',
+          prompt: imported.prompt,
+          negativePrompt: imported.negativePrompt,
+          seed: imported.seed,
+          model: imported.model,
+          width: imported.width,
+          height: imported.height,
+          promptId: newTaskId,
+          importedFromTaskId: lockedSource.id,
+          importSha256,
+          projectId: lockedSource.projectId,
+          targetId: lockedSource.targetId,
+          targetType: lockedSource.targetType,
+          viewType: lockedSource.viewType,
+          ...(lockedSource.shotIndex !== null ? { shotIndex: lockedSource.shotIndex } : {}),
+          ...(lockedSource.characterName ? { characterName: lockedSource.characterName } : {}),
+          createdAt: now,
+        };
+        updateImportedSlot(scripts, lockedSource, imageUrl, generation);
+
+        dbSqlite.prepare(`
+          INSERT INTO comfyui_tasks (
+            id, projectId, targetId, targetType, viewType, shotIndex, characterName,
+            prompt, negativePrompt, seed, model, width, height, status, retryCount,
+            imageUrl, apiWorkflowJson, uiWorkflowJson, origin, importedFromTaskId, importSha256,
+            createdAt, submittedAt, completedAt, updatedAt
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'succeeded', 0, ?, ?, ?, 'manual_import', ?, ?, ?, ?, ?, ?)
+        `).run(
+          newTaskId, lockedSource.projectId, lockedSource.targetId, lockedSource.targetType, lockedSource.viewType,
+          lockedSource.shotIndex, lockedSource.characterName, imported.prompt, imported.negativePrompt,
+          imported.seed, imported.model, imported.width, imported.height, imageUrl,
+          JSON.stringify(imported.apiWorkflow), JSON.stringify(imported.uiWorkflow), lockedSource.id, importSha256,
+          now, now, now, now
+        );
+        dbSqlite.prepare("INSERT OR REPLACE INTO store (key, value) VALUES ('generated_scripts', ?)").run(JSON.stringify(scripts));
+        const task = dbSqlite.prepare('SELECT * FROM comfyui_tasks WHERE id = ?').get(newTaskId) as any;
+        const updatedScript = scripts.find(item => String(item.id) === String(lockedSource.projectId));
+        return { duplicate: null, task, updatedScript };
+      });
+
+      const result: any = transaction();
+      if (result.duplicate) {
+        removeFileQuietly(finalPath);
+        finalPath = undefined;
+        return res.json({
+          success: true,
+          duplicate: true,
+          taskId: result.duplicate.id,
+          projectId: result.duplicate.projectId,
+          targetId: result.duplicate.targetId,
+          targetType: result.duplicate.targetType,
+          viewType: result.duplicate.viewType,
+          task: publicComfyTask(result.task),
+          imageUrl: result.duplicate.imageUrl,
+          updatedScript: result.updatedScript,
+          parameters: {
+            prompt: result.duplicate.prompt,
+            negativePrompt: result.duplicate.negativePrompt,
+            seed: result.duplicate.seed,
+            model: result.duplicate.model,
+            width: result.duplicate.width,
+            height: result.duplicate.height,
+          },
+        });
+      }
+
+      finalPath = undefined;
+      return res.status(201).json({
+        success: true,
+        duplicate: false,
+        taskId: newTaskId,
+        projectId: sourceTask.projectId,
+        targetId: sourceTask.targetId,
+        targetType: sourceTask.targetType,
+        viewType: sourceTask.viewType,
+        task: publicComfyTask(result.task),
+        imageUrl,
+        updatedScript: result.updatedScript,
+        parameters: {
+          prompt: imported.prompt,
+          negativePrompt: imported.negativePrompt,
+          seed: imported.seed,
+          model: imported.model,
+          width: imported.width,
+          height: imported.height,
+        },
+      });
+    } catch (error: any) {
+      removeFileQuietly(uploadedPath);
+      removeFileQuietly(finalPath);
+      if (requestAborted || res.headersSent) return;
+      const status = error instanceof ImportResultError ? error.status : 500;
+      const payload: any = { error: error?.message || 'ComfyUI result import failed.' };
+      if (error instanceof ImportResultError && error.code) payload.code = error.code;
+      return res.status(status).json(payload);
+    }
+  });
 });
 
 app.get('/api/comfyui/open-ui', (req, res) => {
@@ -2751,6 +3350,25 @@ app.get('/api/comfyui/open-ui', (req, res) => {
     return res.redirect(url);
   } catch (err: any) {
     return res.status(500).send(`Error getting ComfyUI URL: ${err.message}`);
+  }
+});
+
+app.get('/api/comfyui/default-workflow', async (_req, res) => {
+  try {
+    const checkpoint = await getComfyCheckpoint();
+    const workflow = buildDefaultUIWorkflow(
+      checkpoint,
+      'cinematic storyboard frame, detailed composition, professional lighting',
+      DEFAULT_COMFY_NEGATIVE_PROMPT,
+      768,
+      512,
+      String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n)),
+    );
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="comfyui_storyboard_default.json"');
+    return res.send(JSON.stringify(workflow, null, 2));
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Could not build the default ComfyUI workflow.' });
   }
 });
 

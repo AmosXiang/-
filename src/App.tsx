@@ -83,7 +83,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [shotSearchQuery, setShotSearchQuery] = useState<string>("");
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
-  const [imagePlatform, setImagePlatform] = useState<'pollinations' | 'kling' | 'comfyui'>('pollinations');
+  const [imagePlatform, setImagePlatform] = useState<'pollinations' | 'kling' | 'comfyui'>('comfyui');
   const [comfyModalOpen, setComfyModalOpen] = useState<boolean>(false);
   const [comfyModalTarget, setComfyModalTarget] = useState<{
     targetId: string;
@@ -147,6 +147,49 @@ export default function App() {
 
   // ComfyUI Queue Polling state and callbacks
   const [comfyTasks, setComfyTasks] = useState<any[]>([]);
+  const [comfyImportStates, setComfyImportStates] = useState<Record<string, { status: 'uploading' | 'success' | 'error'; message: string }>>({});
+  const [comfyRefreshErrors, setComfyRefreshErrors] = useState<Record<string, string>>({});
+  const [preparingAdvancedSlots, setPreparingAdvancedSlots] = useState<Record<string, boolean>>({});
+  const activeComfyImportsRef = useRef<Set<string>>(new Set());
+  const importedTaskAwaitingRefreshRef = useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (!generatedScript) {
+      setShotImages({});
+      return;
+    }
+    const images: Record<string, string> = {};
+    generatedScript.newShots?.forEach((s: any) => {
+      if (s.generatedImageUrl) {
+        images[s.timestamp] = s.generatedImageUrl;
+      } else if (s.imageUrl) {
+        images[s.timestamp] = s.imageUrl;
+      }
+    });
+    setShotImages(images);
+  }, [generatedScript]);
+
+  const loadGeneratedScripts = React.useCallback(async () => {
+    const response = await fetch('/api/generated-scripts');
+    if (!response.ok) throw new Error(`刷新项目失败 (HTTP ${response.status})`);
+    return await response.json();
+  }, []);
+
+  const applyGeneratedScripts = React.useCallback((scripts: any[]) => {
+    setGeneratedScripts(scripts);
+    const currentId = generatedScriptRef.current?.id;
+    if (!currentId) return;
+    const current = scripts.find(item => String(item.id) === String(currentId));
+    if (current) {
+      generatedScriptRef.current = current;
+      setGeneratedScript(current);
+    }
+  }, []);
+
+  const refreshGeneratedScripts = React.useCallback(async () => {
+    const scripts = await loadGeneratedScripts();
+    applyGeneratedScripts(scripts);
+  }, [applyGeneratedScripts, loadGeneratedScripts]);
 
   const handleOpenComfyParams = async (targetId: string, viewType: string, targetType: 'shot' | 'character', shotIndex?: number, characterName?: string, defaultPrompt?: string) => {
     let checkpointsList: string[] = [];
@@ -191,7 +234,7 @@ export default function App() {
     const finalPrompt = lastParams ? lastParams.prompt : (defaultPrompt || "");
     const finalNegative = lastParams ? lastParams.negativePrompt : "";
     const finalSeed = lastParams ? String(lastParams.seed) : "";
-    const finalModel = lastParams ? lastParams.model : "";
+    const finalModel = lastParams ? lastParams.model : comfyParams.model;
     const finalWidth = lastParams ? lastParams.width : (targetType === 'character' ? 512 : 768);
     const finalHeight = lastParams ? lastParams.height : (targetType === 'character' ? 768 : 512);
 
@@ -325,18 +368,29 @@ export default function App() {
 
     if (shouldReloadScript && generatedScript) {
       console.log("[Queue] Task completed! Reloading script...");
-      fetch(`/api/generated-scripts/${generatedScript.id}`)
-        .then(res => { if (res.ok) return res.json(); })
-        .then(data => {
-          if (data) {
-            setGeneratedScript(data);
-            setGeneratedScripts(prev => prev.map(s => s.id === data.id ? data : s));
+      refreshGeneratedScripts()
+        .then(() => {
+          const importedTaskId = importedTaskAwaitingRefreshRef.current;
+          if (importedTaskId) {
+            setComfyRefreshErrors(previous => {
+              const next = { ...previous };
+              delete next[importedTaskId];
+              return next;
+            });
+            importedTaskAwaitingRefreshRef.current = null;
           }
         })
-        .catch(err => console.error("Error reloading script:", err));
+        .catch(err => {
+          console.error("Error reloading scripts:", err);
+          const importedTaskId = importedTaskAwaitingRefreshRef.current;
+          if (importedTaskId) {
+            setComfyRefreshErrors(previous => ({ ...previous, [importedTaskId]: '图片已导入，但页面刷新失败' }));
+            importedTaskAwaitingRefreshRef.current = null;
+          }
+        });
     }
     prevComfyTasksRef.current = comfyTasks;
-  }, [comfyTasks, generatedScript]);
+  }, [comfyTasks, generatedScript, refreshGeneratedScripts]);
 
   const handleRetryComfyTask = async (taskId: string) => {
     try {
@@ -392,9 +446,9 @@ export default function App() {
     return [...succeededTasks].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
   }, [comfyTasks]);
 
-  const handleAdvancedAdjust = async (task: any) => {
+  const handleAdvancedAdjust = async (task: any, existingTab?: Window | null) => {
     if (!task) return;
-    const comfyTab = window.open("about:blank", "_blank");
+    const comfyTab = existingTab || window.open("about:blank", "_blank");
     if (!comfyTab) {
       alert("无法打开新标签页，请允许浏览器弹出窗口。");
       return;
@@ -425,11 +479,259 @@ export default function App() {
         URL.revokeObjectURL(downloadUrl);
       }, 100);
       comfyTab.location.href = "/api/comfyui/open-ui";
-      alert("工作流已下载，请在 ComfyUI 中通过 Workflows > Open 打开。");
+      if (task.targetType === 'shot' && Number.isInteger(Number(task.shotIndex))) {
+        alert(`已准备分镜 ${Number(task.shotIndex) + 1} 的专属工作流\n文件：${filename}`);
+      } else if (task.targetType === 'character') {
+        const viewLabels: Record<string, string> = {
+          avatar: '头像',
+          front: '正面',
+          side: '侧面',
+          back: '背面'
+        };
+        const viewLabel = viewLabels[task.viewType] || task.viewType;
+        alert(`已准备角色 ${task.characterName || '未命名'} ${viewLabel} 的专属工作流\n文件：${filename}`);
+      } else {
+        alert(`已准备该素材槽位的专属工作流\n文件：${filename}`);
+      }
     } catch (e: any) {
       comfyTab.close();
       alert("高级调整失败：" + e.message);
     }
+  };
+
+  const handleOpenDefaultWorkflow = async () => {
+    const comfyTab = window.open('about:blank', '_blank');
+    if (!comfyTab) {
+      alert('无法打开 ComfyUI，请允许浏览器弹出窗口。');
+      return;
+    }
+    try {
+      const response = await fetch('/api/comfyui/default-workflow');
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'comfyui_storyboard_default.json';
+      document.body.appendChild(anchor);
+      anchor.click();
+      setTimeout(() => {
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+      }, 100);
+      comfyTab.location.href = '/api/comfyui/open-ui';
+      alert('已下载带当前 SDXL 模型的默认工作流。顶部模板没有镜头归属；需要导回分镜时，请使用具体分镜上的“高级调整”。');
+    } catch (error: any) {
+      comfyTab.close();
+      alert(`打开默认工作流失败：${error.message}`);
+    }
+  };
+
+  const handleOpenAdvanced = (task: any | null) => {
+    if (task) {
+      handleAdvancedAdjust(task);
+      return;
+    }
+    handleOpenDefaultWorkflow();
+  };
+
+  const refreshCurrentScript = React.useCallback(async () => {
+    const current = generatedScriptRef.current;
+    if (!current?.id) return;
+    const response = await fetch('/api/generated-scripts');
+    if (!response.ok) throw new Error(`刷新项目失败 (HTTP ${response.status})`);
+    const scripts = await response.json();
+    const data = scripts.find((item: any) => String(item.id) === String(current.id));
+    if (!data) throw new Error('刷新后的项目列表中找不到当前剧本。');
+    setGeneratedScript(data);
+    setGeneratedScripts(previous => previous.map(item => item.id === data.id ? data : item));
+  }, []);
+
+  const handlePrepareShotAdvanced = async (shot: Shot, shotIndex: number, existingTask: any | null) => {
+    if (existingTask?.hasUiWorkflow) {
+      await handleAdvancedAdjust(existingTask);
+      return;
+    }
+    if (!generatedScript || !shot.id || preparingAdvancedSlots[shot.id]) return;
+    const comfyTab = window.open('about:blank', '_blank');
+    if (!comfyTab) {
+      alert('无法打开 ComfyUI，请允许浏览器弹出窗口。');
+      return;
+    }
+    setPreparingAdvancedSlots(previous => ({ ...previous, [shot.id!]: true }));
+    try {
+      const response = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: shot.description || 'cinematic storyboard frame',
+          negativePrompt: 'low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark',
+          model: comfyParams.model || undefined,
+          width: 768,
+          height: 512,
+          seedMode: 'random',
+          projectId: generatedScript.id,
+          targetType: 'shot',
+          targetId: shot.id,
+          viewType: 'main',
+          shotIndex,
+          platform: 'comfyui',
+          skipTranslation: true,
+        }),
+      });
+      const submitted = await response.json().catch(() => ({}));
+      if (!response.ok || !submitted.taskId) throw new Error(submitted.error || `HTTP ${response.status}`);
+
+      let completedTask: any = null;
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 750));
+        const tasksResponse = await fetch(`/api/comfyui/tasks?projectId=${generatedScript.id}`);
+        if (!tasksResponse.ok) continue;
+        const tasks = await tasksResponse.json();
+        setComfyTasks(tasks);
+        const current = tasks.find((task: any) => task.id === submitted.taskId);
+        if (current?.status === 'failed' || current?.status === 'cancelled') {
+          throw new Error(current.error || `基准图任务状态：${current.status}`);
+        }
+        if (current?.status === 'succeeded') {
+          completedTask = current;
+          break;
+        }
+      }
+      if (!completedTask) throw new Error('等待基准图生成超时。');
+      await refreshCurrentScript();
+      await handleAdvancedAdjust(completedTask, comfyTab);
+    } catch (error: any) {
+      comfyTab.close();
+      alert(`准备分镜高级调整失败：${error.message}`);
+    } finally {
+      setPreparingAdvancedSlots(previous => ({ ...previous, [shot.id!]: false }));
+    }
+  };
+
+  const uploadComfyResult = async (task: any, file: File, force = false, retry = false): Promise<void> => {
+    if (!task || (!retry && activeComfyImportsRef.current.has(task.id))) return;
+    if (!retry) activeComfyImportsRef.current.add(task.id);
+    setComfyImportStates(previous => ({ ...previous, [task.id]: { status: 'uploading', message: '上传中…' } }));
+    const body = new FormData();
+    body.append('file', file);
+    try {
+      const response = await fetch(`/api/comfyui/tasks/${task.id}/import-result${force ? '?force=true' : ''}`, {
+        method: 'POST',
+        body,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (response.status === 409 && !force) {
+        setComfyImportStates(previous => ({ ...previous, [task.id]: { status: 'error', message: result.error || '来源已过期' } }));
+        if (window.confirm(`${result.error || '该槽位已有更新的图片。'}\n\n仍要用这个 PNG 覆盖当前图片吗？`)) {
+          await uploadComfyResult(task, file, true, true);
+        }
+        return;
+      }
+      if (!response.ok) throw new Error(result.error || `导入失败 (HTTP ${response.status})`);
+      if (!result.updatedScript || !result.task || !result.imageUrl) {
+        throw new Error('导入响应缺少更新后的剧本、任务或图片地址。');
+      }
+
+      const updatedScript = result.updatedScript;
+      setGeneratedScripts(previous => {
+        const found = previous.some(item => String(item.id) === String(updatedScript.id));
+        return found
+          ? previous.map(item => String(item.id) === String(updatedScript.id) ? updatedScript : item)
+          : [updatedScript, ...previous];
+      });
+      if (String(generatedScriptRef.current?.id) === String(updatedScript.id)) {
+        generatedScriptRef.current = updatedScript;
+        setGeneratedScript(updatedScript);
+      }
+      if (result.targetType === 'shot' && result.viewType === 'main') {
+        const updatedShot = updatedScript.newShots?.find((shot: any) => String(shot.id) === String(result.targetId));
+        if (updatedShot?.timestamp) {
+          setShotImages(previous => ({ ...previous, [updatedShot.timestamp]: result.imageUrl }));
+        }
+      } else if (result.targetType === 'character') {
+        const updatedCharacter = updatedScript.newCharacters?.find((character: any) => String(character.id) === String(result.targetId));
+        if (updatedCharacter) {
+          setActiveDrawerChar(previous => String(previous?.id) === String(result.targetId) ? updatedCharacter : previous);
+          setSelectedCharacter(previous => String(previous?.id) === String(result.targetId) ? updatedCharacter : previous);
+        }
+      }
+      try {
+        await pollComfyTasks();
+      } catch (e) {
+        console.error("Failed to poll ComfyUI tasks after manual import:", e);
+      }
+      importedTaskAwaitingRefreshRef.current = result.task.id;
+      setComfyImportStates(previous => ({
+        ...previous,
+        [task.id]: { status: 'success', message: result.duplicate ? '已导入（重复文件未新建）' : '导入成功' },
+        [result.task.id]: { status: 'success', message: result.duplicate ? '已导入（重复文件未新建）' : '导入成功' },
+      }));
+    } catch (error: any) {
+      setComfyImportStates(previous => ({
+        ...previous,
+        [task.id]: { status: 'error', message: error?.message || '导入失败' },
+      }));
+      alert(`导入 ComfyUI 结果失败：${error?.message || '未知错误'}`);
+    } finally {
+      if (!retry) activeComfyImportsRef.current.delete(task.id);
+    }
+  };
+
+  const chooseComfyResult = (task: any) => {
+    if (!task?.hasUiWorkflow || activeComfyImportsRef.current.has(task.id)) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,.png';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) uploadComfyResult(task, file);
+    };
+    input.click();
+  };
+
+  const renderComfyImportButton = (task: any, compact = false) => {
+    if (imagePlatform !== 'comfyui' || !task?.hasUiWorkflow) return null;
+    const state = comfyImportStates[task.id];
+    const uploading = state?.status === 'uploading';
+    const refreshError = comfyRefreshErrors[task.id];
+    return (
+      <div className={compact ? "contents" : "flex items-center gap-1"}>
+      <button
+        type="button"
+        onClick={() => chooseComfyResult(task)}
+        disabled={uploading}
+        title={state?.message || '仅上传由该分镜专属工作流生成的原始 PNG'}
+        className={compact
+          ? "absolute top-1 right-1 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white disabled:opacity-50 rounded border border-white/10 opacity-0 group-hover:opacity-100 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
+          : "px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"}
+      >
+        {uploading ? <Loader2 className={compact ? "w-3 h-3 animate-spin" : "w-3.5 h-3.5 animate-spin"} /> : <Upload className={compact ? "w-3 h-3 text-emerald-400" : "w-3.5 h-3.5 text-emerald-400"} />}
+        {!compact && <span>{state?.status === 'success' ? '导入成功' : state?.status === 'error' ? '导入失败' : '导入 ComfyUI 结果'}</span>}
+      </button>
+      {refreshError && !compact && (
+        <button
+          type="button"
+          title={refreshError}
+          onClick={() => {
+            refreshGeneratedScripts()
+              .then(() => setComfyRefreshErrors(previous => {
+                const next = { ...previous };
+                delete next[task.id];
+                return next;
+              }))
+              .catch(() => setComfyRefreshErrors(previous => ({ ...previous, [task.id]: '图片已导入，但页面刷新失败' })));
+          }}
+          className="px-2 py-1 bg-amber-950/60 hover:bg-amber-900 border border-amber-800/60 text-amber-200 rounded text-[10px]"
+        >
+          重新刷新数据
+        </button>
+      )}
+      </div>
+    );
   };
 
   const renderComfyTaskOverlay = (task: any) => {
@@ -545,11 +847,8 @@ export default function App() {
 
   const fetchGeneratedScripts = async () => {
     try {
-      const res = await fetch("/api/generated-scripts");
-      if (res.ok) {
-        const data = await res.json();
-        setGeneratedScripts(data);
-      }
+      const data = await loadGeneratedScripts();
+      setGeneratedScripts(data);
     } catch (err) {
       console.error("Failed to load scripts:", err);
     }
@@ -858,6 +1157,7 @@ export default function App() {
             isCharacter: false,
             style: getStyleEnglish(shot.style || "写实"),
             platform: imagePlatform,
+            model: comfyParams.model || undefined,
             projectId: generatedScript.id,
             targetType: 'shot',
             targetId: shot.id,
@@ -1934,6 +2234,7 @@ export default function App() {
     if (char.avatarUrl) {
       return (
         <img 
+          key={char.avatarUrl}
           src={char.avatarUrl} 
           alt={char.name} 
           className="w-full h-full object-cover transition-transform group-hover:scale-105"
@@ -2575,8 +2876,34 @@ export default function App() {
               </button>
             </div>
 
-            <div className="text-[10px] font-mono text-slate-500 uppercase tracking-widest hidden md:block">
-              WORKSPACE ACTIVE
+            <div className="flex items-center gap-2">
+              <select
+                value={imagePlatform}
+                onChange={(event) => setImagePlatform(event.target.value as 'pollinations' | 'kling' | 'comfyui')}
+                className="bg-slate-950 border border-slate-700 text-slate-200 text-[10px] rounded px-2 py-1 outline-none cursor-pointer"
+                title="默认生图平台"
+              >
+                <option value="comfyui">ComfyUI（本地）</option>
+                <option value="pollinations">Pollinations</option>
+                <option value="kling">Kling AI</option>
+              </select>
+              {imagePlatform === 'comfyui' && (
+                <>
+                <button
+                  type="button"
+                  onClick={() => handleOpenAdvanced(null)}
+                  className="px-2.5 py-1 bg-purple-950/60 hover:bg-purple-900 border border-purple-800/60 text-purple-200 rounded text-[10px] flex items-center gap-1 cursor-pointer"
+                  title="通用模板，不可直接导回分镜"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  <span>打开 ComfyUI 默认工作流</span>
+                </button>
+                <span className="text-[9px] text-slate-500" title="通用模板，不可直接导回分镜">通用模板，不可直接导回分镜</span>
+                </>
+              )}
+              <div className="text-[10px] font-mono text-slate-500 uppercase tracking-widest hidden xl:block">
+                WORKSPACE ACTIVE
+              </div>
             </div>
           </div>
 
@@ -2981,6 +3308,7 @@ export default function App() {
                                       <span className="text-[9px] text-slate-500 font-mono mb-0.5">正</span>
                                       <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
                                         <img
+                                          key={char.views.front}
                                           src={char.views.front}
                                           onError={() => console.log('卡片正面图加载失败:', char.views?.front)}
                                           className="w-full h-full object-cover"
@@ -2991,6 +3319,7 @@ export default function App() {
                                       <span className="text-[9px] text-slate-500 font-mono mb-0.5">侧</span>
                                       <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
                                         <img
+                                          key={char.views.side}
                                           src={char.views.side}
                                           onError={() => console.log('卡片侧面图加载失败:', char.views?.side)}
                                           className="w-full h-full object-cover"
@@ -3001,6 +3330,7 @@ export default function App() {
                                       <span className="text-[9px] text-slate-500 font-mono mb-0.5">背</span>
                                       <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
                                         <img
+                                          key={char.views.back}
                                           src={char.views.back}
                                           onError={() => console.log('卡片背面图加载失败:', char.views?.back)}
                                           className="w-full h-full object-cover"
@@ -3228,6 +3558,7 @@ export default function App() {
                                               ) : (
                                                 <div className="relative group max-w-[480px]">
                                                   <img
+                                                    key={shotImg}
                                                     src={shotImg}
                                                     alt={`分镜 ${idx + 1}`}
                                                     className="rounded-lg border border-slate-800 shadow-lg cursor-pointer hover:border-blue-500/40 transition-all max-h-[270px] object-cover"
@@ -3282,18 +3613,23 @@ export default function App() {
                                                 )}
                                                 {(() => {
                                                   const lastSucceeded = getLatestSucceededTask(shot.id || '', 'main');
-                                                  if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                                                  if (imagePlatform !== 'comfyui') return null;
                                                   return (
+                                                    <>
                                                     <button
                                                       type="button"
-                                                      onClick={() => handleAdvancedAdjust(lastSucceeded)}
-                                                      disabled={!lastSucceeded.hasUiWorkflow}
+                                                      onClick={() => handlePrepareShotAdvanced(shot, idx, lastSucceeded)}
+                                                      disabled={!!preparingAdvancedSlots[shot.id || '']}
                                                       className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"
-                                                      title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                                                      title={lastSucceeded?.hasUiWorkflow ? "导出当前工作流并在 ComfyUI 中高级调整" : "直接打开本地 ComfyUI"}
                                                     >
-                                                      <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
-                                                      <span>高级调整</span>
+                                                      {preparingAdvancedSlots[shot.id || '']
+                                                        ? <Loader2 className="w-3.5 h-3.5 text-purple-400 animate-spin" />
+                                                        : <ExternalLink className="w-3.5 h-3.5 text-purple-400" />}
+                                                      <span>{preparingAdvancedSlots[shot.id || ''] ? '准备工作流…' : '在 ComfyUI 中高级调整'}</span>
                                                     </button>
+                                                    {renderComfyImportButton(lastSucceeded)}
+                                                    </>
                                                   );
                                                 })()}
                                                 <button
@@ -3534,16 +3870,18 @@ export default function App() {
                     {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'avatar'))}
                     {(() => {
                       const lastSucceeded = getLatestSucceededTask(activeDrawerChar.id || '', 'avatar');
-                      if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                      if (imagePlatform !== 'comfyui') return null;
                       return (
+                        <>
                         <button
-                          onClick={() => handleAdvancedAdjust(lastSucceeded)}
-                          disabled={!lastSucceeded.hasUiWorkflow}
-                          title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                          onClick={() => handleOpenAdvanced(lastSucceeded?.hasUiWorkflow ? lastSucceeded : null)}
+                          title={lastSucceeded?.hasUiWorkflow ? "导出当前工作流并在 ComfyUI 中高级调整" : "直接打开本地 ComfyUI"}
                           className="absolute bottom-1 right-8 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-350 hover:text-white disabled:opacity-40 disabled:hover:bg-slate-950/80 rounded border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity z-20 cursor-pointer"
                         >
                           <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
                         </button>
+                        {renderComfyImportButton(lastSucceeded, true)}
+                        </>
                       );
                     })()}
                     {imagePlatform === 'comfyui' && (
@@ -3617,6 +3955,7 @@ export default function App() {
                         <div className="w-full aspect-[2/3] rounded-lg overflow-hidden border border-white/5 bg-slate-900 relative group/view">
                           {activeDrawerChar.views?.front ? (
                             <img
+                              key={activeDrawerChar.views.front}
                               src={activeDrawerChar.views.front}
                               onError={() => console.log('抽屉正面图加载失败:', activeDrawerChar.views?.front)}
                               alt="正面图"
@@ -3631,16 +3970,18 @@ export default function App() {
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'front'))}
                           {(() => {
                             const lastSucceeded = getLatestSucceededTask(activeDrawerChar.id || '', 'front');
-                            if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                            if (imagePlatform !== 'comfyui') return null;
                             return (
+                              <>
                               <button
-                                onClick={() => handleAdvancedAdjust(lastSucceeded)}
-                                disabled={!lastSucceeded.hasUiWorkflow}
-                                title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                                onClick={() => handleOpenAdvanced(lastSucceeded?.hasUiWorkflow ? lastSucceeded : null)}
+                                title={lastSucceeded?.hasUiWorkflow ? "导出当前工作流并在 ComfyUI 中高级调整" : "直接打开本地 ComfyUI"}
                                 className="absolute bottom-1 right-7 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white disabled:opacity-40 disabled:hover:bg-slate-950/80 rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
                               >
                                 <ExternalLink className="w-3 h-3 text-purple-400" />
                               </button>
+                              {renderComfyImportButton(lastSucceeded, true)}
+                              </>
                             );
                           })()}
                           {imagePlatform === 'comfyui' && (
@@ -3680,6 +4021,7 @@ export default function App() {
                         <div className="w-full aspect-[2/3] rounded-lg overflow-hidden border border-white/5 bg-slate-900 relative group/view">
                           {activeDrawerChar.views?.side ? (
                             <img
+                              key={activeDrawerChar.views.side}
                               src={activeDrawerChar.views.side}
                               onError={() => console.log('抽屉侧面图加载失败:', activeDrawerChar.views?.side)}
                               alt="侧面图"
@@ -3694,16 +4036,18 @@ export default function App() {
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'side'))}
                           {(() => {
                             const lastSucceeded = getLatestSucceededTask(activeDrawerChar.id || '', 'side');
-                            if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                            if (imagePlatform !== 'comfyui') return null;
                             return (
+                              <>
                               <button
-                                onClick={() => handleAdvancedAdjust(lastSucceeded)}
-                                disabled={!lastSucceeded.hasUiWorkflow}
-                                title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                                onClick={() => handleOpenAdvanced(lastSucceeded?.hasUiWorkflow ? lastSucceeded : null)}
+                                title={lastSucceeded?.hasUiWorkflow ? "导出当前工作流并在 ComfyUI 中高级调整" : "直接打开本地 ComfyUI"}
                                 className="absolute bottom-1 right-7 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white disabled:opacity-40 disabled:hover:bg-slate-950/80 rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
                               >
                                 <ExternalLink className="w-3 h-3 text-purple-400" />
                               </button>
+                              {renderComfyImportButton(lastSucceeded, true)}
+                              </>
                             );
                           })()}
                           {imagePlatform === 'comfyui' && (
@@ -3743,6 +4087,7 @@ export default function App() {
                         <div className="w-full aspect-[2/3] rounded-lg overflow-hidden border border-white/5 bg-slate-900 relative group/view">
                           {activeDrawerChar.views?.back ? (
                             <img
+                              key={activeDrawerChar.views.back}
                               src={activeDrawerChar.views.back}
                               onError={() => console.log('抽屉背面图加载失败:', activeDrawerChar.views?.back)}
                               alt="背面图"
@@ -3757,16 +4102,18 @@ export default function App() {
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'back'))}
                           {(() => {
                             const lastSucceeded = getLatestSucceededTask(activeDrawerChar.id || '', 'back');
-                            if (imagePlatform !== 'comfyui' || !lastSucceeded) return null;
+                            if (imagePlatform !== 'comfyui') return null;
                             return (
+                              <>
                               <button
-                                onClick={() => handleAdvancedAdjust(lastSucceeded)}
-                                disabled={!lastSucceeded.hasUiWorkflow}
-                                title={lastSucceeded.hasUiWorkflow ? "在 ComfyUI 中高级调整" : "该任务没有可编辑的 ComfyUI UI 工作流"}
+                                onClick={() => handleOpenAdvanced(lastSucceeded?.hasUiWorkflow ? lastSucceeded : null)}
+                                title={lastSucceeded?.hasUiWorkflow ? "导出当前工作流并在 ComfyUI 中高级调整" : "直接打开本地 ComfyUI"}
                                 className="absolute bottom-1 right-7 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white disabled:opacity-40 disabled:hover:bg-slate-950/80 rounded border border-white/10 opacity-0 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
                               >
                                 <ExternalLink className="w-3 h-3 text-purple-400" />
                               </button>
+                              {renderComfyImportButton(lastSucceeded, true)}
+                              </>
                             );
                           })()}
                           {imagePlatform === 'comfyui' && (
@@ -4077,7 +4424,7 @@ export default function App() {
                       {/* Thumbnail or placeholder */}
                       <div className="w-20 h-14 rounded-lg bg-slate-900 overflow-hidden border border-slate-800 flex-shrink-0 relative">
                         {shotImg ? (
-                          <img src={shotImg} alt={`Shot ${idx + 1}`} className="w-full h-full object-cover" />
+                          <img key={shotImg} src={shotImg} alt={`Shot ${idx + 1}`} className="w-full h-full object-cover" />
                         ) : (
                           <div className="w-full h-full flex flex-col items-center justify-center text-[8px] text-slate-500">
                             <Film className="w-3.5 h-3.5 mb-1" />

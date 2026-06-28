@@ -2,9 +2,14 @@ node_modules/
 build/
 dist/
 coverage/
+test-artifacts/
 .DS_Store
 *.log
 .env*
 !.env.example
 db.sqlite
 uploads/
+node_modules-corrupt/
+.npm-cache/
+.pnpm-store/
+pnpm-workspace.yaml
