@@ -1,0 +1,28 @@
+{
+  "presetId": "04_esrgan_upscale",
+  "name": "ESRGAN 4x Upscale",
+  "workflowFamily": "upscale",
+  "uiFile": "04_esrgan_upscale.ui.json",
+  "apiFile": "04_esrgan_upscale.api.json",
+  "targetTypes": ["character", "shot"],
+  "viewTypes": ["avatar", "front", "side", "back", "main"],
+  "requiredModels": [
+    "4x-ESRGAN.pth"
+  ],
+  "requiredNodeClasses": [
+    "LoadImage",
+    "UpscaleModelLoader",
+    "ImageUpscaleWithModel",
+    "SaveImage"
+  ],
+  "nodeMappings": {
+    "loadImageNodeId": "2",
+    "loadImageInputKey": "image",
+    "upscaleModelNodeId": "9",
+    "upscaleModelInputKey": "model_name",
+    "saveImageNodeId": "5"
+  },
+  "defaultParameters": {
+    "model_name": "4x-ESRGAN.pth"
+  }
+}

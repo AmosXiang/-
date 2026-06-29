@@ -32,13 +32,15 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Ensure directories exist
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
 // Initialize SQLite Database
-const dbSqlite = new Database(path.join(__dirname, 'db.sqlite'));
+const dbSqlite = new Database(process.env.SQLITE_DB_PATH ? path.resolve(process.env.SQLITE_DB_PATH) : path.join(__dirname, 'db.sqlite'));
 dbSqlite.exec(`
   CREATE TABLE IF NOT EXISTS store (
     key TEXT PRIMARY KEY,
@@ -89,9 +91,28 @@ if (!comfyTaskColumns.has('origin')) {
 if (!comfyTaskColumns.has('importedFromTaskId')) {
   dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN importedFromTaskId TEXT');
 }
-if (!comfyTaskColumns.has('importSha256')) {
-  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN importSha256 TEXT');
+if (!comfyTaskColumns.has('workflowPresetId')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN workflowPresetId TEXT');
 }
+if (!comfyTaskColumns.has('workflowFamily')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN workflowFamily TEXT');
+}
+if (!comfyTaskColumns.has('workflowBatchId')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN workflowBatchId TEXT');
+}
+if (!comfyTaskColumns.has('sourceImageUrl')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN sourceImageUrl TEXT');
+}
+if (!comfyTaskColumns.has('sourceTaskId')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN sourceTaskId TEXT');
+}
+if (!comfyTaskColumns.has('outputNodeId')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN outputNodeId TEXT');
+}
+if (!comfyTaskColumns.has('presetParametersJson')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN presetParametersJson TEXT');
+}
+
 dbSqlite.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_comfy_manual_import_unique
   ON comfyui_tasks (importedFromTaskId, importSha256)
@@ -167,11 +188,11 @@ function readDb() {
       const content = fs.readFileSync(oldDbPath, 'utf8');
       const parsed = JSON.parse(content);
       const migrated = Array.isArray(parsed) ? { videos: parsed, generated_scripts: [] } : parsed;
-      
+
       const stmt = dbSqlite.prepare('INSERT OR REPLACE INTO store (key, value) VALUES (?, ?)');
       stmt.run('videos', JSON.stringify(migrated.videos || []));
       stmt.run('generated_scripts', JSON.stringify(migrated.generated_scripts || []));
-      
+
       fs.unlinkSync(oldDbPath);
       console.log('[SQLite Migration] Successfully migrated and deleted db.json');
     } catch (e) {
@@ -217,10 +238,10 @@ function readDb() {
           for (const shot of script.newShots) {
             const oldImg = shot.imageUrl;
             const oldGenImg = shot.generatedImageUrl;
-            
+
             shot.imageUrl = migrateUrl(shot.imageUrl, '768', '512');
             shot.generatedImageUrl = migrateUrl(shot.generatedImageUrl, '768', '512');
-            
+
             if (shot.imageUrl !== oldImg || shot.generatedImageUrl !== oldGenImg) {
               modified = true;
             }
@@ -327,9 +348,9 @@ async function optimizePrompt(rawPrompt: string, isCharacter: boolean, style?: s
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return rawPrompt;
   const ai = new GoogleGenAI({ apiKey });
-  
+
   const selectedStyle = style || 'Cinematic, dramatic lighting, highly detailed';
-  
+
   const systemPrompt = isCharacter
     ? `You are an expert prompt engineer for AI image generator. Translate the following Chinese character description into a concise, detailed, and high-quality English image prompt. Focus on facial features, hairstyle, expression, clothing details, and character archetype. Use professional descriptive words. Ensure it is optimized for high-quality portrait rendering. Style requested: ${selectedStyle}. Keep the response as pure English text prompt under 80 words, no explanations.`
     : `You are an expert prompt engineer for AI image generator. Translate the following Chinese video shot/storyboard description into a highly descriptive, cinematic English image prompt. Describe the camera angle, lighting, environment, subject action, composition, and emotional tone. Keep it optimized for film storyboard. Style requested: ${selectedStyle}. Keep the response as pure English text prompt under 100 words, no explanations.`;
@@ -411,31 +432,31 @@ app.get('/api/videos', (req, res) => {
   try {
     const db = readDb();
     const { q, genre, tag } = req.query;
-    
+
     let filtered = [...db.videos];
-    
+
     if (q) {
       const query = (q as string).toLowerCase();
-      filtered = filtered.filter(v => 
+      filtered = filtered.filter(v =>
         v.title.toLowerCase().includes(query) ||
         (v.genre && v.genre.toLowerCase().includes(query)) ||
         (v.tags && v.tags.some((t: string) => t.toLowerCase().includes(query)))
       );
     }
-    
+
     if (genre && genre !== 'all') {
       const gen = (genre as string).toLowerCase();
       filtered = filtered.filter(v => v.genre && v.genre.toLowerCase() === gen);
     }
-    
+
     if (tag && tag !== 'all') {
       const t = (tag as string).toLowerCase();
       filtered = filtered.filter(v => v.tags && v.tags.some((x: string) => x.toLowerCase() === t));
     }
-    
+
     // Sort by createdAt descending
     filtered.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    
+
     res.json(filtered);
   } catch (err) {
     console.error(err);
@@ -449,14 +470,14 @@ app.get('/api/genres-tags', (req, res) => {
     const db = readDb();
     const genres = new Set<string>();
     const tags = new Set<string>();
-    
+
     db.videos.forEach((v: any) => {
       if (v.genre) genres.add(v.genre);
       if (Array.isArray(v.tags)) {
         v.tags.forEach((t: string) => tags.add(t));
       }
     });
-    
+
     res.json({
       genres: Array.from(genres),
       tags: Array.from(tags)
@@ -488,7 +509,7 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No video file provided' });
     }
-    
+
     res.json({
       filename: req.file.filename,
       originalname: req.file.originalname,
@@ -505,7 +526,7 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
 // 5. POST /api/analyze - Upload video to Gemini, run analysis, store JSON and details
 app.post('/api/analyze', async (req, res) => {
   const { filename, filepath, title, shortDramaMode } = req.body;
-  
+
   if (!filename || !filepath) {
     return res.status(400).json({ error: 'filename and filepath are required' });
   }
@@ -522,7 +543,7 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    
+
     // Determine mimeType
     const ext = path.extname(filename).toLowerCase();
     let mimeType = 'video/mp4';
@@ -531,7 +552,7 @@ app.post('/api/analyze', async (req, res) => {
     else if (ext === '.avi') mimeType = 'video/x-msvideo';
 
     console.log(`[Gemini] Uploading file to Gemini storage: ${filename}...`);
-    
+
     // Upload local file to Gemini Files API
     let fileInfo = await ai.files.upload({
       file: fullFilePath,
@@ -585,7 +606,7 @@ app.post('/api/analyze', async (req, res) => {
     });
 
     console.log('[Gemini] Analysis response received successfully.');
-    
+
     // Parse response text
     let analysisResult;
     try {
@@ -647,11 +668,11 @@ app.delete('/api/videos/:id', async (req, res) => {
         found = true;
       }
     });
-    
+
     if (!found) {
       return res.status(404).json({ error: 'Video not found' });
     }
-    
+
     // Delete local video file if exists
     const localPath = path.join(__dirname, 'uploads', video.filename);
     if (fs.existsSync(localPath)) {
@@ -662,7 +683,7 @@ app.delete('/api/videos/:id', async (req, res) => {
         console.error(`Failed to delete local file: ${localPath}`, err);
       }
     }
-    
+
     res.json({ success: true, message: 'Video deleted successfully' });
   } catch (err) {
     console.error(err);
@@ -675,29 +696,29 @@ app.post('/api/generate-script', async (req, res) => {
   const { templateId, topic, preferences, shortDramaMode } = req.body;
   const requestedShotCount = Math.max(0, Math.min(30, Number(preferences?.shotCount) || 0));
   const requestedCharacterCount = Math.max(0, Math.min(10, Number(preferences?.characterCount) || 0));
-  
+
   if (!topic) {
     return res.status(400).json({ error: 'æ–°æ•…äº‹ä¸»é¢˜/è®¾å®šæ˜¯å¿…éœ€çš„ã€‚' });
   }
-  
+
   try {
     let templateData = DEMO_TEMPLATE;
     const db = readDb();
-    
+
     if (templateId && templateId !== 'demo') {
       const video = db.videos.find((v: any) => v.id === templateId);
       if (video && video.analysis) {
         templateData = video.analysis;
       }
     }
-    
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ error: 'GEMINI_API_KEY environment variable is not configured.' });
     }
-    
+
     const ai = new GoogleGenAI({ apiKey });
-    
+
     let prompt = `ä½ æ˜¯ä¸€ä¸ªä¸šç•Œé¡¶çº§çš„å½±è§†é‡‘ç‰Œç¼–å‰§å’Œåˆ†é•œå¯¼æ¼”ã€‚
 çŽ°åœ¨ï¼Œæˆ‘ä»¬è¦ä»¥ä¸€ä¸ªçŽ°æœ‰çš„è§†é¢‘åˆ†æžæ•°æ®ä½œä¸ºâ€œåˆ›æ„éª¨æž¶ä¸ŽèŠ‚å¥æ¨¡æ¿â€ï¼Œä¸ºä½ æŒ‡å®šçš„ä¸€ä¸ªæ–°æ•…äº‹è®¾å®šåˆ›ä½œä¸€å¥—å…¨æ–°ä¸”é«˜è´¨é‡çš„å½±è§†å‰§æœ¬ã€è§’è‰²å¡ç‰‡å’Œåˆ†é•œè„šæœ¬ã€‚
 
@@ -788,7 +809,7 @@ ${topic}
     };
 
     console.log(`[Script Generator] Running Gemini scriptwriter for topic: ${topic}...`);
-    
+
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
@@ -799,7 +820,7 @@ ${topic}
     });
 
     console.log('[Script Generator] Generated successfully.');
-    
+
     let result;
     try {
       result = JSON.parse(response.text);
@@ -807,7 +828,7 @@ ${topic}
       console.error('Failed to parse Gemini script JSON response:', response.text);
       throw new Error('Gemini did not return valid JSON conformant to script schema.');
     }
-    
+
     // Create database record
     const scriptRecord = {
       id: Date.now().toString(),
@@ -828,12 +849,12 @@ ${topic}
         imageUrl: ''
       }))
     };
-    
+
     await mutateDb((db) => {
       db.generated_scripts.push(scriptRecord);
     });
     console.log(`[DB] Successfully stored generated script: ${scriptRecord.newTitle}`);
-    
+
     res.json(scriptRecord);
   } catch (err: any) {
     console.error('[Script Generator Error]', err);
@@ -852,6 +873,119 @@ app.get('/api/generated-scripts', (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'Failed to retrieve generated scripts' });
   }
+});
+
+type ComfyProjectPreferences = {
+  shotPresetId: string;
+  characterMasterPresetId: string;
+  identityPresetId: string;
+  threeViewPresetId: string;
+  upscalePresetId: string;
+};
+
+const LEGACY_PROJECT_COMFY_PREFERENCES: ComfyProjectPreferences = {
+  shotPresetId: 'sdxl_legacy',
+  characterMasterPresetId: 'sdxl_legacy',
+  identityPresetId: 'pulid_flux2',
+  threeViewPresetId: 'legacy_three_views',
+  upscalePresetId: 'esrgan_4x',
+};
+
+const RECOMMENDED_PROJECT_COMFY_PREFERENCES: ComfyProjectPreferences = {
+  shotPresetId: 'pure_klein',
+  characterMasterPresetId: 'pure_klein',
+  identityPresetId: 'pulid_flux2',
+  threeViewPresetId: 'qwen_2511_three_views',
+  upscalePresetId: 'esrgan_4x',
+};
+
+const PROJECT_PRESET_TO_WORKFLOW: Record<string, string | null> = {
+  sdxl_legacy: null,
+  pure_klein: '01_klein_character_master',
+  pulid_flux2: '02_klein_pulid_identity',
+  qwen_2511_three_views: '03_qwen_2511_three_views',
+  esrgan_4x: '04_esrgan_upscale',
+  legacy_three_views: null,
+  '01_klein_character_master': '01_klein_character_master',
+  '02_klein_pulid_identity': '02_klein_pulid_identity',
+  '03_qwen_2511_three_views': '03_qwen_2511_three_views',
+  '04_esrgan_upscale': '04_esrgan_upscale',
+};
+
+function projectComfyPreferences(projectId: string): ComfyProjectPreferences {
+  const script = readDb().generated_scripts.find((item: any) => String(item.id) === String(projectId));
+  const saved = script?.comfyuiPreferences;
+  return {
+    ...LEGACY_PROJECT_COMFY_PREFERENCES,
+    ...(saved && typeof saved === 'object' ? saved : {}),
+  };
+}
+
+function qwenThreeViewsVerified(projectId: string): boolean {
+  return !!dbSqlite.prepare(`
+    SELECT workflowBatchId FROM comfyui_tasks
+    WHERE projectId = ? AND workflowPresetId = '03_qwen_2511_three_views'
+      AND status = 'succeeded' AND viewType IN ('front', 'side', 'back')
+      AND workflowBatchId IS NOT NULL
+    GROUP BY workflowBatchId, targetId
+    HAVING COUNT(DISTINCT viewType) = 3
+    LIMIT 1
+  `).get(projectId);
+}
+
+app.get('/api/generated-scripts/:id/comfyui-preferences', (req, res) => {
+  const projectId = req.params.id;
+  const script = readDb().generated_scripts.find((item: any) => String(item.id) === String(projectId));
+  if (!script) return res.status(404).json({ error: 'Script not found' });
+  return res.json({
+    preferences: projectComfyPreferences(projectId),
+    qwenThreeViewVerified: qwenThreeViewsVerified(projectId),
+    hasSavedPreferences: !!script.comfyuiPreferences,
+  });
+});
+
+app.put('/api/generated-scripts/:id/comfyui-preferences', async (req, res) => {
+  const projectId = req.params.id;
+  const requested = req.body?.recommended === true
+    ? RECOMMENDED_PROJECT_COMFY_PREFERENCES
+    : req.body?.preferences;
+  if (!requested || typeof requested !== 'object') {
+    return res.status(400).json({ error: 'preferences are required' });
+  }
+
+  const preferences: ComfyProjectPreferences = {
+    shotPresetId: String(requested.shotPresetId || ''),
+    characterMasterPresetId: String(requested.characterMasterPresetId || ''),
+    identityPresetId: String(requested.identityPresetId || ''),
+    threeViewPresetId: String(requested.threeViewPresetId || ''),
+    upscalePresetId: String(requested.upscalePresetId || ''),
+  };
+  const allowed: Record<keyof ComfyProjectPreferences, string[]> = {
+    shotPresetId: ['sdxl_legacy', 'pure_klein'],
+    characterMasterPresetId: ['sdxl_legacy', 'pure_klein'],
+    identityPresetId: ['pulid_flux2'],
+    threeViewPresetId: ['legacy_three_views', 'qwen_2511_three_views'],
+    upscalePresetId: ['esrgan_4x'],
+  };
+  for (const key of Object.keys(allowed) as Array<keyof ComfyProjectPreferences>) {
+    if (!allowed[key].includes(preferences[key])) {
+      return res.status(422).json({ error: `Unsupported ${key}: ${preferences[key]}` });
+    }
+  }
+  const qwenVerified = qwenThreeViewsVerified(projectId);
+  if (preferences.threeViewPresetId === 'qwen_2511_three_views' && !qwenVerified) {
+    return res.status(422).json({ error: 'Qwen 2511 Three Views is not verified for this project yet.' });
+  }
+
+  let updatedScript: any = null;
+  await mutateDb(db => {
+    const index = db.generated_scripts.findIndex((item: any) => String(item.id) === String(projectId));
+    if (index < 0) return;
+    db.generated_scripts[index] = { ...db.generated_scripts[index], comfyuiPreferences: preferences };
+    updatedScript = db.generated_scripts[index];
+  });
+  if (!updatedScript) return res.status(404).json({ error: 'Script not found' });
+  return res.json({ success: true, preferences, qwenThreeViewVerified: qwenVerified, updatedScript });
 });
 
 // 9. DELETE /api/generated-scripts/:id - Delete specific script record
@@ -881,7 +1015,7 @@ app.put('/api/generated-scripts/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { newShots, newCharacters, title, summary, tone, pace } = req.body;
-    
+
     let found = false;
     let updatedScript: any = null;
     await mutateDb((db) => {
@@ -894,7 +1028,7 @@ app.put('/api/generated-scripts/:id', async (req, res) => {
         if (summary) script.summary = summary;
         if (tone) script.tone = tone;
         if (pace) script.pace = pace;
-        
+
         db.generated_scripts[index] = script;
         updatedScript = script;
         found = true;
@@ -904,7 +1038,7 @@ app.put('/api/generated-scripts/:id', async (req, res) => {
     if (!found) {
       return res.status(404).json({ error: 'Script not found' });
     }
-    
+
     res.json({ success: true, script: updatedScript });
   } catch (err: any) {
     console.error(err);
@@ -917,11 +1051,11 @@ app.put('/api/generated-scripts/:id/image', async (req, res) => {
   try {
     const { id } = req.params;
     const { shotIndex, characterName, imageUrl, views, generation } = req.body;
-    
+
     if (!imageUrl && !views && !generation) {
       return res.status(400).json({ error: 'imageUrl, views, or generation is required' });
     }
-    
+
     let found = false;
     let errorMsg = '';
     let updatedScript: any = null;
@@ -931,9 +1065,9 @@ app.put('/api/generated-scripts/:id/image', async (req, res) => {
         errorMsg = 'Script not found';
         return;
       }
-      
+
       const script = db.generated_scripts[scriptIndex];
-      
+
       if (typeof shotIndex === 'number') {
         if (script.newShots && script.newShots[shotIndex]) {
           const shot = script.newShots[shotIndex];
@@ -973,7 +1107,7 @@ app.put('/api/generated-scripts/:id/image', async (req, res) => {
         errorMsg = 'Either shotIndex or characterName must be provided';
         return;
       }
-      
+
       db.generated_scripts[scriptIndex] = script;
       updatedScript = script;
       found = true;
@@ -982,7 +1116,7 @@ app.put('/api/generated-scripts/:id/image', async (req, res) => {
     if (errorMsg) {
       return res.status(errorMsg.includes('not found') ? 404 : 400).json({ error: errorMsg });
     }
-    
+
     res.json({ success: true, script: updatedScript });
   } catch (err) {
     console.error(err);
@@ -1127,9 +1261,9 @@ function resolveToPublicUrl(imageUrl: string): string {
 // Helper to download shot images from local proxy, local uploads, or absolute pollinations URLs
 async function downloadShotImage(imageUrl: string, localDestPath: string) {
   if (!imageUrl) throw new Error('Image URL is empty');
-  
+
   let targetUrl = imageUrl;
-  
+
   // If it's our local proxy URL, parse and reconstruct the real Pollinations URL
   if (imageUrl.startsWith('/api/pollinations-proxy')) {
     try {
@@ -1151,7 +1285,7 @@ async function downloadShotImage(imageUrl: string, localDestPath: string) {
       return;
     }
   }
-  
+
   // CONTENT HASH CACHING:
   const hash = crypto.createHash('sha256').update(targetUrl).digest('hex');
   let ext = '.jpg';
@@ -1246,7 +1380,7 @@ function generateKlingToken(accessKey: string, secretKey: string): string {
     exp: now + 1800, // 30 minutes
     nbf: now - 5
   };
-  
+
   const base64UrlEncode = (obj: any) => {
     return Buffer.from(JSON.stringify(obj))
       .toString('base64')
@@ -1258,7 +1392,7 @@ function generateKlingToken(accessKey: string, secretKey: string): string {
   const headerStr = base64UrlEncode(header);
   const payloadStr = base64UrlEncode(payload);
   const signatureInput = `${headerStr}.${payloadStr}`;
-  
+
   const signature = crypto
     .createHmac('sha256', secretKey)
     .update(signatureInput)
@@ -1284,7 +1418,7 @@ const mockTasks = new Map<string, {
 // 10.925. POST /api/generate-animation - Generate image-to-video using Kling AI or Mock Fallback
 app.post('/api/generate-animation', async (req, res) => {
   const { scriptId, shotIndex, imageUrl, prompt } = req.body;
-  
+
   if (!scriptId || shotIndex === undefined || !imageUrl) {
     return res.status(400).json({ error: 'scriptId, shotIndex, and imageUrl are required' });
   }
@@ -1294,7 +1428,7 @@ app.post('/api/generate-animation', async (req, res) => {
   if (!checkScript) {
     return res.status(404).json({ error: 'Script not found' });
   }
-  
+
   const checkShot = checkScript.newShots?.[shotIndex];
   if (!checkShot) {
     return res.status(404).json({ error: 'Shot index not found in script' });
@@ -1632,10 +1766,10 @@ app.post('/api/generate-video', async (req, res) => {
   if (!isReal) {
     // Mock Mode
     console.log(`[Kling Mock] Generating video in Mock mode for: ${imageUrl}`);
-    
+
     const taskId = `mock_${Math.random().toString(36).substring(2, 9)}`;
     const totalSteps = 5;
-    
+
     // Update DB to submitted
     await updateGenerateVideoSubmitted(taskId);
 
@@ -1718,7 +1852,7 @@ app.post('/api/generate-video', async (req, res) => {
     while (attempts < maxPollAttempts) {
       attempts++;
       console.log(`[Kling API] Polling task ${taskId} (attempt ${attempts}/${maxPollAttempts})...`);
-      
+
       const statusEndpoint = `https://api.klingai.com/v1/videos/image2video/${taskId}`;
       const statusRes = await fetch(statusEndpoint, {
         method: 'GET',
@@ -1782,7 +1916,7 @@ app.post('/api/generate-video', async (req, res) => {
 
   } catch (err: any) {
     console.error('[Kling API generate-video Error]', err);
-    
+
     // Update DB to failed
     await updateGenerateVideoStatus('failed');
 
@@ -1793,18 +1927,18 @@ app.post('/api/generate-video', async (req, res) => {
 // 10.93. POST /api/compile-preview - Compile storyboard into dynamic animatic video
 app.post('/api/compile-preview', async (req, res) => {
   const { scriptId, durationPerShot, bgmFilename } = req.body;
-  
+
   if (!scriptId) {
     return res.status(400).json({ error: 'scriptId is required' });
   }
-  
+
   const duration = Number(durationPerShot) || 4; // Default 4 seconds
   const db = readDb();
   const script = db.generated_scripts.find((s: any) => s.id === scriptId);
   if (!script) {
     return res.status(404).json({ error: 'Script not found' });
   }
-  
+
   const shots = script.newShots || [];
   if (shots.length === 0) {
     return res.status(400).json({ error: 'Script has no storyboard shots' });
@@ -1813,23 +1947,23 @@ app.post('/api/compile-preview', async (req, res) => {
   // Setup temporary workspace directory
   const tempDir = path.join(__dirname, `temp_animatic_${scriptId}_${Date.now()}`);
   const previewsDir = path.join(UPLOADS_DIR, 'previews');
-  
+
   try {
     fs.mkdirSync(tempDir, { recursive: true });
     fs.mkdirSync(previewsDir, { recursive: true });
-    
+
     console.log(`[Animatic] Temporary dir created: ${tempDir}`);
-    
+
     // Download shot images and compile individual video chunks
     const videoChunks: string[] = [];
-    
+
     for (let i = 0; i < shots.length; i++) {
       const shot = shots[i];
       const localVidPath = path.join(tempDir, `shot_${i}.mp4`);
-      
+
       // Escape text for drawtext
       const escapedText = escapeDrawtextText(shot.description || '');
-      
+
       // Cross-platform font file path (PingFang for macOS, Microsoft YaHei for Windows, fall back to default for others)
       let fontfile = '/System/Library/Fonts/PingFang.ttc';
       if (process.platform === 'win32') {
@@ -1838,7 +1972,7 @@ app.post('/api/compile-preview', async (req, res) => {
 
       // Scale to 1280x720, apply transitions, and draw Chinese subtitle overlay
       const vfString = `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d=0.5,fade=t=out:st=${duration - 0.5}:d=0.5,drawtext=fontfile='${fontfile}':text='${escapedText}':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=h-80`;
-      
+
       const localInputVideoPath = shot.videoUrl ? path.join(__dirname, shot.videoUrl.substring(1)) : '';
       const hasVideo = localInputVideoPath && fs.existsSync(localInputVideoPath);
 
@@ -1851,35 +1985,35 @@ app.post('/api/compile-preview', async (req, res) => {
         if (!imageUrl) {
           throw new Error(`Shot ${i + 1} has no image URL`);
         }
-        
+
         const localImgPath = path.join(tempDir, `shot_${i}.jpg`);
         console.log(`[Animatic] Downloading shot ${i + 1} image...`);
         await downloadShotImage(imageUrl, localImgPath);
-        
+
         console.log(`[Animatic] Encoding shot ${i + 1} video chunk from image...`);
         const cmd = `${FFMPEG_COMMAND} -loop 1 -i "${localImgPath}" -t ${duration} -vf "${vfString}" -c:v libx264 -pix_fmt yuv420p -y "${localVidPath}"`;
         await execPromise(cmd);
       }
-      
+
       videoChunks.push(localVidPath);
     }
-    
+
     // Create concat.txt
     const concatFilePath = path.join(tempDir, 'concat.txt');
     const concatContent = videoChunks.map(v => `file '${v}'`).join('\n');
     fs.writeFileSync(concatFilePath, concatContent, 'utf8');
-    
+
     // Concatenate chunks (no re-encoding, extremely fast)
     const combinedVidPath = path.join(tempDir, 'combined.mp4');
     const concatCmd = `${FFMPEG_COMMAND} -f concat -safe 0 -i "${concatFilePath}" -c copy -y "${combinedVidPath}"`;
     console.log(`[Animatic] Concatenating all video chunks...`);
     await execPromise(concatCmd);
-    
+
     // Apply BGM
     const finalVidFilename = `${scriptId}-${Date.now()}.mp4`;
     const finalVidPath = path.join(previewsDir, finalVidFilename);
     const totalDuration = shots.length * duration;
-    
+
     if (bgmFilename) {
       const bgmPath = path.join(UPLOADS_DIR, bgmFilename);
       if (fs.existsSync(bgmPath)) {
@@ -1900,16 +2034,16 @@ app.post('/api/compile-preview', async (req, res) => {
         fs.copyFileSync(combinedVidPath, finalVidPath);
       }
     }
-    
+
     // Clean up temporary directory
     fs.rm(tempDir, { recursive: true, force: true }, (err) => {
       if (err) console.error('[Animatic] Temp cleanup error:', err);
     });
-    
+
     const previewUrl = `/uploads/previews/${finalVidFilename}`;
     console.log(`[Animatic] Compilation completed successfully! URL: ${previewUrl}`);
     res.json({ success: true, previewUrl });
-    
+
   } catch (err: any) {
     console.error('[Animatic Error]', err);
     if (fs.existsSync(tempDir)) {
@@ -2355,6 +2489,147 @@ async function persistComfyImage(image: ComfyImageOutput, context: ImageTargetCo
   return `/uploads/${relativeDir.replace(/\\/g, '/')}/${filename}`;
 }
 
+let lastWorkflowFamily: string | null = null;
+
+async function submitComfyTask(task: any) {
+  try {
+    let workflow: any;
+    if (task.apiWorkflowJson) {
+      try {
+        workflow = JSON.parse(task.apiWorkflowJson);
+      } catch (err) {
+        console.warn(`[Worker] Failed to parse apiWorkflowJson for task ${task.id}, rebuilding...`);
+      }
+    }
+
+    if (!workflow) {
+      const seedVal = task.seed ? String(task.seed) : String(Math.floor(Math.random() * 9007199254740991));
+      const customWorkflow = loadCustomComfyWorkflow();
+      const checkpoint = customWorkflow ? '' : (task.model && task.model !== 'unknown' ? task.model : await getComfyCheckpoint());
+      const workflowSnapshot = customWorkflow
+        ? applyCustomComfyInputs(customWorkflow, task.prompt, task.negativePrompt, task.width, task.height, seedVal)
+        : buildDefaultComfyWorkflow(checkpoint, task.prompt, task.negativePrompt, task.width, task.height, seedVal);
+
+      workflow = workflowSnapshot;
+      const apiJson = JSON.stringify(workflowSnapshot);
+      const uiJson = JSON.stringify(workflowSnapshot);
+      const finalModel = checkpoint || workflowCheckpoint(workflowSnapshot);
+
+      dbSqlite.prepare(`
+        UPDATE comfyui_tasks
+        SET apiWorkflowJson = ?, uiWorkflowJson = ?, model = ?, seed = ?, updatedAt = ?
+        WHERE id = ?
+      `).run(apiJson, uiJson, finalModel, String(seedVal), new Date().toISOString(), task.id);
+    }
+
+    if (task.workflowFamily && task.workflowFamily !== lastWorkflowFamily) {
+      if (lastWorkflowFamily !== null) {
+        try {
+          console.log(`[Worker] Workflow family changed from ${lastWorkflowFamily} to ${task.workflowFamily}. Checking if ComfyUI supports /free...`);
+          const freeRes = await comfyFetch('/free', { method: 'POST' }, 5000);
+          if (freeRes.status === 200) {
+            console.log(`[Worker] Cleared GPU cache via ComfyUI /free endpoint.`);
+          } else {
+            console.log(`[Worker] ComfyUI /free returned status ${freeRes.status}. Skipping.`);
+          }
+        } catch (e: any) {
+          console.log(`[Worker] ComfyUI /free check failed or not supported: ${e.message}. Skipping.`);
+        }
+      }
+      lastWorkflowFamily = task.workflowFamily;
+    }
+
+    if (task.workflowPresetId) {
+      const manifestPath = path.resolve(`workflows/character/${task.workflowPresetId}.manifest.json`);
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const mappings = manifest.nodeMappings || {};
+
+        if (mappings.loadImageNodeId && task.sourceImageUrl) {
+          console.log(`[Worker] Processing reference image upload for task ${task.id}: ${task.sourceImageUrl}`);
+          let relativePath = task.sourceImageUrl;
+          if (relativePath.startsWith('/')) relativePath = relativePath.slice(1);
+          if (relativePath.startsWith('uploads/')) {
+            relativePath = relativePath.slice('uploads/'.length);
+          }
+          const localFilePath = path.resolve(process.cwd(), 'uploads', relativePath);
+
+          if (fs.existsSync(localFilePath)) {
+            const formData = new FormData();
+            const blob = new Blob([fs.readFileSync(localFilePath)], { type: 'image/png' });
+            formData.append('image', blob, path.basename(localFilePath));
+            formData.append('overwrite', 'true');
+
+            const uploadUrl = (process.env.COMFYUI_API_URL || 'http://127.0.0.1:8188').replace(/\/+$/, '') + '/upload/image';
+            const uploadRes = await fetch(uploadUrl, {
+              method: 'POST',
+              body: formData
+            });
+
+            if (uploadRes.ok) {
+              const resJson: any = await uploadRes.json();
+              const comfyFilename = resJson.name;
+              console.log(`[Worker] Reference image uploaded successfully as: ${comfyFilename}`);
+
+              const loadNode = workflow[mappings.loadImageNodeId];
+              if (loadNode && loadNode.inputs) {
+                loadNode.inputs[mappings.loadImageInputKey] = comfyFilename;
+
+                dbSqlite.prepare(`
+                  UPDATE comfyui_tasks SET apiWorkflowJson = ?, updatedAt = ? WHERE id = ?
+                `).run(JSON.stringify(workflow), new Date().toISOString(), task.id);
+              }
+            } else {
+              throw new Error(`Failed to upload reference image to ComfyUI (status ${uploadRes.status})`);
+            }
+          } else {
+            throw new Error(`Source reference image file not found: ${localFilePath}`);
+          }
+        }
+      }
+    }
+
+    const clientId = crypto.randomUUID();
+
+    console.log(`[Worker] Submitting workflow to ComfyUI for task ${task.id} with prompt: "${task.prompt.slice(0, 100)}..."`);
+
+    const response = await comfyFetch('/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: workflow, client_id: clientId, prompt_id: task.id }),
+    });
+
+    const result: any = await response.json();
+    if (!result?.prompt_id) {
+      const detail = result?.error || result?.node_errors;
+      throw new Error(`ComfyUI did not accept the workflow: ${JSON.stringify(detail).slice(0, 500)}`);
+    }
+
+    console.log(`[Worker] Task ${task.id} accepted by ComfyUI successfully.`);
+  } catch (err: any) {
+    console.error(`[Worker] Failed to submit task ${task.id} to ComfyUI:`, err.message);
+    const isNetwork = err.code === 'ECONNREFUSED' || err.message.includes('fetch');
+    if (isNetwork) {
+      console.warn(`[Worker] Re-queuing task ${task.id} due to connection error.`);
+      dbSqlite.prepare(`
+        UPDATE comfyui_tasks SET status = 'pending', updatedAt = ? WHERE id = ?
+      `).run(new Date().toISOString(), task.id);
+    } else {
+      let finalError = err.message || 'Unknown error';
+      if (
+        finalError.toLowerCase().includes('out of memory') ||
+        finalError.toLowerCase().includes('cuda out of memory') ||
+        finalError.toLowerCase().includes('oom')
+      ) {
+        finalError = 'CUDA out of memory. Please restart ComfyUI with --lowvram --reserve-vram 1.';
+      }
+      dbSqlite.prepare(`
+        UPDATE comfyui_tasks SET status = 'failed', error = ?, completedAt = ?, updatedAt = ? WHERE id = ?
+      `).run(finalError, new Date().toISOString(), new Date().toISOString(), task.id);
+    }
+  }
+}
+
 async function generateWithComfyUI(
   prompt: string,
   negativePrompt: string,
@@ -2419,14 +2694,38 @@ async function checkComfyTaskState(promptId: string): Promise<
     const record = history?.[promptId];
     if (record) {
       if (record.status?.status_str === 'error') {
-        return { status: 'failed', error: comfyErrorMessage(record) };
+        const errMsg = comfyErrorMessage(record);
+        if (
+          errMsg.toLowerCase().includes('out of memory') ||
+          errMsg.toLowerCase().includes('cuda out of memory') ||
+          errMsg.toLowerCase().includes('oom')
+        ) {
+          return { status: 'failed', error: 'CUDA out of memory. Please restart ComfyUI with --lowvram --reserve-vram 1.' };
+        }
+        return { status: 'failed', error: errMsg };
       }
+
+      // Get target outputNodeId from task
+      const taskRow = dbSqlite.prepare("SELECT outputNodeId FROM comfyui_tasks WHERE id = ?").get(promptId) as { outputNodeId?: string } | undefined;
+      const targetNodeId = taskRow?.outputNodeId;
+
       const images: any[] = [];
-      for (const output of Object.values(record.outputs || {}) as any[]) {
-        for (const image of output?.images || []) {
-          if (image?.filename) images.push(image);
+      if (targetNodeId) {
+        const nodeOutput = record.outputs?.[targetNodeId];
+        if (nodeOutput && Array.isArray(nodeOutput.images)) {
+          for (const image of nodeOutput.images) {
+            if (image?.filename) images.push(image);
+          }
+        }
+      } else {
+        // Fallback for backward compatibility
+        for (const output of Object.values(record.outputs || {}) as any[]) {
+          for (const image of output?.images || []) {
+            if (image?.filename) images.push(image);
+          }
         }
       }
+
       if (images.length) {
         return { status: 'succeeded', image: images[0] };
       }
@@ -2438,13 +2737,13 @@ async function checkComfyTaskState(promptId: string): Promise<
     // 2. Check queue
     const queueRes = await comfyFetch('/queue', {}, 5_000);
     const queue = await queueRes.json();
-    
+
     const running = queue.queue_running || [];
     const pending = queue.queue_pending || [];
-    
+
     const inRunning = running.some((item: any) => item[1] === promptId);
     const inPending = pending.some((item: any) => item[1] === promptId);
-    
+
     if (inRunning || inPending) {
       return { status: 'processing' };
     }
@@ -2456,7 +2755,15 @@ async function checkComfyTaskState(promptId: string): Promise<
     if (isNetwork) {
       return { status: 'network_error' };
     }
-    return { status: 'failed', error: err.message || 'Unknown error' };
+    let finalError = err.message || 'Unknown error';
+    if (
+      finalError.toLowerCase().includes('out of memory') ||
+      finalError.toLowerCase().includes('cuda out of memory') ||
+      finalError.toLowerCase().includes('oom')
+    ) {
+      finalError = 'CUDA out of memory. Please restart ComfyUI with --lowvram --reserve-vram 1.';
+    }
+    return { status: 'failed', error: finalError };
   }
 }
 
@@ -2485,6 +2792,8 @@ async function pollActiveTasks() {
           width: task.width,
           height: task.height,
           promptId: task.id,
+          workflowPresetId: task.workflowPresetId || 'sdxl_legacy',
+          workflowFamily: task.workflowFamily || 'sdxl',
           projectId: task.projectId,
           targetType: task.targetType,
           ...(task.shotIndex !== null ? { shotIndex: task.shotIndex } : {}),
@@ -2557,7 +2866,7 @@ async function pollActiveTasks() {
           missingSince = new Date().toISOString();
         }
         const count = (task.recoveryCheckCount || 0) + 1;
-        
+
         dbSqlite.prepare(`
           UPDATE comfyui_tasks
           SET missingSince = ?, recoveryCheckCount = ?, updatedAt = ?
@@ -2587,70 +2896,7 @@ async function pollActiveTasks() {
   }
 }
 
-async function submitComfyTask(task: any) {
-  try {
-    let workflow: any;
-    if (task.apiWorkflowJson) {
-      try {
-        workflow = JSON.parse(task.apiWorkflowJson);
-      } catch (err) {
-        console.warn(`[Worker] Failed to parse apiWorkflowJson for task ${task.id}, rebuilding...`);
-      }
-    }
 
-    if (!workflow) {
-      // Rebuild and immediately persist to SQLite for compatibility/frozen principle
-      const seedVal = task.seed ? String(task.seed) : String(Math.floor(Math.random() * 9007199254740991));
-      const customWorkflow = loadCustomComfyWorkflow();
-      const checkpoint = customWorkflow ? '' : (task.model && task.model !== 'unknown' ? task.model : await getComfyCheckpoint());
-      const workflowSnapshot = customWorkflow
-        ? applyCustomComfyInputs(customWorkflow, task.prompt, task.negativePrompt, task.width, task.height, seedVal)
-        : buildDefaultComfyWorkflow(checkpoint, task.prompt, task.negativePrompt, task.width, task.height, seedVal);
-      
-      workflow = workflowSnapshot;
-      const apiJson = JSON.stringify(workflowSnapshot);
-      const uiJson = JSON.stringify(workflowSnapshot);
-      const finalModel = checkpoint || workflowCheckpoint(workflowSnapshot);
-
-      dbSqlite.prepare(`
-        UPDATE comfyui_tasks
-        SET apiWorkflowJson = ?, uiWorkflowJson = ?, model = ?, seed = ?, updatedAt = ?
-        WHERE id = ?
-      `).run(apiJson, uiJson, finalModel, String(seedVal), new Date().toISOString(), task.id);
-    }
-      
-    const clientId = crypto.randomUUID();
-    
-    console.log(`[Worker] Submitting workflow to ComfyUI for task ${task.id} with prompt: "${task.prompt.slice(0, 100)}..."`);
-    
-    const response = await comfyFetch('/prompt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: workflow, client_id: clientId, prompt_id: task.id }),
-    });
-    
-    const result: any = await response.json();
-    if (!result?.prompt_id) {
-      const detail = result?.error || result?.node_errors;
-      throw new Error(`ComfyUI did not accept the workflow: ${JSON.stringify(detail).slice(0, 500)}`);
-    }
-    
-    console.log(`[Worker] Task ${task.id} accepted by ComfyUI successfully.`);
-  } catch (err: any) {
-    console.error(`[Worker] Failed to submit task ${task.id} to ComfyUI:`, err.message);
-    const isNetwork = err.code === 'ECONNREFUSED' || err.message.includes('fetch');
-    if (isNetwork) {
-      console.warn(`[Worker] Re-queuing task ${task.id} due to connection error.`);
-      dbSqlite.prepare(`
-        UPDATE comfyui_tasks SET status = 'pending', updatedAt = ? WHERE id = ?
-      `).run(new Date().toISOString(), task.id);
-    } else {
-      dbSqlite.prepare(`
-        UPDATE comfyui_tasks SET status = 'failed', error = ?, completedAt = ?, updatedAt = ? WHERE id = ?
-      `).run(err.message, new Date().toISOString(), new Date().toISOString(), task.id);
-    }
-  }
-}
 
 let workerInterval: NodeJS.Timeout | null = null;
 let isProcessingQueue = false;
@@ -2658,19 +2904,19 @@ let isProcessingQueue = false;
 function startComfyWorker() {
   if (workerInterval) return;
   console.log('[Worker] Starting ComfyUI queue worker...');
-  
+
   workerInterval = setInterval(async () => {
     if (isProcessingQueue) return;
     isProcessingQueue = true;
-    
+
     try {
       // 1. Process active tasks
       await pollActiveTasks();
-      
+
       // 2. Concurrency limit 1 check
       const activeCountRow = dbSqlite.prepare("SELECT COUNT(*) as count FROM comfyui_tasks WHERE status = 'processing'").get() as any;
       const activeCount = activeCountRow ? activeCountRow.count : 0;
-      
+
       if (activeCount < 1) {
         const nextTask = dbSqlite.prepare(`
           SELECT * FROM comfyui_tasks
@@ -2678,14 +2924,14 @@ function startComfyWorker() {
           ORDER BY createdAt ASC
           LIMIT 1
         `).get() as any;
-        
+
         if (nextTask) {
           const updateResult = dbSqlite.prepare(`
             UPDATE comfyui_tasks
             SET status = 'processing', submittedAt = ?, updatedAt = ?
             WHERE id = ? AND status = 'pending'
           `).run(new Date().toISOString(), new Date().toISOString(), nextTask.id);
-          
+
           if (updateResult.changes === 1) {
             console.log(`[Worker] Atomically locked task ${nextTask.id} for execution.`);
             await submitComfyTask(nextTask);
@@ -2701,6 +2947,336 @@ function startComfyWorker() {
 }
 
 // --- End of ComfyUI Queue Worker ---
+
+// --- ComfyUI Runtime Manager ---
+import { spawn } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(require('child_process').exec);
+
+async function isComfyUiAccessible(): Promise<boolean> {
+  try {
+    const response = await comfyFetch('/', { method: 'GET' }, 2000);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+class ComfyUiRuntimeManager {
+  private childProcess: any = null;
+  private pid: number | null = null;
+  private state: 'stopped' | 'starting' | 'running' | 'stopping' | 'external' | 'error' = 'stopped';
+  private lastError: string | null = null;
+  private stderrBuffer: string[] = [];
+  private pollingTimer: NodeJS.Timeout | null = null;
+
+  constructor() {
+    this.startStatePolling();
+    // Autostart ComfyUI if configured
+    if (process.env.COMFYUI_AUTOSTART === 'true' && process.env.COMFYUI_MANAGED_LAUNCH_ENABLED === 'true') {
+      console.log('[ComfyUI Runtime] Autostart enabled, starting ComfyUI...');
+      this.start().catch(err => {
+        console.error('[ComfyUI Runtime] Autostart failed:', err);
+      });
+    }
+  }
+
+  private startStatePolling() {
+    this.pollingTimer = setInterval(async () => {
+      await this.syncState();
+    }, 2000);
+  }
+
+  public async syncState(): Promise<void> {
+    if (this.state === 'starting' || this.state === 'stopping') {
+      return;
+    }
+
+    const accessible = await isComfyUiAccessible();
+    if (accessible) {
+      if (this.childProcess && this.pid) {
+        this.state = 'running';
+        this.lastError = null;
+      } else {
+        this.state = 'external';
+        this.pid = null;
+        this.childProcess = null;
+        this.lastError = null;
+      }
+    } else {
+      if (this.state === 'running' || this.state === 'external') {
+        this.state = 'stopped';
+        this.pid = null;
+        this.childProcess = null;
+      }
+    }
+  }
+
+  public getState() {
+    return this.state;
+  }
+
+  public getPid() {
+    return this.pid;
+  }
+
+  public getLastError() {
+    return this.lastError;
+  }
+
+  public isManaged() {
+    return !!this.childProcess;
+  }
+
+  public async start(): Promise<void> {
+    if (process.env.COMFYUI_MANAGED_LAUNCH_ENABLED !== 'true') {
+      throw new Error('ComfyUI managed launch is not enabled in environment config.');
+    }
+
+    const alreadyAccessible = await isComfyUiAccessible();
+    if (alreadyAccessible) {
+      if (this.childProcess && this.pid) {
+        this.state = 'running';
+        return;
+      } else {
+        this.state = 'external';
+        throw new Error('ComfyUI is already running externally.');
+      }
+    }
+
+    if (this.state === 'starting') {
+      return;
+    }
+
+    this.state = 'starting';
+    this.lastError = null;
+    this.stderrBuffer = [];
+
+    const executable = process.env.COMFYUI_EXECUTABLE;
+    const workDir = process.env.COMFYUI_WORKDIR;
+    const argsJson = process.env.COMFYUI_ARGS_JSON || '[]';
+
+    if (!executable) {
+      this.state = 'error';
+      this.lastError = 'COMFYUI_EXECUTABLE environment variable is not configured.';
+      throw new Error(this.lastError);
+    }
+
+    let args: string[] = [];
+    try {
+      args = JSON.parse(argsJson);
+      if (!Array.isArray(args)) {
+        throw new Error('COMFYUI_ARGS_JSON is not a JSON array.');
+      }
+    } catch (e: any) {
+      this.state = 'error';
+      this.lastError = `Failed to parse COMFYUI_ARGS_JSON: ${e.message}`;
+      throw new Error(this.lastError);
+    }
+
+    console.log(`[ComfyUI Runtime] Spawning process: "${executable}" with args: ${JSON.stringify(args)} in dir: "${workDir}"`);
+
+    try {
+      const spawnEnv = { ...process.env };
+      // Ensure git is available for ComfyUI Manager (gitpython dependency)
+      const gitDir = 'C:\\Program Files\\Git\\cmd';
+      if (spawnEnv.PATH && !spawnEnv.PATH.includes(gitDir)) {
+        spawnEnv.PATH = `${spawnEnv.PATH};${gitDir}`;
+      }
+      // Force UTF-8 encoding to avoid 'charmap' codec errors on Windows
+      spawnEnv.PYTHONUTF8 = '1';
+      this.childProcess = spawn(executable, args, {
+        cwd: workDir || undefined,
+        shell: false,
+        env: spawnEnv
+      });
+
+      this.pid = this.childProcess.pid || null;
+
+      this.childProcess.stderr?.on('data', (data: any) => {
+        const chunk = data.toString();
+        this.stderrBuffer.push(chunk);
+        if (this.stderrBuffer.length > 20) {
+          this.stderrBuffer.shift();
+        }
+      });
+
+      this.childProcess.on('error', (err: any) => {
+        console.error('[ComfyUI Process Error]:', err);
+        this.state = 'error';
+        this.lastError = `Process spawn error: ${err.message}`;
+        this.pid = null;
+        this.childProcess = null;
+      });
+
+      this.childProcess.on('exit', (code: any, signal: any) => {
+        console.log(`[ComfyUI Process Exit] Code: ${code}, Signal: ${signal}`);
+        if (this.state === 'starting' || this.state === 'running') {
+          this.state = 'error';
+          const tail = this.stderrBuffer.join('\n').trim();
+          this.lastError = `ComfyUI process exited with code ${code}.\nStderr:\n${tail}`.substring(0, 1000);
+        } else if (this.state === 'stopping') {
+          this.state = 'stopped';
+        }
+        this.pid = null;
+        this.childProcess = null;
+      });
+
+      const startTime = Date.now();
+      const timeoutMs = Number(process.env.COMFYUI_START_TIMEOUT_MS) || 120000;
+
+      const poll = async () => {
+        if (this.state !== 'starting' || !this.childProcess) return;
+
+        const ok = await isComfyUiAccessible();
+        if (ok) {
+          this.state = 'running';
+          this.lastError = null;
+          console.log('[ComfyUI Runtime] ComfyUI is running and healthy.');
+        } else if (Date.now() - startTime > timeoutMs) {
+          console.error('[ComfyUI Runtime] Start timeout exceeded.');
+          this.state = 'error';
+          this.lastError = `Startup timed out after ${timeoutMs}ms.`;
+          this.stop().catch(() => {});
+        } else {
+          setTimeout(poll, 1000);
+        }
+      };
+
+      setTimeout(poll, 1000);
+
+    } catch (err: any) {
+      this.state = 'error';
+      this.lastError = `Spawn failed: ${err.message}`;
+      this.pid = null;
+      this.childProcess = null;
+      throw err;
+    }
+  }
+
+  public async stop(): Promise<void> {
+    if (!this.childProcess || !this.pid) {
+      throw new Error('No managed ComfyUI process to stop.');
+    }
+
+    this.state = 'stopping';
+    const targetPid = this.pid;
+    const proc = this.childProcess;
+
+    console.log(`[ComfyUI Runtime] Stopping ComfyUI process (PID: ${targetPid})`);
+
+    try {
+      proc.kill('SIGTERM');
+    } catch {}
+
+    let stopped = false;
+    for (let i = 0; i < 5; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const ok = await isComfyUiAccessible();
+      if (!ok) {
+        stopped = true;
+        break;
+      }
+    }
+
+    if (!stopped) {
+      console.log(`[ComfyUI Runtime] SIGTERM failed, force killing process tree for PID: ${targetPid}`);
+      if (process.platform === 'win32') {
+        try {
+          await execAsync(`taskkill /F /T /PID ${targetPid}`);
+        } catch (e: any) {
+          console.error(`[ComfyUI Runtime] taskkill failed: ${e.message}`);
+        }
+      } else {
+        try {
+          proc.kill('SIGKILL');
+        } catch {}
+      }
+    }
+
+    const finalCheck = await isComfyUiAccessible();
+    if (finalCheck) {
+      this.state = 'error';
+      this.lastError = 'Failed to stop ComfyUI process (port still active).';
+      throw new Error(this.lastError);
+    } else {
+      this.state = 'stopped';
+      this.pid = null;
+      this.childProcess = null;
+      this.lastError = null;
+    }
+  }
+
+  public toJSON() {
+    return {
+      state: this.state,
+      connected: this.state === 'running' || this.state === 'external',
+      managed: !!this.childProcess,
+      pid: this.pid,
+      url: comfyBaseUrl(),
+      lastError: this.lastError
+    };
+  }
+}
+
+const comfyUiRuntime = new ComfyUiRuntimeManager();
+
+function requireLocalhost(req: any, res: any, next: any) {
+  const remoteAddress = req.socket.remoteAddress;
+  const isLocal =
+    remoteAddress === '127.0.0.1' ||
+    remoteAddress === '::1' ||
+    remoteAddress === '::ffff:127.0.0.1';
+
+  if (!isLocal) {
+    console.warn(`[Security] Blocked non-localhost request to managed runtime API from ${remoteAddress}`);
+    return res.status(403).json({ error: 'Forbidden: Access allowed only from localhost.' });
+  }
+  next();
+}
+
+// Runtime API endpoints
+app.get('/api/comfyui/runtime', async (req, res) => {
+  await comfyUiRuntime.syncState();
+  res.json(comfyUiRuntime.toJSON());
+});
+
+app.post('/api/comfyui/runtime/start', requireLocalhost, async (req, res) => {
+  try {
+    const stateBefore = comfyUiRuntime.getState();
+    if (stateBefore === 'running' || stateBefore === 'external') {
+      return res.json(comfyUiRuntime.toJSON());
+    }
+
+    comfyUiRuntime.start().catch(err => {
+      console.error('[ComfyUI Runtime] Async start error:', err);
+    });
+
+    res.status(202).json({
+      state: 'starting',
+      connected: false,
+      managed: true,
+      pid: comfyUiRuntime.getPid(),
+      url: comfyBaseUrl(),
+      lastError: null
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/comfyui/runtime/stop', requireLocalhost, async (req, res) => {
+  try {
+    if (!comfyUiRuntime.isManaged()) {
+      return res.status(400).json({ error: 'Cannot stop ComfyUI: it was not started by this application (external).' });
+    }
+    await comfyUiRuntime.stop();
+    res.json(comfyUiRuntime.toJSON());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // ComfyUI Tasks endpoints
 const DEFAULT_PARAMETER_NODE_IDS = Object.freeze({
@@ -2757,6 +3333,38 @@ function exportedUiWorkflow(task: any): any {
   } catch {
     throw new ImportResultError(409, `Task '${task.id}' UI workflow JSON is corrupted or invalid.`);
   }
+
+  // Preset tasks already contain their exact UI workflow snapshot. Export a decorated copy only;
+  // never rebuild it from the global SDXL template and never mutate the stored task JSON.
+  if (task.workflowPresetId && task.workflowPresetId !== 'sdxl_legacy') {
+    const manifestPath = path.resolve(`workflows/character/${task.workflowPresetId}.manifest.json`);
+    if (!fs.existsSync(manifestPath)) {
+      throw new ImportResultError(409, `Task '${task.id}' preset manifest is no longer available.`);
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const mappings = manifest.nodeMappings || {};
+    workflow.extra = {
+      ...(workflow.extra && typeof workflow.extra === 'object' ? workflow.extra : {}),
+      aiVideoWorkbench: {
+        schemaVersion: 1,
+        sourceTaskId: task.id,
+        projectId: task.projectId,
+        targetId: task.targetId,
+        targetType: task.targetType,
+        viewType: task.viewType,
+        workflowPresetId: task.workflowPresetId,
+        parameterNodeIds: {
+          positivePrompt: String(mappings.promptNodeId || ''),
+          negativePrompt: '',
+          sampler: String(mappings.seedNodeId || ''),
+          checkpoint: '',
+          latent: String(mappings.widthNodeId || ''),
+        },
+      },
+    };
+    return workflow;
+  }
+
   let parameterNodeIds: Record<keyof typeof DEFAULT_PARAMETER_NODE_IDS, string>;
   try {
     parameterNodeIds = taskParameterNodeIds(workflow);
@@ -2934,7 +3542,7 @@ function requireMappedNode(
   return apiNode;
 }
 
-async function readImportedPng(filePath: string, sourceTask: any) {
+async function readImportedPng(filePath: string) {
   const handle = await fs.promises.open(filePath, 'r');
   try {
     const signature = Buffer.alloc(8);
@@ -2989,15 +3597,6 @@ async function readImportedPng(filePath: string, sourceTask: any) {
   if (!provenance || provenance.schemaVersion !== 1) {
     throw new ImportResultError(422, 'Workflow is missing supported aiVideoWorkbench provenance metadata.');
   }
-  const identityFields = ['sourceTaskId', 'projectId', 'targetId', 'targetType', 'viewType'] as const;
-  for (const field of identityFields) {
-    if (String(provenance[field] ?? '') !== String(sourceTask[field] ?? (field === 'sourceTaskId' ? sourceTask.id : ''))) {
-      const expected = field === 'sourceTaskId' ? sourceTask.id : sourceTask[field];
-      if (String(provenance[field] ?? '') !== String(expected ?? '')) {
-        throw new ImportResultError(422, `Workflow provenance '${field}' does not match the source task.`);
-      }
-    }
-  }
 
   const ids = taskParameterNodeIds(uiWorkflow);
   const positive = requireMappedNode(apiWorkflow, uiWorkflow, ids.positivePrompt, 'positive prompt', ['CLIPTextEncode']);
@@ -3024,7 +3623,7 @@ async function readImportedPng(filePath: string, sourceTask: any) {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 32768 || height > 32768) {
     throw new ImportResultError(422, 'Mapped latent node does not contain valid width and height values.');
   }
-  return { apiWorkflow, uiWorkflow, prompt, negativePrompt, seed: String(seed), model, width, height };
+  return { apiWorkflow, uiWorkflow, prompt, negativePrompt, seed: String(seed), model, width, height, provenance };
 }
 
 function updateImportedSlot(scripts: any[], task: any, imageUrl: string, generation: any) {
@@ -3091,11 +3690,13 @@ app.get('/api/comfyui/tasks', (req, res) => {
   }
   try {
     const tasks = dbSqlite.prepare(`
-      SELECT 
+      SELECT
         id, projectId, targetId, targetType, viewType, shotIndex, characterName,
         prompt, negativePrompt, seed, model, width, height, status, retryCount,
         retryOfTaskId, supersededByTaskId, error, recoveryCheckCount, missingSince,
         origin, importedFromTaskId, importSha256, imageUrl,
+        workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId,
+        outputNodeId, presetParametersJson,
         createdAt, submittedAt, completedAt, updatedAt,
         apiWorkflowJson, uiWorkflowJson
       FROM comfyui_tasks
@@ -3168,7 +3769,33 @@ app.post('/api/comfyui/tasks/:sourceTaskId/import-result', (req, res) => {
       if (!sourceTask) throw new ImportResultError(404, `Source task '${req.params.sourceTaskId}' not found.`);
       if (sourceTask.status !== 'succeeded') throw new ImportResultError(409, 'Source task must be succeeded before importing a result.');
 
-      const imported = await readImportedPng(uploadedPath, sourceTask);
+      const imported = await readImportedPng(uploadedPath);
+      const provenance = imported.provenance;
+
+      if (!provenance || provenance.schemaVersion !== 1) {
+        throw new ImportResultError(422, 'Workflow is missing supported aiVideoWorkbench provenance metadata.');
+      }
+
+      if (sourceTask.targetType !== provenance.targetType) {
+        throw new ImportResultError(422, "Workflow provenance 'targetType' does not match the source task.");
+      }
+      if (sourceTask.targetType === 'character' && provenance.targetType !== 'character') {
+        throw new ImportResultError(422, 'Workflow provenance targetType must be character.');
+      }
+
+      if (String(provenance.sourceTaskId ?? '') !== String(sourceTask.id)) {
+        throw new ImportResultError(422, "Workflow provenance 'sourceTaskId' does not match the source task.");
+      }
+      if (String(provenance.projectId ?? '') !== String(sourceTask.projectId)) {
+        throw new ImportResultError(422, "Workflow provenance 'projectId' does not match the source task.");
+      }
+      if (String(provenance.targetId ?? '') !== String(sourceTask.targetId)) {
+        throw new ImportResultError(422, "Workflow provenance 'targetId' does not match the source task.");
+      }
+      if (String(provenance.viewType ?? '') !== String(sourceTask.viewType)) {
+        throw new ImportResultError(422, "Workflow provenance 'viewType' does not match the source task.");
+      }
+
       const importSha256 = await sha256File(uploadedPath);
       const existing = dbSqlite.prepare(`
         SELECT * FROM comfyui_tasks
@@ -3353,6 +3980,45 @@ app.get('/api/comfyui/open-ui', (req, res) => {
   }
 });
 
+app.get('/api/comfyui/workflow-template', async (req, res) => {
+  try {
+    const requestedPreset = String(req.query.presetId || 'sdxl_legacy');
+    if (!(requestedPreset in PROJECT_PRESET_TO_WORKFLOW)) {
+      return res.status(422).json({ error: `Unsupported workflow template: ${requestedPreset}` });
+    }
+    const workflowPresetId = PROJECT_PRESET_TO_WORKFLOW[requestedPreset];
+    let workflow: any;
+    let filename: string;
+    if (!workflowPresetId) {
+      const checkpoint = await getComfyCheckpoint();
+      workflow = buildDefaultUIWorkflow(
+        checkpoint,
+        'cinematic storyboard frame, detailed composition, professional lighting',
+        DEFAULT_COMFY_NEGATIVE_PROMPT,
+        768,
+        512,
+        String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n)),
+      );
+      filename = 'comfyui_template_sdxl_legacy.json';
+    } else {
+      const manifestPath = path.resolve(`workflows/character/${workflowPresetId}.manifest.json`);
+      if (!fs.existsSync(manifestPath)) {
+        return res.status(404).json({ error: `Workflow preset manifest not found: ${workflowPresetId}` });
+      }
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      workflow = JSON.parse(fs.readFileSync(path.resolve(`workflows/character/${manifest.uiFile}`), 'utf8'));
+      filename = `comfyui_template_${requestedPreset}.json`;
+    }
+    // Generic templates intentionally have no slot provenance and cannot be imported as a result.
+    if (workflow.extra?.aiVideoWorkbench) delete workflow.extra.aiVideoWorkbench;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(JSON.stringify(workflow, null, 2));
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Could not build workflow template.' });
+  }
+});
+
 app.get('/api/comfyui/default-workflow', async (_req, res) => {
   try {
     const checkpoint = await getComfyCheckpoint();
@@ -3533,43 +4199,331 @@ app.post('/api/comfyui/tasks/:id/cancel', async (req, res) => {
 });
 
 // 11. POST /api/generate-image - Generate image using Pollinations AI, Kling AI, or local ComfyUI
+function getCharacterAvatarUrl(projectId: string, targetId: string): string | null {
+  try {
+    const row = dbSqlite.prepare("SELECT value FROM store WHERE key = 'generated_scripts'").get() as { value: string } | undefined;
+    if (!row) return null;
+    const scripts = JSON.parse(row.value);
+    const script = scripts.find((s: any) => s.id === projectId);
+    if (!script) return null;
+    const char = script.newCharacters?.find((c: any) => c.id === targetId || String(c.id) === String(targetId));
+    return char?.avatarUrl || null;
+  } catch (err) {
+    console.error("[getCharacterAvatarUrl Error]", err);
+    return null;
+  }
+}
+
+function applyPresetParameters(
+  apiWorkflow: any,
+  manifest: any,
+  params: {
+    prompt?: string;
+    seed?: string;
+    width?: number;
+    height?: number;
+    strength?: number;
+    loraStrength?: number;
+  }
+) {
+  const cloned = JSON.parse(JSON.stringify(apiWorkflow));
+  const mappings = manifest.nodeMappings || {};
+
+  if (params.prompt && mappings.promptNodeId && mappings.promptInputKey) {
+    const node = cloned[mappings.promptNodeId];
+    if (node && node.inputs) {
+      if (Array.isArray(node.inputs[mappings.promptInputKey])) {
+        const sourceNodeId = node.inputs[mappings.promptInputKey][0];
+        const sourceNode = cloned[sourceNodeId];
+        if (sourceNode && sourceNode.inputs) {
+          sourceNode.inputs["value"] = params.prompt;
+        }
+      } else {
+        node.inputs[mappings.promptInputKey] = params.prompt;
+      }
+    }
+  }
+
+  if (params.seed && mappings.seedNodeId && mappings.seedInputKey) {
+    const node = cloned[mappings.seedNodeId];
+    if (node && node.inputs) {
+      node.inputs[mappings.seedInputKey] = Number(params.seed) || params.seed;
+    }
+  }
+
+  if (params.width && mappings.widthNodeId && mappings.widthInputKey) {
+    const node = cloned[mappings.widthNodeId];
+    if (node && node.inputs) {
+      node.inputs[mappings.widthInputKey] = Number(params.width) || params.width;
+    }
+  }
+
+  if (params.height && mappings.heightNodeId && mappings.heightInputKey) {
+    const node = cloned[mappings.heightNodeId];
+    if (node && node.inputs) {
+      node.inputs[mappings.heightInputKey] = Number(params.height) || params.height;
+    }
+  }
+
+  if (params.strength !== undefined && mappings.strengthNodeId && mappings.strengthInputKey) {
+    const node = cloned[mappings.strengthNodeId];
+    if (node && node.inputs) {
+      node.inputs[mappings.strengthInputKey] = Number(params.strength) || params.strength;
+    }
+  }
+
+  if (params.loraStrength !== undefined && mappings.loraStrengthNodeId && mappings.loraStrengthInputKey) {
+    const node = cloned[mappings.loraStrengthNodeId];
+    if (node && node.inputs) {
+      node.inputs[mappings.loraStrengthInputKey] = Number(params.loraStrength) || params.loraStrength;
+    }
+  }
+
+  return cloned;
+}
+
+// 11. POST /api/generate-image - Generate image using Pollinations AI, Kling AI, or local ComfyUI
 app.post('/api/generate-image', async (req, res) => {
   const {
     prompt, style, isCharacter, skipTranslation, platform, negativePrompt, negative_prompt, seed,
     projectId, targetType, shotIndex, characterName,
   } = req.body;
-  
-  if (!prompt) {
+
+  if (!prompt && !req.body.presetId && !req.body.workflowPresetId && !req.body.presetRole) {
     return res.status(400).json({ error: 'Prompt is required' });
   }
 
   try {
-    // 1. Translate and optimize prompt with Gemini if skipTranslation is not set
-    let optimizedPrompt = prompt;
-    if (!skipTranslation) {
+    let optimizedPrompt = prompt || '';
+    if (prompt && !skipTranslation) {
       optimizedPrompt = await optimizePrompt(prompt, !!isCharacter, style);
-    } else {
+    } else if (prompt) {
       console.log(`[Generate Image] Skipping translation. Using direct prompt: "${prompt}"`);
     }
 
     if (platform === 'comfyui') {
+      const targetId = req.body.targetId || (targetType === 'shot' ? `shot_${shotIndex}` : `char_${characterName}`);
+      const viewType = req.body.viewType || (targetType === 'shot' ? 'main' : 'avatar');
+      const projectPreferences = projectComfyPreferences(String(projectId || ''));
+      const hasExplicitPreset = Object.prototype.hasOwnProperty.call(req.body, 'presetId')
+        || Object.prototype.hasOwnProperty.call(req.body, 'workflowPresetId');
+      const explicitPreset = req.body.presetId ?? req.body.workflowPresetId;
+      let selectedPreset: string;
+      if (hasExplicitPreset) {
+        selectedPreset = String(explicitPreset || 'sdxl_legacy');
+      } else if (req.body.presetRole === 'threeView') {
+        selectedPreset = projectPreferences.threeViewPresetId;
+      } else if (req.body.presetRole === 'identity') {
+        selectedPreset = projectPreferences.identityPresetId;
+      } else if (req.body.presetRole === 'upscale') {
+        selectedPreset = projectPreferences.upscalePresetId;
+      } else if (targetType === 'character') {
+        selectedPreset = projectPreferences.characterMasterPresetId;
+      } else {
+        selectedPreset = projectPreferences.shotPresetId;
+      }
+      if (!(selectedPreset in PROJECT_PRESET_TO_WORKFLOW)) {
+        return res.status(422).json({ error: `Unsupported workflow preset: ${selectedPreset}` });
+      }
+      const presetId = PROJECT_PRESET_TO_WORKFLOW[selectedPreset] || undefined;
+
       const requestedWidth = Number(req.body.width) || (isCharacter ? 512 : 768);
       const requestedHeight = Number(req.body.height) || (isCharacter ? 768 : 512);
       const width = Math.max(256, Math.min(2048, Math.floor(requestedWidth / 64) * 64));
       const height = Math.max(256, Math.min(2048, Math.floor(requestedHeight / 64) * 64));
-      
+
       const seedMode = req.body.seedMode;
       const taskSeed = (seedMode === 'random' || !seed)
         ? String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n))
         : String(seed);
       const comfyNegative = String(negativePrompt || negative_prompt || DEFAULT_COMFY_NEGATIVE_PROMPT);
 
-      const targetId = req.body.targetId || (targetType === 'shot' ? `shot_${shotIndex}` : `char_${characterName}`);
-      const viewType = req.body.viewType || (targetType === 'shot' ? 'main' : 'avatar');
+      const existingActiveTask = dbSqlite.prepare(`
+        SELECT id FROM comfyui_tasks
+        WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
+        LIMIT 1
+      `).get(targetId, viewType) as { id: string } | undefined;
 
-      // Load template workflows for snapshotting
+      if (existingActiveTask) {
+        console.log(`[Generate Image] Found existing active task ${existingActiveTask.id} for slot ${targetId}:${viewType}. Returning existing.`);
+        return res.json({ taskId: existingActiveTask.id });
+      }
+
+      if (presetId) {
+        const manifestPath = path.resolve(`workflows/character/${presetId}.manifest.json`);
+        if (!fs.existsSync(manifestPath)) {
+          return res.status(400).json({ error: `Workflow preset manifest not found for: ${presetId}` });
+        }
+
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const uiJson = JSON.parse(fs.readFileSync(path.resolve(`workflows/character/${manifest.uiFile}`), 'utf8'));
+        const apiJson = JSON.parse(fs.readFileSync(path.resolve(`workflows/character/${manifest.apiFile}`), 'utf8'));
+
+        let sourceImageUrl = req.body.sourceImageUrl || null;
+        const sourceTaskId = req.body.sourceTaskId || null;
+
+        if (presetId === '02_klein_pulid_identity' && !sourceImageUrl) {
+          return res.status(400).json({ error: "Reference image is required for PuLID identity lock." });
+        }
+        if (presetId === '04_esrgan_upscale' && !sourceImageUrl) {
+          return res.status(400).json({ error: "Source image is required for ESRGAN upscale." });
+        }
+        if (presetId === '03_qwen_2511_three_views') {
+          const avatarUrl = getCharacterAvatarUrl(String(projectId || ''), targetId);
+          if (!avatarUrl) {
+            return res.status(400).json({ error: "Character avatar is required as a reference to generate three views." });
+          }
+          sourceImageUrl = avatarUrl;
+        }
+
+        if (presetId === '03_qwen_2511_three_views') {
+          const workflowBatchId = crypto.randomUUID();
+          const viewPrompts = [
+            { view: 'front', prompt: '<sks> front view eye-level shot medium shot' },
+            { view: 'side', prompt: '<sks> right side view eye-level shot medium shot' },
+            { view: 'back', prompt: '<sks> back view eye-level shot medium shot' }
+          ];
+
+          const taskIds: string[] = [];
+          const tx = dbSqlite.transaction(() => {
+            for (const vp of viewPrompts) {
+              const taskId = crypto.randomUUID();
+              taskIds.push(taskId);
+
+              dbSqlite.prepare(`
+                UPDATE comfyui_tasks
+                SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by batch task', completedAt = ?, updatedAt = ?
+                WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
+              `).run(taskId, new Date().toISOString(), new Date().toISOString(), targetId, vp.view);
+
+              const apiSnapshot = applyPresetParameters(apiJson, manifest, {
+                prompt: vp.prompt,
+                seed: taskSeed,
+                loraStrength: 1.0
+              });
+
+              dbSqlite.prepare(`
+                INSERT INTO comfyui_tasks (
+                  id, projectId, targetId, targetType, viewType, shotIndex, characterName,
+                  prompt, negativePrompt, seed, model, width, height, status, retryCount,
+                  apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
+                  workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `).run(
+                taskId,
+                String(projectId || ''),
+                targetId,
+                'character',
+                vp.view,
+                null,
+                characterName ? String(characterName) : null,
+                vp.prompt,
+                comfyNegative,
+                taskSeed,
+                'qwen_image_edit_2511_fp8_e4m3fn.safetensors',
+                1024,
+                1024,
+                'pending',
+                0,
+                JSON.stringify(apiSnapshot),
+                JSON.stringify(uiJson),
+                new Date().toISOString(),
+                new Date().toISOString(),
+                presetId,
+                manifest.workflowFamily,
+                workflowBatchId,
+                sourceImageUrl,
+                sourceTaskId,
+                manifest.nodeMappings?.saveImageNodeId || '9',
+                JSON.stringify({ loraStrength: 1.0 })
+              );
+            }
+          });
+          tx();
+
+          console.log(`[Queue] Enqueued batch tasks for Qwen Three Views: ${taskIds.join(', ')}`);
+          return res.json({
+            success: true,
+            batchId: workflowBatchId,
+            taskIds,
+            taskId: taskIds[0],
+            status: 'pending',
+            provider: 'comfyui',
+            workflowPresetId: presetId,
+          });
+        }
+
+        const taskId = crypto.randomUUID();
+        const strength = req.body.strength !== undefined ? Number(req.body.strength) : manifest.defaultParameters?.strength;
+        const loraStrength = req.body.loraStrength !== undefined ? Number(req.body.loraStrength) : manifest.defaultParameters?.loraStrength;
+
+        const apiSnapshot = applyPresetParameters(apiJson, manifest, {
+          prompt: optimizedPrompt,
+          seed: taskSeed,
+          width,
+          height,
+          strength,
+          loraStrength
+        });
+
+        const tx = dbSqlite.transaction(() => {
+          dbSqlite.prepare(`
+            UPDATE comfyui_tasks
+            SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by preset task', completedAt = ?, updatedAt = ?
+            WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
+          `).run(taskId, new Date().toISOString(), new Date().toISOString(), targetId, viewType);
+
+          dbSqlite.prepare(`
+            INSERT INTO comfyui_tasks (
+              id, projectId, targetId, targetType, viewType, shotIndex, characterName,
+              prompt, negativePrompt, seed, model, width, height, status, retryCount,
+              apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
+              workflowPresetId, workflowFamily, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            taskId,
+            String(projectId || ''),
+            targetId,
+            targetType || (isCharacter ? 'character' : 'shot'),
+            viewType,
+            typeof shotIndex === 'number' ? shotIndex : null,
+            characterName ? String(characterName) : null,
+            optimizedPrompt,
+            comfyNegative,
+            taskSeed,
+            manifest.requiredModels?.[0] || 'preset_model',
+            width,
+            height,
+            'pending',
+            0,
+            JSON.stringify(apiSnapshot),
+            JSON.stringify(uiJson),
+            new Date().toISOString(),
+            new Date().toISOString(),
+            presetId,
+            manifest.workflowFamily,
+            sourceImageUrl,
+            sourceTaskId,
+            manifest.nodeMappings?.saveImageNodeId || '9',
+            JSON.stringify({ strength, loraStrength })
+          );
+        });
+        tx();
+
+        console.log(`[Queue] Enqueued preset task ${taskId} (${presetId}) for ${targetId}:${viewType}`);
+        return res.json({
+          success: true,
+          taskId,
+          status: 'pending',
+          provider: 'comfyui',
+          workflowPresetId: presetId,
+          seed: taskSeed,
+          width,
+          height
+        });
+      }
+
       const customWorkflow = loadCustomComfyWorkflow();
-      
       let checkpoint = '';
       if (!customWorkflow) {
         const available = await getComfyCheckpointsList();
@@ -3586,12 +4540,12 @@ app.post('/api/generate-image', async (req, res) => {
       const workflowSnapshot = customWorkflow
         ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, taskSeed)
         : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
-      
+
       let apiWorkflowJson = '';
       let uiWorkflowJson = '';
       if (customWorkflow) {
         apiWorkflowJson = JSON.stringify(workflowSnapshot);
-        uiWorkflowJson = ''; // Custom workflows have no UI template unless loaded as UI template (not supported yet)
+        uiWorkflowJson = '';
       } else {
         apiWorkflowJson = JSON.stringify(workflowSnapshot);
         const uiWorkflow = buildDefaultUIWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
@@ -3601,22 +4555,19 @@ app.post('/api/generate-image', async (req, res) => {
 
       const taskId = crypto.randomUUID();
 
-      // Run database transactions to insert new task AND cancel old tasks in same slot
       const tx = dbSqlite.transaction(() => {
-        // Cancel existing pending or processing tasks for the same slot
         dbSqlite.prepare(`
           UPDATE comfyui_tasks
           SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by new task', completedAt = ?, updatedAt = ?
           WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
         `).run(taskId, new Date().toISOString(), new Date().toISOString(), targetId, viewType);
 
-        // Insert new pending task
         dbSqlite.prepare(`
           INSERT INTO comfyui_tasks (
             id, projectId, targetId, targetType, viewType, shotIndex, characterName,
             prompt, negativePrompt, seed, model, width, height, status, retryCount,
-            apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt, workflowPresetId, workflowFamily
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           taskId,
           String(projectId || ''),
@@ -3636,7 +4587,9 @@ app.post('/api/generate-image', async (req, res) => {
           apiWorkflowJson,
           uiWorkflowJson,
           new Date().toISOString(),
-          new Date().toISOString()
+          new Date().toISOString(),
+          'sdxl_legacy',
+          'sdxl'
         );
       });
       tx();
@@ -3648,6 +4601,7 @@ app.post('/api/generate-image', async (req, res) => {
         taskId,
         status: 'pending',
         provider: 'comfyui',
+        workflowPresetId: 'sdxl_legacy',
         seed: taskSeed,
         width,
         height
@@ -3756,7 +4710,7 @@ app.post('/api/generate-image', async (req, res) => {
       console.log(`[Kling T2I] Saved to local URL: ${localUrl}`);
       return res.json({ url: localUrl, prompt: optimizedPrompt });
     }
-    
+
     // Default Fallback to Pollinations AI
     const width = isCharacter ? 512 : 768;
     const height = isCharacter ? 768 : 512;
@@ -3795,5 +4749,7 @@ try {
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
-  startComfyWorker();
+  if (process.env.DISABLE_COMFY_WORKER !== 'true') {
+    startComfyWorker();
+  }
 });

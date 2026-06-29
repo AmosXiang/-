@@ -1,0 +1,55 @@
+{
+  "presetId": "02_klein_pulid_identity",
+  "name": "Klein PuLID Identity Lock",
+  "workflowFamily": "pulid",
+  "uiFile": "02_klein_pulid_identity.ui.json",
+  "apiFile": "02_klein_pulid_identity.api.json",
+  "targetTypes": ["character"],
+  "viewTypes": ["avatar"],
+  "requiredModels": [
+    "flux-2-klein-4b-fp8.safetensors",
+    "qwen_3_4b.safetensors",
+    "flux2-vae.safetensors",
+    "pulid_flux2_klein_v2.safetensors"
+  ],
+  "requiredNodeClasses": [
+    "LoadImage",
+    "VAEEncode",
+    "VAELoader",
+    "ReferenceLatent",
+    "VAEDecode",
+    "PuLIDEVACLIPLoader",
+    "PuLIDInsightFaceLoader",
+    "KSampler",
+    "EmptyFlux2LatentImage",
+    "CLIPTextEncode",
+    "easy imageScaleDown",
+    "PuLIDModelLoader",
+    "CLIPLoader",
+    "UNETLoader",
+    "ApplyPuLIDFlux2",
+    "SaveImage"
+  ],
+  "nodeMappings": {
+    "loadImageNodeId": "76",
+    "loadImageInputKey": "image",
+    "promptNodeId": "75:74",
+    "promptInputKey": "text",
+    "seedNodeId": "75:172",
+    "seedInputKey": "seed",
+    "widthNodeId": "75:66",
+    "widthInputKey": "width",
+    "heightNodeId": "75:66",
+    "heightInputKey": "height",
+    "strengthNodeId": "75:198",
+    "strengthInputKey": "strength",
+    "saveImageNodeId": "9"
+  },
+  "defaultParameters": {
+    "width": 1024,
+    "height": 1024,
+    "steps": 4,
+    "cfg": 1,
+    "strength": 1.4
+  }
+}

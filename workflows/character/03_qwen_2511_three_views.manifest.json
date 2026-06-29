@@ -1,0 +1,47 @@
+{
+  "presetId": "03_qwen_2511_three_views",
+  "name": "Qwen 2511 Three Views",
+  "workflowFamily": "qwen",
+  "uiFile": "03_qwen_2511_three_views.ui.json",
+  "apiFile": "03_qwen_2511_three_views.api.json",
+  "targetTypes": ["character"],
+  "viewTypes": ["front", "side", "back"],
+  "requiredModels": [
+    "qwen_image_edit_2511_fp8_e4m3fn.safetensors",
+    "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "qwen_image_vae.safetensors",
+    "qwen-image-edit-2511-multiple-angles-lora.safetensors"
+  ],
+  "requiredNodeClasses": [
+    "LoadImage",
+    "CLIPLoader",
+    "ModelSamplingAuraFlow",
+    "VAELoader",
+    "FluxKontextMultiReferenceLatentMethod",
+    "CFGNorm",
+    "TextEncodeQwenImageEditPlus",
+    "LoraLoaderModelOnly",
+    "VAEDecode",
+    "VAEEncode",
+    "KSampler",
+    "FluxKontextImageScale",
+    "UNETLoader",
+    "SaveImage"
+  ],
+  "nodeMappings": {
+    "loadImageNodeId": "41",
+    "loadImageInputKey": "image",
+    "promptNodeId": "112",
+    "promptInputKey": "prompt",
+    "seedNodeId": "106",
+    "seedInputKey": "seed",
+    "loraStrengthNodeId": "109",
+    "loraStrengthInputKey": "strength_model",
+    "saveImageNodeId": "9"
+  },
+  "defaultParameters": {
+    "steps": 4,
+    "cfg": 1,
+    "loraStrength": 1.0
+  }
+}

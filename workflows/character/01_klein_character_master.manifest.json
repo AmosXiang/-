@@ -1,0 +1,47 @@
+{
+  "presetId": "01_klein_character_master",
+  "name": "Klein Character Master",
+  "workflowFamily": "klein",
+  "uiFile": "01_klein_character_master.ui.json",
+  "apiFile": "01_klein_character_master.api.json",
+  "targetTypes": ["character"],
+  "viewTypes": ["avatar"],
+  "requiredModels": [
+    "flux-2-klein-base-4b.safetensors",
+    "qwen_3_4b.safetensors",
+    "flux2-vae.safetensors"
+  ],
+  "requiredNodeClasses": [
+    "PrimitiveStringMultiline",
+    "KSamplerSelect",
+    "Flux2Scheduler",
+    "CFGGuider",
+    "SamplerCustomAdvanced",
+    "VAEDecode",
+    "EmptyFlux2LatentImage",
+    "CLIPTextEncode",
+    "PrimitiveInt",
+    "RandomNoise",
+    "UNETLoader",
+    "CLIPLoader",
+    "VAELoader",
+    "SaveImage"
+  ],
+  "nodeMappings": {
+    "promptNodeId": "76",
+    "promptInputKey": "value",
+    "seedNodeId": "75:73",
+    "seedInputKey": "noise_seed",
+    "widthNodeId": "75:68",
+    "widthInputKey": "value",
+    "heightNodeId": "75:69",
+    "heightInputKey": "value",
+    "saveImageNodeId": "9"
+  },
+  "defaultParameters": {
+    "width": 1024,
+    "height": 1024,
+    "steps": 20,
+    "cfg": 5
+  }
+}
