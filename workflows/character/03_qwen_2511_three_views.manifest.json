@@ -39,6 +39,15 @@
     "loraStrengthInputKey": "strength_model",
     "saveImageNodeId": "9"
   },
+  "parameterNodeIds": {
+    "positivePrompt": "112",
+    "negativePrompt": null,
+    "seed": "106",
+    "width": null,
+    "height": null,
+    "model": "108"
+  },
+  "requiredMappings": ["positivePrompt", "seed"],
   "defaultParameters": {
     "steps": 4,
     "cfg": 1,

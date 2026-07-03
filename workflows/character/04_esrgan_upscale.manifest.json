@@ -22,6 +22,15 @@
     "upscaleModelInputKey": "model_name",
     "saveImageNodeId": "5"
   },
+  "parameterNodeIds": {
+    "positivePrompt": null,
+    "negativePrompt": null,
+    "seed": null,
+    "width": null,
+    "height": null,
+    "model": "9"
+  },
+  "requiredMappings": [],
   "defaultParameters": {
     "model_name": "4x-ESRGAN.pth"
   }

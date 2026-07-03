@@ -4,8 +4,8 @@
   "workflowFamily": "pulid",
   "uiFile": "02_klein_pulid_identity.ui.json",
   "apiFile": "02_klein_pulid_identity.api.json",
-  "targetTypes": ["character"],
-  "viewTypes": ["avatar"],
+  "targetTypes": ["character", "shot"],
+  "viewTypes": ["avatar", "main"],
   "requiredModels": [
     "flux-2-klein-4b-fp8.safetensors",
     "qwen_3_4b.safetensors",
@@ -45,6 +45,20 @@
     "strengthInputKey": "strength",
     "saveImageNodeId": "9"
   },
+  "parameterNodeIds": {
+    "positivePrompt": "75:74",
+    "negativePrompt": null,
+    "seed": "75:172",
+    "width": "75:66",
+    "height": "75:66",
+    "model": "75:70"
+  },
+  "modelMappings": {
+    "baseModel": { "label": "基础模型", "nodeId": "75:70", "inputKey": "unet_name", "editable": false },
+    "textEncoder": { "label": "文本编码器", "nodeId": "75:71", "inputKey": "clip_name", "editable": false },
+    "vae": { "label": "VAE", "nodeId": "75:72", "inputKey": "vae_name", "editable": false }
+  },
+  "requiredMappings": ["positivePrompt", "seed"],
   "defaultParameters": {
     "width": 1024,
     "height": 1024,

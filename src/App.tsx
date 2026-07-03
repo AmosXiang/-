@@ -44,6 +44,44 @@ type ComfyProjectPreferences = {
   upscalePresetId: string;
 };
 
+type WorkflowPresetSummary = {
+  presetId: string;
+  workflowPresetId: string | null;
+  displayName: string;
+  modelName: string;
+  workflowFamily: string;
+  purposes: Array<'storyboard' | 'characterMaster' | 'identity' | 'threeView' | 'upscale'>;
+  available: boolean;
+  missingModels: string[];
+  missingNodes: string[];
+  reason: string | null;
+};
+
+const characterTerms = (character: Character): string[] => {
+  const aliases = Array.isArray(character.aliases)
+    ? character.aliases
+    : Array.isArray(character.alias)
+      ? character.alias
+      : character.alias
+        ? [character.alias]
+        : [];
+  const name = String(character.name || '').trim();
+  const bilingualNameParts = name
+    ? [name.replace(/\s*[（(][^）)]*[）)]\s*$/, ''), ...(name.match(/[（(]([^）)]+)[）)]/)?.slice(1) || [])]
+    : [];
+  return [name, ...bilingualNameParts, ...aliases]
+    .map(value => String(value || '').trim().toLocaleLowerCase())
+    .filter(Boolean);
+};
+
+const inferShotCharacterIds = (description: string, characters: Character[]): string[] => {
+  const searchable = String(description || '').toLocaleLowerCase();
+  if (!searchable) return [];
+  return characters
+    .filter(character => character.id && characterTerms(character).some(term => searchable.includes(term)))
+    .map(character => String(character.id));
+};
+
 const LEGACY_COMFY_PROJECT_PREFERENCES: ComfyProjectPreferences = {
   shotPresetId: 'sdxl_legacy',
   characterMasterPresetId: 'sdxl_legacy',
@@ -67,6 +105,34 @@ const WORKFLOW_PRESET_LABELS: Record<string, string> = {
   '03_qwen_2511_three_views': 'Qwen 2511 Three Views',
   '04_esrgan_upscale': '4x ESRGAN',
 };
+
+const BUILTIN_WORKFLOW_PRESET_FALLBACKS: WorkflowPresetSummary[] = [
+  {
+    presetId: 'sdxl_legacy', workflowPresetId: null, displayName: 'SDXL Legacy',
+    modelName: 'ComfyUI 默认 SDXL Checkpoint', workflowFamily: 'sdxl',
+    purposes: ['storyboard', 'characterMaster'], available: true, missingModels: [], missingNodes: [], reason: null,
+  },
+  {
+    presetId: 'pure_klein', workflowPresetId: '01_klein_character_master', displayName: 'Pure Klein 4B',
+    modelName: 'flux-2-klein-base-4b.safetensors', workflowFamily: 'flux/klein',
+    purposes: ['storyboard', 'characterMaster'], available: true, missingModels: [], missingNodes: [], reason: null,
+  },
+  {
+    presetId: 'pulid_flux2', workflowPresetId: '02_klein_pulid_identity', displayName: 'PuLID Flux2',
+    modelName: 'flux-2-klein-4b-fp8.safetensors', workflowFamily: 'flux/pulid',
+    purposes: ['identity'], available: true, missingModels: [], missingNodes: [], reason: null,
+  },
+  {
+    presetId: 'qwen_2511_three_views', workflowPresetId: '03_qwen_2511_three_views', displayName: 'Qwen 三视图',
+    modelName: 'qwen_image_edit_2511_fp8_e4m3fn.safetensors', workflowFamily: 'qwen',
+    purposes: ['threeView'], available: true, missingModels: [], missingNodes: [], reason: null,
+  },
+  {
+    presetId: 'esrgan_4x', workflowPresetId: '04_esrgan_upscale', displayName: 'ESRGAN 4x',
+    modelName: '4x-ESRGAN.pth', workflowFamily: 'upscale',
+    purposes: ['upscale'], available: true, missingModels: [], missingNodes: [], reason: null,
+  },
+];
 
 export default function App() {
   // DB Records State
@@ -195,6 +261,18 @@ export default function App() {
   const [showComfyPresetSettings, setShowComfyPresetSettings] = useState(false);
   const [savingComfyPresetSettings, setSavingComfyPresetSettings] = useState(false);
   const [templatePresetId, setTemplatePresetId] = useState('sdxl_legacy');
+  const [workflowPresets, setWorkflowPresets] = useState<WorkflowPresetSummary[]>(BUILTIN_WORKFLOW_PRESET_FALLBACKS);
+  const [presetsLoading, setPresetsLoading] = useState(false);
+  const [presetSaveState, setPresetSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [presetSaveMessage, setPresetSaveMessage] = useState('');
+  const [presetImportFiles, setPresetImportFiles] = useState<{ manifest?: File; uiWorkflow?: File; apiWorkflow?: File }>({});
+  const [importingPreset, setImportingPreset] = useState(false);
+  const [regenerateMode, setRegenerateMode] = useState('missing');
+  const [isQueueingBatch, setIsQueueingBatch] = useState(false);
+  const [isExportingBatchReport, setIsExportingBatchReport] = useState(false);
+  const [batchReportPaths, setBatchReportPaths] = useState<string[]>([]);
+  const [shotCharacterModal, setShotCharacterModal] = useState<{ shotIndex: number; selectedIds: string[] } | null>(null);
+  const [shotCharacterFeedback, setShotCharacterFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const activeComfyImportsRef = useRef<Set<string>>(new Set());
   const importedTaskAwaitingRefreshRef = useRef<string | null>(null);
 
@@ -216,6 +294,27 @@ export default function App() {
     url: 'http://127.0.0.1:8001',
     lastError: null
   });
+
+  const batchTasks = React.useMemo(() => {
+    if (!comfyTasks) return [];
+    const latestBatch = [...comfyTasks]
+      .filter((t: any) => t.targetType === 'shot' && t.workflowBatchId)
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    const batchId = latestBatch ? latestBatch.workflowBatchId : null;
+    if (!batchId) return [];
+    return comfyTasks.filter((t: any) => t.workflowBatchId === batchId && t.targetType === 'shot');
+  }, [comfyTasks]);
+  const currentBatchId = React.useMemo(() => batchTasks.length === 0 ? null : batchTasks[0].workflowBatchId, [batchTasks]);
+  const totalCount = batchTasks.length;
+  const succeededCount = React.useMemo(() => batchTasks.filter((t: any) => t.status === 'succeeded').length, [batchTasks]);
+  const failedCount = React.useMemo(() => batchTasks.filter((t: any) => t.status === 'failed').length, [batchTasks]);
+  const skippedCount = React.useMemo(() => batchTasks.filter((t: any) => t.status === 'skipped_missing_avatar').length, [batchTasks]);
+  const pendingCount = React.useMemo(() => batchTasks.filter((t: any) => t.status === 'pending').length, [batchTasks]);
+  const processingTask = React.useMemo(() => batchTasks.find((t: any) => t.status === 'processing'), [batchTasks]);
+  const hasActiveBatch = React.useMemo(() => batchTasks.some((t: any) => t.status === 'pending' || t.status === 'processing'), [batchTasks]);
+  const hasPendingBatchTasks = React.useMemo(() => batchTasks.some((t: any) => t.status === 'pending'), [batchTasks]);
+  const isComfyConnected = comfyRuntime.state === 'running' || comfyRuntime.state === 'external';
+  const hasShots = !!(generatedScript?.newShots && generatedScript.newShots.length > 0);
 
   useEffect(() => {
     let active = true;
@@ -332,15 +431,134 @@ export default function App() {
     setTemplatePresetId((data.preferences || LEGACY_COMFY_PROJECT_PREFERENCES).shotPresetId);
   }, []);
 
+  const loadWorkflowPresets = React.useCallback(async () => {
+    setPresetsLoading(true);
+    try {
+      const response = await fetch('/api/comfyui/presets');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setWorkflowPresets(Array.isArray(data.presets) && data.presets.length ? data.presets : BUILTIN_WORKFLOW_PRESET_FALLBACKS);
+    } catch (error: any) {
+      setWorkflowPresets(BUILTIN_WORKFLOW_PRESET_FALLBACKS);
+      setPresetSaveState('error');
+      setPresetSaveMessage(`正在使用内置预设；后端目录暂不可用：${error.message}`);
+    } finally {
+      setPresetsLoading(false);
+    }
+  }, []);
+
+  const loadDefaultComfyPreferences = React.useCallback(async () => {
+    const response = await fetch('/api/comfyui/default-preferences');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    const preferences = data.preferences || LEGACY_COMFY_PROJECT_PREFERENCES;
+    setComfyProjectPreferences(preferences);
+    setTemplatePresetId(preferences.shotPresetId);
+  }, []);
+
+  useEffect(() => {
+    loadWorkflowPresets();
+  }, [loadWorkflowPresets]);
+
   useEffect(() => {
     if (!generatedScript?.id) {
-      setComfyProjectPreferences(LEGACY_COMFY_PROJECT_PREFERENCES);
       setQwenThreeViewVerified(false);
-      setTemplatePresetId('sdxl_legacy');
+      loadDefaultComfyPreferences().catch(error => {
+        console.error(error);
+        setComfyProjectPreferences(LEGACY_COMFY_PROJECT_PREFERENCES);
+        setTemplatePresetId('sdxl_legacy');
+      });
       return;
     }
     loadComfyProjectPreferences(generatedScript.id).catch(error => console.error(error));
-  }, [generatedScript?.id, loadComfyProjectPreferences]);
+  }, [generatedScript?.id, loadComfyProjectPreferences, loadDefaultComfyPreferences]);
+
+  const saveStoryboardPreset = async (presetId: string) => {
+    const selectedPreset = workflowPresets.find(preset => preset.presetId === presetId);
+    if (!selectedPreset?.available) return;
+    const preferences = { ...comfyProjectPreferences, shotPresetId: presetId };
+    setComfyProjectPreferences(preferences);
+    setTemplatePresetId(presetId);
+    setPresetSaveState('saving');
+    setPresetSaveMessage('');
+    try {
+      const projectId = generatedScriptRef.current?.id;
+      const endpoint = projectId
+        ? `/api/generated-scripts/${projectId}/comfyui-preferences`
+        : '/api/comfyui/default-preferences';
+      const response = await fetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setComfyProjectPreferences(result.preferences);
+      if (result.updatedScript) {
+        generatedScriptRef.current = result.updatedScript;
+        setGeneratedScript(result.updatedScript);
+        setGeneratedScripts(previous => previous.map(item => String(item.id) === String(result.updatedScript.id) ? result.updatedScript : item));
+      }
+      setPresetSaveState('saved');
+      setPresetSaveMessage('默认预设已保存');
+    } catch (error: any) {
+      setPresetSaveState('error');
+      setPresetSaveMessage(error.message || '保存失败');
+    }
+  };
+
+  const saveProjectPresetField = async (key: keyof ComfyProjectPreferences, presetId: string) => {
+    if (!generatedScriptRef.current?.id) return;
+    const preferences = { ...comfyProjectPreferences, [key]: presetId };
+    setComfyProjectPreferences(preferences);
+    setPresetSaveState('saving');
+    try {
+      const response = await fetch(`/api/generated-scripts/${generatedScriptRef.current.id}/comfyui-preferences`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setComfyProjectPreferences(result.preferences);
+      generatedScriptRef.current = result.updatedScript;
+      setGeneratedScript(result.updatedScript);
+      setGeneratedScripts(previous => previous.map(item => String(item.id) === String(result.updatedScript.id) ? result.updatedScript : item));
+      setPresetSaveState('saved');
+      setPresetSaveMessage('角色工作流默认配置已保存');
+    } catch (error: any) {
+      setPresetSaveState('error');
+      setPresetSaveMessage(error.message || '角色预设保存失败');
+      await loadComfyProjectPreferences().catch(() => undefined);
+    }
+  };
+
+  const importLocalWorkflowPreset = async () => {
+    if (!presetImportFiles.manifest || !presetImportFiles.uiWorkflow || !presetImportFiles.apiWorkflow) {
+      setPresetSaveState('error');
+      setPresetSaveMessage('请选择 manifest、UI workflow 和 API workflow 三个文件');
+      return;
+    }
+    setImportingPreset(true);
+    try {
+      const formData = new FormData();
+      formData.append('manifest', presetImportFiles.manifest);
+      formData.append('uiWorkflow', presetImportFiles.uiWorkflow);
+      formData.append('apiWorkflow', presetImportFiles.apiWorkflow);
+      const response = await fetch('/api/comfyui/presets/import', { method: 'POST', body: formData });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setPresetSaveState('saved');
+      setPresetSaveMessage(`已导入本地预设：${result.presetId}`);
+      setPresetImportFiles({});
+      await loadWorkflowPresets();
+    } catch (error: any) {
+      setPresetSaveState('error');
+      setPresetSaveMessage(error.message || '导入失败');
+    } finally {
+      setImportingPreset(false);
+    }
+  };
 
   const saveComfyProjectPreferences = async (recommended = false) => {
     if (!generatedScriptRef.current?.id) return;
@@ -676,14 +894,72 @@ export default function App() {
     try {
       const res = await fetch(`/api/comfyui/tasks/${taskId}/cancel`, { method: 'POST' });
       if (res.ok) {
-        pollComfyTasks();
+        await pollComfyTasks();
+        setShotCharacterFeedback({ kind: 'success', message: '任务已取消' });
+        return true;
       } else {
         const err = await res.json();
-        alert(err.error || "取消失败");
+        setShotCharacterFeedback({ kind: 'error', message: err.error || '取消失败' });
       }
     } catch (e: any) {
-      alert("网络错误：" + e.message);
+      setShotCharacterFeedback({ kind: 'error', message: `取消失败：${e.message}` });
     }
+    return false;
+  };
+
+
+  const handleBatchGenerate = async () => {
+    if (!generatedScript) return;
+    if (!isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch) return;
+    setIsQueueingBatch(true);
+    try {
+      const preflightRes = await fetch('/api/comfyui/shots/generate-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: generatedScript.id, regenerateMode })
+      });
+      if (!preflightRes.ok) throw new Error((await preflightRes.json()).error || '批量预检失败');
+      const preview = await preflightRes.json();
+      if (!preview.preflight) {
+        if (preview.message) alert(preview.message);
+        return;
+      }
+      const p = preview.preflight;
+      const estimateMinutes = Math.max(1, Math.ceil(p.estimatedSeconds / 60));
+      const estimate60Minutes = Math.max(1, Math.ceil(p.estimated60ShotSeconds / 60));
+      if (!window.confirm(`批量生成预检\n总数：${p.total}\n角色一致性（PuLID）：${p.pulid}\n缺 Avatar 跳过：${p.missingAvatar}\n普通 Klein：${p.klein}\n预计本批次：约 ${estimateMinutes} 分钟\n60 镜参考耗时：约 ${estimate60Minutes} 分钟\n存在 pending 旧任务：${p.hasPendingOldTasks ? `是（${p.pendingOldTaskCount}）` : '否'}\n疑似未绑定角色文本：${p.hasSuspiciousUnboundCharacterText ? `是（${p.suspiciousUnboundShots.length}）` : '否'}\n\n确认开始？`)) return;
+      if (p.requiresLargeBatchConfirmation && !window.confirm(`本批次包含 ${p.total} 镜，超过 30 镜。生成时间较长，是否再次确认开始？`)) return;
+      const res = await fetch('/api/comfyui/shots/generate-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: generatedScript.id, regenerateMode, confirmed: true })
+      });
+      if (res.ok) {
+        const result = await res.json();
+        if (result.count === 0 && result.message) alert(result.message);
+        await pollComfyTasks();
+      } else {
+        const err = await res.json();
+        throw new Error(err.error || '批量提交任务失败');
+      }
+    } catch (e: any) {
+      alert(e.message || '批量提交任务失败');
+    } finally {
+      setIsQueueingBatch(false);
+    }
+  };
+
+  const handleStopBatchGeneration = async () => {
+    if (!generatedScript || !currentBatchId) return;
+    try {
+      const res = await fetch('/api/comfyui/shots/stop-generation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: generatedScript.id, workflowBatchId: currentBatchId })
+      });
+      if (res.ok) { await pollComfyTasks(); }
+      else { const err = await res.json(); alert(err.error || '停止生成失败'); }
+    } catch (e: any) { alert('停止生成失败: ' + e.message); }
   };
 
   const getShotTask = React.useMemo(() => {
@@ -714,7 +990,30 @@ export default function App() {
 
   const comfyTaskPresetLabel = (task: any) => {
     const presetId = task?.workflowPresetId || 'sdxl_legacy';
-    return WORKFLOW_PRESET_LABELS[presetId] || presetId;
+    const label = WORKFLOW_PRESET_LABELS[presetId] || workflowPresets.find(preset => preset.workflowPresetId === presetId || preset.presetId === presetId)?.displayName || presetId;
+    return task?.model ? `${label} · ${task.model}` : label;
+  };
+
+  const handleExportBatchReport = async () => {
+    if (!currentBatchId || isExportingBatchReport) return;
+    setIsExportingBatchReport(true);
+    try {
+      const res = await fetch(`/api/comfyui/shot-batches/${currentBatchId}/report`, { method: 'POST' });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || '导出验收报告失败');
+      setBatchReportPaths(result.paths || [result.reportJsonUrl, result.reportHtmlUrl, result.contactSheetUrl]);
+      window.open(result.reportHtmlUrl, '_blank', 'noopener,noreferrer');
+      const link = document.createElement('a');
+      link.href = result.reportJsonUrl;
+      link.download = `batch-${currentBatchId}-report.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error: any) {
+      alert(error.message || '导出验收报告失败');
+    } finally {
+      setIsExportingBatchReport(false);
+    }
   };
 
   const isLegacyComfyTask = (task: any) => !task?.workflowPresetId || task.workflowPresetId === 'sdxl_legacy';
@@ -1272,11 +1571,14 @@ export default function App() {
 
   const renderComfyTaskOverlay = (task: any) => {
     if (!task) return null;
+    if (task.status === 'skipped_missing_avatar') {
+      return <div className="absolute inset-0 bg-amber-950/90 border border-amber-700 rounded-lg flex items-center justify-center p-1 z-10 text-center"><span className="text-[9px] text-amber-200 font-medium" title={task.error}>缺 Avatar 跳过</span></div>;
+    }
     if (task.status === 'pending') {
       return (
         <div className="absolute inset-0 bg-slate-950/85 border border-slate-800 rounded-lg flex flex-col items-center justify-center p-1 z-10 text-center">
           <Clock className="w-4 h-4 text-amber-500 animate-pulse mb-0.5" />
-          <span className="text-[9px] text-amber-405 font-medium scale-90">排队中</span>
+          <span className="text-[9px] text-amber-405 font-medium scale-90">等待提交</span>
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); handleCancelComfyTask(task.id); }}
@@ -1288,28 +1590,39 @@ export default function App() {
       );
     }
     if (task.status === 'processing') {
+      const statusLabel = task.stateDetail === 'submitting'
+        ? '正在提交 ComfyUI'
+        : task.stateDetail === 'queued' && task.queuePosition
+          ? `已提交 ComfyUI，排队第 ${task.queuePosition} 位`
+          : '生成中';
       return (
         <div className="absolute inset-0 bg-slate-950/85 border border-slate-800 rounded-lg flex flex-col items-center justify-center p-1 z-10 text-center">
           <Loader2 className="w-4 h-4 text-blue-400 animate-spin mb-0.5" />
-          <span className="text-[9px] text-blue-300 font-medium scale-90">生成中</span>
+          <span className="text-[9px] text-blue-300 font-medium scale-90">{statusLabel}</span>
+          <button type="button" onClick={(e) => { e.stopPropagation(); handleCancelComfyTask(task.id); }} className="mt-1 px-1.5 py-0.5 bg-red-950 hover:bg-red-900 border border-red-900 text-red-200 rounded text-[8px]">取消</button>
         </div>
       );
     }
     if (task.status === 'failed') {
+      const failedMessage = task.errorMessage || task.error || '未知错误';
+      const isTimeout = task.stateDetail === 'timeout' || /timed out|超时/i.test(failedMessage);
       return (
         <div className="absolute inset-0 bg-slate-950/90 border border-slate-800 rounded-lg flex flex-col items-center justify-center p-1 z-10 text-center">
-          <span className="text-[8px] text-red-400 font-medium line-clamp-1 mb-0.5 scale-90" title={task.errorMsg}>
-            失败
+          <span className="text-[8px] text-red-400 font-medium line-clamp-2 mb-0.5 scale-90" title={failedMessage}>
+            {isTimeout ? '超时' : `失败：${failedMessage}`}
           </span>
-          <button
+          {!task.syntheticBatchItem && <button
             type="button"
             onClick={(e) => { e.stopPropagation(); handleRetryComfyTask(task.id); }}
             className="px-1.5 py-0.5 bg-blue-950 hover:bg-blue-900 border border-blue-900 text-blue-200 rounded text-[8px] cursor-pointer font-semibold transition-colors"
           >
             重试
-          </button>
+          </button>}
         </div>
       );
+    }
+    if (task.status === 'cancelled') {
+      return <div className="absolute inset-0 bg-slate-950/75 border border-slate-700 rounded-lg flex items-center justify-center z-10"><span className="text-[9px] text-slate-300">已取消</span></div>;
     }
     return null;
   };
@@ -1674,12 +1987,14 @@ export default function App() {
     }
   };
 
-  const handleGenerateShotImage = async (shot: Shot, idx: number) => {
-    if (imagePlatform === 'comfyui' && !checkComfyRuntimeBeforeAction()) return;
-    if (!generatedScript) return;
+  const handleGenerateShotImage = async (shot: Shot, idx: number, scriptOverride?: any) => {
+    const activeScript = scriptOverride || generatedScript;
+    if (!activeScript) return;
 
     const imagePrompt = shot.description;
     const negativePrompt = "low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark";
+    const matchedCharacters = (activeScript.newCharacters || []).filter((character: Character) => (shot.matchedCharacterIds || []).includes(String(character.id || '')));
+    const hasCharacterReference = matchedCharacters.length > 0 && matchedCharacters.every((character: Character) => !!(character.avatarImageUrl || character.avatarUrl));
 
     if (imagePlatform === 'comfyui') {
       try {
@@ -1688,14 +2003,15 @@ export default function App() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            prompt: imagePrompt,
+           body: JSON.stringify({
+             presetId: hasCharacterReference ? comfyProjectPreferences.identityPresetId : comfyProjectPreferences.shotPresetId,
+             prompt: imagePrompt,
             negativePrompt,
             isCharacter: false,
             style: getStyleEnglish(shot.style || "写实"),
             platform: imagePlatform,
             model: comfyParams.model || undefined,
-            projectId: generatedScript.id,
+            projectId: activeScript.id,
             targetType: 'shot',
             targetId: shot.id,
             viewType: 'main',
@@ -1704,11 +2020,23 @@ export default function App() {
         });
         if (!res.ok) {
           const err = await res.json();
+          if (res.status === 409 && err.existingTaskId) {
+            const shouldReplace = window.confirm(`已有任务进行中（${err.existingTaskId}）。是否取消当前任务后重新生成？`);
+            if (shouldReplace && await handleCancelComfyTask(err.existingTaskId)) {
+              await handleGenerateShotImage(shot, idx, activeScript);
+            } else if (!shouldReplace) {
+              setShotCharacterFeedback({ kind: 'error', message: `已有任务进行中：${err.existingTaskId}` });
+            }
+            return;
+          }
           throw new Error(err.error || "生成图片任务提交失败");
         }
-        pollComfyTasks();
+        const taskResult = await res.json();
+        console.log('[RegenerateWithReference:Created]', { projectId: activeScript.id, shotId: shot.id, matchedCharacterIds: shot.matchedCharacterIds || [], taskId: taskResult.taskId, workflowPresetId: taskResult.workflowPresetId, characterReferenceImageUrl: taskResult.characterReferenceImageUrl });
+        setShotCharacterFeedback({ kind: 'success', message: `任务已创建：${taskResult.taskId}` });
+        await pollComfyTasks();
       } catch (err: any) {
-        alert(err.message || "提交任务失败");
+        setShotCharacterFeedback({ kind: 'error', message: err.message || '提交任务失败' });
       }
       return;
     }
@@ -1836,9 +2164,18 @@ export default function App() {
 
     // Update local state
     const updatedShots = [...generatedScript.newShots];
+    const inferredCharacterIds = field === 'description'
+      ? inferShotCharacterIds(value, generatedScript.newCharacters || [])
+      : [];
     updatedShots[idx] = {
       ...updatedShots[idx],
-      [field]: value
+      [field]: value,
+      ...(field === 'description' ? {
+        matchedCharacterIds: [...new Set([
+          ...(updatedShots[idx].matchedCharacterIds || []),
+          ...inferredCharacterIds,
+        ])],
+      } : {}),
     };
 
     const updatedScript = { ...generatedScript, newShots: updatedShots };
@@ -2335,7 +2672,7 @@ export default function App() {
       if (putRes.ok) {
         const updatedChars = generatedScript.newCharacters.map((c: any) => {
           if (c.name === char.name) {
-            return { ...c, avatarUrl: url };
+            return { ...c, avatarUrl: url, avatarImageUrl: url, sourceTaskId: null, hasReference: true };
           }
           return c;
         });
@@ -2351,9 +2688,47 @@ export default function App() {
     }
   };
 
+  const handleUploadCharacterAvatar = (char: Character) => {
+    if (!generatedScript) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const formData = new FormData();
+        formData.append('video', file);
+        const uploadResponse = await fetch('/api/upload', { method: 'POST', body: formData });
+        const uploadResult = await uploadResponse.json().catch(() => ({}));
+        if (!uploadResponse.ok || !uploadResult.url) throw new Error(uploadResult.error || '上传 Avatar 失败');
+        const updatedCharacters = generatedScript.newCharacters.map((item: Character) => String(item.id) === String(char.id)
+          ? { ...item, avatarUrl: uploadResult.url, avatarImageUrl: uploadResult.url, sourceTaskId: null, hasReference: true }
+          : item);
+        const response = await fetch(`/api/generated-scripts/${generatedScript.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newCharacters: updatedCharacters }),
+        });
+        if (!response.ok) throw new Error('保存 Avatar 失败');
+        const updatedScript = { ...generatedScript, newCharacters: updatedCharacters };
+        generatedScriptRef.current = updatedScript;
+        setGeneratedScript(updatedScript);
+        setGeneratedScripts(previous => previous.map(item => item.id === generatedScript.id ? updatedScript : item));
+      } catch (error: any) {
+        alert(error.message || '上传 Avatar 失败');
+      }
+    };
+    input.click();
+  };
+
   const handleGenerateThreeViews = async (char: Character) => {
     if (imagePlatform === 'comfyui' && !checkComfyRuntimeBeforeAction()) return;
     if (!generatedScript) return;
+    if (!char.avatarUrl) {
+      alert('请先生成角色母版；三视图必须使用当前 avatar 作为参考图。');
+      return;
+    }
     setIsGeneratingThreeViews(true);
 
     try {
@@ -2392,14 +2767,15 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ...(comfyProjectPreferences.threeViewPresetId === 'qwen_2511_three_views'
-              ? { presetRole: 'threeView' }
-              : { presetId: '03_qwen_2511_three_views' }),
+            presetId: effectiveThreeViewPresetId,
             platform: imagePlatform,
             projectId: generatedScript.id,
             targetType: 'character',
             targetId: char.id,
-            characterName: char.name
+            viewType: 'front',
+            characterName: char.name,
+            sourceImageUrl: char.avatarUrl,
+            sourceTaskId: char.avatarGeneration?.taskId || getLatestSucceededTask(char.id || '', 'avatar')?.id || null,
           })
         });
         if (!res.ok) {
@@ -2463,13 +2839,13 @@ export default function App() {
       if (putRes.ok) {
         const updatedChars = generatedScript.newCharacters.map((c: any) => {
           if (c.name === char.name) {
-            return { ...c, views: viewsObj, avatarUrl: frontUrl };
+            return { ...c, views: viewsObj };
           }
           return c;
         });
         const updatedScript = { ...generatedScript, newCharacters: updatedChars };
         setGeneratedScript(updatedScript);
-        setActiveDrawerChar(prev => prev && prev.name === char.name ? { ...prev, views: viewsObj, avatarUrl: frontUrl } : prev);
+        setActiveDrawerChar(prev => prev && prev.name === char.name ? { ...prev, views: viewsObj } : prev);
         setGeneratedScripts(prev => prev.map(s => s.id === generatedScript.id ? updatedScript : s));
         console.log(`[Three-Views] Completed successfully!`);
       } else {
@@ -2485,6 +2861,10 @@ export default function App() {
 
   const handleGenerateSingleView = async (char: Character, viewType: 'front' | 'side' | 'back') => {
     if (!generatedScript) return;
+    if (!char.avatarUrl) {
+      alert('请先生成角色母版；单独生成视图也必须使用 avatar 作为参考图。');
+      return;
+    }
 
     // 1. First translate the character description into English (consistent base)
     console.log(`[Three-Views] Translating character description for single view "${viewType}"...`);
@@ -2528,6 +2908,7 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            presetId: effectiveThreeViewPresetId,
             prompt,
             isCharacter: true,
             skipTranslation: true,
@@ -2536,7 +2917,10 @@ export default function App() {
             targetType: 'character',
             targetId: char.id,
             viewType,
-            characterName: char.name
+            characterName: char.name,
+            sourceImageUrl: char.avatarUrl,
+            sourceTaskId: char.avatarGeneration?.taskId || getLatestSucceededTask(char.id || '', 'avatar')?.id || null,
+            sequentialThreeView: true,
           })
         });
         if (!res.ok) {
@@ -2769,10 +3153,131 @@ export default function App() {
     );
   };
 
+  const handleShotCharacterToggle = async (idx: number, characterId: string) => {
+    if (!generatedScript) return;
+    const updatedShots = [...generatedScript.newShots];
+    const currentIds = updatedShots[idx].matchedCharacterIds || [];
+    const matchedCharacterIds = currentIds.includes(characterId)
+      ? currentIds.filter((id: string) => id !== characterId)
+      : [...currentIds, characterId];
+    updatedShots[idx] = { ...updatedShots[idx], matchedCharacterIds };
+
+    const updatedScript = { ...generatedScript, newShots: updatedShots };
+    setGeneratedScript(updatedScript);
+    setGeneratedScripts(prev => prev.map(s => s.id === generatedScript.id ? updatedScript : s));
+
+    try {
+      const response = await fetch(`/api/generated-scripts/${generatedScript.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newShots: updatedShots }),
+      });
+      if (!response.ok) throw new Error('保存角色绑定失败');
+    } catch (error) {
+      console.error('[Shot Character Binding] Save failed:', error);
+    }
+  };
+
+  const handleBindShotCharacter = (idx: number) => {
+    try {
+      if (!generatedScript) throw new Error('当前没有打开的项目');
+      if (!(generatedScript.newCharacters || []).length) throw new Error('当前项目没有可绑定角色，请先创建角色');
+      const shot = generatedScript.newShots?.[idx];
+      if (!shot) throw new Error('未找到本镜数据');
+      setShotCharacterFeedback(null);
+      setShotCharacterModal({ shotIndex: idx, selectedIds: [...(shot.matchedCharacterIds || [])] });
+    } catch (error: any) {
+      setShotCharacterFeedback({ kind: 'error', message: error.message || '无法打开角色选择面板' });
+    }
+  };
+
+  const handleModalCharacterToggle = (characterId: string) => {
+    setShotCharacterModal(current => current ? {
+      ...current,
+      selectedIds: current.selectedIds.includes(characterId)
+        ? current.selectedIds.filter(id => id !== characterId)
+        : [...current.selectedIds, characterId],
+    } : current);
+  };
+
+  const handleSaveShotCharacters = async (regenerateAfterSave = false) => {
+    if (!generatedScript || !shotCharacterModal) {
+      setShotCharacterFeedback({ kind: 'error', message: '角色选择状态已失效，请重新打开' });
+      return;
+    }
+    try {
+      const updatedShots = [...generatedScript.newShots];
+      updatedShots[shotCharacterModal.shotIndex] = {
+        ...updatedShots[shotCharacterModal.shotIndex],
+        matchedCharacterIds: [...shotCharacterModal.selectedIds],
+      };
+      const projectId = String(generatedScript.id);
+      const shot = updatedShots[shotCharacterModal.shotIndex];
+      const shotId = String(shot?.id || '');
+      if (!shotId) throw new Error(`本镜缺少 shotId（projectId=${projectId}）`);
+      const requestUrl = `/api/generated-scripts/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/matched-characters`;
+      const requestBody = { matchedCharacterIds: [...shotCharacterModal.selectedIds] };
+      const response = await fetch(requestUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+      const responseText = await response.text();
+      let result: any = {};
+      try { result = responseText ? JSON.parse(responseText) : {}; } catch { result = { rawResponse: responseText }; }
+      if (!response.ok) {
+        console.error('[Shot Character Binding] Request failed', { url: requestUrl, method: 'PUT', body: requestBody, status: response.status, response: result, rawResponse: responseText, projectId, shotId });
+        const staleBackendHint = response.status === 404 && responseText.includes('Cannot PUT') ? '当前 Express 后端未加载新接口，请重启后端服务。' : '';
+        throw new Error(`${result.error || staleBackendHint || '保存角色绑定失败'}（HTTP ${response.status}，projectId=${projectId}，shotId=${shotId}）`);
+      }
+      updatedShots[shotCharacterModal.shotIndex] = { ...shot, matchedCharacterIds: result.matchedCharacterIds || requestBody.matchedCharacterIds };
+      const updatedScript = { ...generatedScript, newShots: updatedShots };
+      generatedScriptRef.current = updatedScript;
+      setGeneratedScript(updatedScript);
+      setGeneratedScripts(previous => previous.map(item => item.id === generatedScript.id ? updatedScript : item));
+      setShotCharacterModal(null);
+      if (regenerateAfterSave) {
+        const savedShot = updatedShots[shotCharacterModal.shotIndex];
+        const selectedCharacters = (updatedScript.newCharacters || []).filter((character: Character) => savedShot.matchedCharacterIds.includes(String(character.id || '')));
+        const missingAvatarNames = selectedCharacters.filter((character: Character) => !(character.avatarImageUrl || character.avatarUrl)).map((character: Character) => character.name);
+        if (!selectedCharacters.length) {
+          setShotCharacterFeedback({ kind: 'error', message: '绑定已保存；请先选择至少一个角色再重新生成' });
+        } else if (missingAvatarNames.length) {
+          setShotCharacterFeedback({ kind: 'error', message: `绑定已保存；请先生成或上传 Avatar：${missingAvatarNames.join('、')}` });
+        } else {
+          setShotCharacterFeedback({ kind: 'success', message: '本镜角色已更新，正在用角色参考图重新生成' });
+          await handleGenerateShotImage(savedShot, shotCharacterModal.shotIndex, updatedScript);
+        }
+      } else {
+        setShotCharacterFeedback({ kind: 'success', message: '本镜角色已更新' });
+      }
+      window.setTimeout(() => setShotCharacterFeedback(null), 3000);
+    } catch (error: any) {
+      setShotCharacterFeedback({ kind: 'error', message: error.message || '保存角色绑定失败' });
+    }
+  };
+
+  const storyboardPresets = workflowPresets.filter(preset => preset.purposes.includes('storyboard'));
+  const selectedStoryboardPreset = workflowPresets.find(preset => preset.presetId === comfyProjectPreferences.shotPresetId);
+  const characterMasterPresets = workflowPresets.filter(preset => preset.purposes.includes('characterMaster'));
+  const threeViewPresets = workflowPresets.filter(preset => preset.purposes.includes('threeView'));
+  const selectedCharacterMasterPreset = workflowPresets.find(preset => preset.presetId === comfyProjectPreferences.characterMasterPresetId);
+  const effectiveThreeViewPresetId = threeViewPresets.some(preset => preset.presetId === comfyProjectPreferences.threeViewPresetId)
+    ? comfyProjectPreferences.threeViewPresetId
+    : (threeViewPresets[0]?.presetId || 'qwen_2511_three_views');
+  const selectedThreeViewPreset = workflowPresets.find(preset => preset.presetId === effectiveThreeViewPresetId);
+  const presetPurposeLabels: Record<WorkflowPresetSummary['purposes'][number], string> = {
+    storyboard: '分镜生成',
+    characterMaster: '角色母版',
+    identity: '身份锁定',
+    threeView: '三视图',
+    upscale: '放大',
+  };
+
   return (
-    <div className="bg-slate-950 text-slate-200 min-h-screen flex flex-col font-sans select-none overflow-x-hidden antialiased">
+    <div className="admin-shell bg-slate-950 text-slate-200 min-h-screen flex flex-col font-sans select-none overflow-x-hidden antialiased">
       {/* Top Header */}
-      <header className="h-14 border-b border-slate-800/80 flex items-center justify-between px-6 bg-slate-900/60 backdrop-blur-md sticky top-0 z-40">
+      <header className="admin-topbar h-14 border-b border-slate-800/80 flex items-center justify-between px-6 bg-slate-900/60 backdrop-blur-md sticky top-0 z-40">
         <div className="flex items-center gap-4">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white shadow-md shadow-blue-900/20">
             <Film className="w-4 h-4 text-white" />
@@ -2803,10 +3308,10 @@ export default function App() {
       </header>
 
       {/* Main Workspace Area (3 columns: Library Sidebar, Player Column, Tabular Details) */}
-      <main className="flex-1 flex flex-col md:flex-row overflow-hidden w-full mx-auto">
+      <main className="admin-layout flex-1 flex flex-col md:flex-row overflow-hidden w-full mx-auto">
 
         {/* Column 1: Video Library & File Upload (width 320px) */}
-        <aside className="w-full md:w-80 border-r border-slate-800/60 bg-slate-950/40 flex flex-col shrink-0 overflow-y-auto custom-scrollbar">
+        <aside className="admin-navigation w-full md:w-80 border-r border-slate-800/60 bg-slate-950/40 flex flex-col shrink-0 overflow-y-auto custom-scrollbar">
           {/* Header */}
           <div className="p-4 border-b border-slate-800/80 flex items-center gap-2 bg-slate-900/10">
             <Database className="w-4 h-4 text-blue-500" />
@@ -3128,7 +3633,7 @@ export default function App() {
 
         {/* Column 2: Player & Active Shot (Desktop 620px or flex-1) */}
         {!(activeTab === "generator" && generatedScript) && (
-          <section className="w-full lg:w-[640px] xl:w-[700px] flex flex-col border-r border-slate-800/60 bg-slate-950/20">
+          <section className="admin-workspace w-full lg:w-[640px] xl:w-[700px] flex flex-col border-r border-slate-800/60 bg-slate-950/20">
 
             {/* Cinema Box (Dynamic HTML5 Video or Slideshow) */}
             <div className="aspect-video lg:h-[390px] w-full bg-slate-950 relative flex items-center justify-center border-b border-slate-800/80 overflow-hidden group">
@@ -3339,11 +3844,11 @@ export default function App() {
         )}
 
         {/* Column 3: Tabular Narrative Analysis & Character Dossier */}
-        <section className="flex-1 flex flex-col bg-slate-900/30 overflow-y-auto custom-scrollbar">
+        <section className="admin-inspector flex-1 flex flex-col bg-slate-900/30 overflow-y-auto custom-scrollbar">
 
           {/* Tabs header */}
-          <div className="h-12 border-b border-slate-800/80 bg-slate-900/50 flex items-center justify-between px-6 sticky top-0 z-10 backdrop-blur">
-            <div className="flex gap-4">
+          <div className="admin-inspector-toolbar min-h-12 border-b border-slate-800/80 bg-slate-900/50 flex items-center justify-between px-6 sticky top-0 z-10 backdrop-blur">
+            <div className="right-tabs" role="tablist" aria-label="分析功能">
               <button
                 onClick={() => setActiveTab("shots")}
                 className={`h-12 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors cursor-pointer ${
@@ -3386,7 +3891,21 @@ export default function App() {
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
+            <label className="right-tabs-dropdown">
+              <span>当前功能</span>
+              <select
+                value={activeTab}
+                onChange={(event) => setActiveTab(event.target.value as typeof activeTab)}
+                aria-label="选择分析功能"
+              >
+                <option value="shots">分镜脉络</option>
+                <option value="characters">人物画像</option>
+                <option value="narrative">叙事与爽点</option>
+                <option value="generator">创意生成</option>
+              </select>
+            </label>
+
+            <div className="inspector-actions flex items-center gap-2">
               <select
                 value={imagePlatform}
                 onChange={(event) => setImagePlatform(event.target.value as 'pollinations' | 'kling' | 'comfyui')}
@@ -3729,6 +4248,98 @@ export default function App() {
 
             {activeTab === "generator" && (
               <div className="space-y-6">
+                <section className="workflow-preset-panel border border-slate-800 bg-slate-950/45 p-4 space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 text-xs font-bold text-slate-100">
+                        <Cpu className="h-4 w-4 text-blue-400" />
+                        模型 / 工作流预设
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-500">用于创意分镜的新生成任务；已有任务继续保留创建时的模型快照。</p>
+                    </div>
+                    <span className={`rounded border px-2 py-1 text-[10px] font-semibold ${
+                      presetSaveState === 'saved' ? 'border-emerald-800 text-emerald-300' :
+                      presetSaveState === 'error' ? 'border-rose-800 text-rose-300' :
+                      'border-slate-700 text-slate-400'
+                    }`}>
+                      {presetSaveState === 'saving' ? '保存中…' : presetSaveMessage || (generatedScript ? '项目默认配置' : '新项目默认配置')}
+                    </span>
+                  </div>
+
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(14rem,0.9fr)]">
+                    <label className="space-y-1.5">
+                      <span className="block text-[10px] font-bold text-slate-400">创意分镜预设</span>
+                      <select
+                        value={comfyProjectPreferences.shotPresetId}
+                        onChange={(event) => saveStoryboardPreset(event.target.value)}
+                        disabled={presetsLoading || presetSaveState === 'saving'}
+                        className="w-full border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none focus:border-blue-500 disabled:opacity-60"
+                      >
+                        {storyboardPresets.map(preset => (
+                          <option key={preset.presetId} value={preset.presetId} disabled={!preset.available}>
+                            {preset.displayName}{preset.available ? '' : `（不可用：${preset.reason || '环境不完整'}）`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2 border border-slate-800 bg-slate-900/60 p-3 text-[10px]">
+                      <span className="text-slate-500">当前模型/预设</span>
+                      <strong className="truncate text-right text-slate-100" title={selectedStoryboardPreset?.displayName}>{selectedStoryboardPreset?.displayName || '读取中…'}</strong>
+                      <span className="text-slate-500">模型名称</span>
+                      <span className="truncate text-right text-blue-300" title={selectedStoryboardPreset?.modelName}>{selectedStoryboardPreset?.modelName || '—'}</span>
+                      <span className="text-slate-500">工作流类型</span>
+                      <span className="text-right text-slate-300">{selectedStoryboardPreset?.workflowFamily || '—'}</span>
+                      <span className="text-slate-500">用途</span>
+                      <span className="text-right text-slate-300">{selectedStoryboardPreset?.purposes.map(purpose => presetPurposeLabels[purpose]).join(' / ') || '—'}</span>
+                      <span className="text-slate-500">presetId</span>
+                      <code className="truncate text-right text-slate-400" title={selectedStoryboardPreset?.presetId}>{selectedStoryboardPreset?.presetId || '—'}</code>
+                    </div>
+                  </div>
+
+                  {selectedStoryboardPreset && !selectedStoryboardPreset.available && (
+                    <div className="border border-rose-900/60 bg-rose-950/25 p-2.5 text-[10px] text-rose-300">
+                      当前预设不可用：{selectedStoryboardPreset.reason || '本地模型或节点不完整'}
+                    </div>
+                  )}
+
+                  <details className="border-t border-slate-800 pt-3">
+                    <summary className="cursor-pointer text-[10px] font-semibold text-slate-400 hover:text-slate-200">查看全部预设 / 添加本地工作流预设</summary>
+                    <div className="mt-3 space-y-3">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {workflowPresets.map(preset => (
+                          <div key={preset.presetId} className="border border-slate-800 bg-slate-900/50 p-3 text-[10px]">
+                            <div className="flex items-center justify-between gap-2">
+                              <strong className="truncate text-slate-200">{preset.displayName}</strong>
+                              <span className={preset.available ? 'text-emerald-400' : 'text-rose-400'}>{preset.available ? '可用' : '不可用'}</span>
+                            </div>
+                            <p className="mt-1 truncate font-mono text-slate-500" title={preset.presetId}>{preset.presetId}</p>
+                            <p className="mt-1 text-slate-400">{preset.modelName} · {preset.workflowFamily}</p>
+                            <p className="mt-1 text-slate-500">{preset.purposes.map(purpose => presetPurposeLabels[purpose]).join(' / ')}</p>
+                            {!preset.available && <p className="mt-1 text-rose-400">{preset.reason}</p>}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-2 border border-dashed border-slate-700 p-3 sm:grid-cols-3">
+                        <label className="text-[10px] text-slate-400">Manifest
+                          <input type="file" accept=".json,application/json" onChange={event => setPresetImportFiles(previous => ({ ...previous, manifest: event.target.files?.[0] }))} className="mt-1 block w-full text-[9px]" />
+                        </label>
+                        <label className="text-[10px] text-slate-400">UI workflow
+                          <input type="file" accept=".json,application/json" onChange={event => setPresetImportFiles(previous => ({ ...previous, uiWorkflow: event.target.files?.[0] }))} className="mt-1 block w-full text-[9px]" />
+                        </label>
+                        <label className="text-[10px] text-slate-400">API workflow
+                          <input type="file" accept=".json,application/json" onChange={event => setPresetImportFiles(previous => ({ ...previous, apiWorkflow: event.target.files?.[0] }))} className="mt-1 block w-full text-[9px]" />
+                        </label>
+                        <button type="button" onClick={importLocalWorkflowPreset} disabled={importingPreset} className="sm:col-span-3 flex items-center justify-center gap-2 border border-slate-700 bg-slate-800 py-2 text-[10px] font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50">
+                          {importingPreset ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                          导入并严格校验三文件（不自动猜节点）
+                        </button>
+                      </div>
+                    </div>
+                  </details>
+                </section>
+
                 {/* Script writer Form */}
                 {generatedScript === null && !isGeneratingScript && (
                   <div className="space-y-4">
@@ -3962,17 +4573,72 @@ export default function App() {
 
                     {/* BOTTOM SECTION: Shots Table */}
                     <div className="space-y-3">
-                      <div className="flex justify-between items-center mb-1">
-                        <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center">
-                          <Film className="w-4 h-4 mr-1.5 text-blue-400" />
-                          全新分镜大纲脚本 (全宽表格)
-                        </h4>
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-2 bg-slate-900/30 p-3 rounded-xl border border-slate-800/80">
+                        <div className="flex flex-wrap items-center gap-4">
+                          <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center">
+                            <Film className="w-4 h-4 mr-1.5 text-blue-400" />
+                            全新分镜大纲脚本
+                          </h4>
+                          {imagePlatform === 'comfyui' && (
+                            <div className="flex flex-wrap items-center gap-2 border-l border-slate-800 pl-4">
+                              <select
+                                value={regenerateMode}
+                                onChange={(e) => setRegenerateMode(e.target.value as 'missing' | 'failed' | 'all')}
+                                disabled={isQueueingBatch || hasActiveBatch}
+                                className="bg-slate-950 text-slate-300 border border-slate-800 rounded px-2 py-1 text-[11px] outline-none focus:border-blue-500"
+                              >
+                                <option value="missing">只生成缺失</option>
+                                <option value="failed">只重试失败</option>
+                                <option value="all">全部生成新版本</option>
+                              </select>
+                              <button
+                                type="button"
+                                onClick={handleBatchGenerate}
+                                disabled={!isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch}
+                                title={!isComfyConnected ? '请先启动 ComfyUI' : '批量生成分镜'}
+                                className={`px-3 py-1 rounded text-[11px] font-semibold transition-all ${!isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-900/25 border border-blue-500/20 cursor-pointer'}`}
+                              >
+                                {isQueueingBatch ? '正在入队...' : '一键生成所有分镜'}
+                              </button>
+                              {hasPendingBatchTasks && (
+                                <button
+                                  type="button"
+                                  onClick={handleStopBatchGeneration}
+                                  className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded border border-rose-500/20 text-[11px] font-semibold cursor-pointer transition-all"
+                                >
+                                  停止后续生成
+                                </button>
+                              )}
+                              {currentBatchId && batchTasks.length > 0 && !hasActiveBatch && (
+                                <button
+                                  type="button"
+                                  onClick={handleExportBatchReport}
+                                  disabled={isExportingBatchReport}
+                                  className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded border border-emerald-600/30 text-[11px] font-semibold cursor-pointer transition-all"
+                                >
+                                  {isExportingBatchReport ? '正在导出...' : '导出验收报告'}
+                                </button>
+                              )}
+                              {currentBatchId && batchTasks.length > 0 && (
+                                <div className="flex items-center gap-3 bg-slate-950/60 px-3 py-1 rounded border border-slate-800/80 text-[10px] text-slate-400 font-mono">
+                                  <span>已完成: <strong className="text-white">{succeededCount}</strong>/{totalCount}</span>
+                                  <span>排队: <strong className="text-amber-400">{pendingCount}</strong></span>
+                                  {processingTask && <span>生成中: <strong className="text-blue-400">第 {(processingTask.shotIndex ?? 0) + 1} 镜</strong></span>}
+                                  <span>失败: <strong className="text-rose-400">{failedCount}</strong></span>
+                                  <span>跳过: <strong className="text-amber-400">{skippedCount}</strong></span>
+                                </div>
+                              )}
+                              {batchReportPaths.length > 0 && (
+                                <div className="basis-full mt-1 text-[9px] text-emerald-300 font-mono break-all">
+                                  {batchReportPaths.map(reportPath => <div key={reportPath}>{reportPath}</div>)}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                         <button
                           type="button"
-                          onClick={() => {
-                            setShowAnimaticModal(true);
-                            fetchBgmList();
-                          }}
+                          onClick={() => { setShowAnimaticModal(true); fetchBgmList(); }}
                           className="px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1.5 shadow-md cursor-pointer transition-all hover:shadow-indigo-900/30"
                         >
                           <Film className="w-3.5 h-3.5" />
@@ -3995,6 +4661,15 @@ export default function App() {
                             {generatedScript.newShots.map((shot: Shot, idx: number) => {
                               const isGenerating = generatingShotIndex === idx;
                               const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
+                              const shotTask = getShotTask(shot.id || '');
+                              const generationModeLabel = shotTask?.status === 'skipped_missing_avatar' ? '缺 Avatar 跳过'
+                                : shotTask?.status === 'failed' ? '生成失败'
+                                  : shotTask?.workflowPresetId === '02_klein_pulid_identity' ? '角色一致性'
+                                    : shotTask ? '普通生成' : null;
+                              const matchedShotCharacters = (generatedScript.newCharacters || []).filter((character: Character) => (shot.matchedCharacterIds || []).includes(String(character.id || '')));
+                              const missingReferenceCharacters = matchedShotCharacters.filter((character: Character) => !(character.avatarImageUrl || character.avatarUrl));
+                              const actionableCharacter = missingReferenceCharacters[0] || matchedShotCharacters[0] || (generatedScript.newCharacters || [])[0];
+                              const hasUsableCharacterReference = matchedShotCharacters.length > 0 && missingReferenceCharacters.length === 0;
                               return (
                                 <tbody
                                   key={idx}
@@ -4013,6 +4688,7 @@ export default function App() {
                                     {/* 时间点 */}
                                     <td className="p-3 font-bold text-blue-400 font-mono align-middle" style={{ width: '80px' }}>
                                       {shot.timestamp.split(" - ")[0]}
+                                      {generationModeLabel && <div className="mt-1 text-[8px] font-normal text-slate-400 whitespace-normal">{generationModeLabel}</div>}
                                     </td>
 
                                     {/* 运镜设计 (editable) */}
@@ -4101,6 +4777,44 @@ export default function App() {
                                               {shot.description || <span className="text-slate-650 italic">双击编辑描述词...</span>}
                                             </div>
                                           )}
+                                          <div className="mt-2 flex flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
+                                            <span className="text-[10px] font-semibold text-slate-500">本镜角色</span>
+                                            {(generatedScript.newCharacters || []).map((character: Character) => {
+                                              const characterId = String(character.id || '');
+                                              const selected = (shot.matchedCharacterIds || []).includes(characterId);
+                                              return (
+                                                <button
+                                                  key={characterId || character.name}
+                                                  type="button"
+                                                  onClick={() => handleBindShotCharacter(idx)}
+                                                  disabled={!characterId}
+                                                  aria-pressed={selected}
+                                                  className={`max-w-[10rem] overflow-hidden text-ellipsis whitespace-nowrap rounded border px-2 py-1 text-[10px] font-semibold transition-colors ${selected
+                                                    ? 'border-blue-400/70 bg-blue-500/20 text-blue-100'
+                                                    : 'border-slate-700 bg-slate-900/70 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                                                  }`}
+                                                  title={`${selected ? '移除' : '绑定'}角色：${character.name}`}
+                                                >
+                                                  {selected && <Check className="mr-1 inline h-3 w-3" />}
+                                                  {character.name}
+                                                </button>
+                                              );
+                                            })}
+                                            {((shot.matchedCharacterIds || []).length === 0 || missingReferenceCharacters.length > 0) && (
+                                              <div className="basis-full mt-1 flex flex-wrap items-center gap-1.5 rounded border border-red-500/50 bg-red-950/50 p-2">
+                                                <span className="text-[10px] font-bold text-red-300">
+                                                  {(shot.matchedCharacterIds || []).length === 0 ? '未绑定角色参考图' : `角色 ${missingReferenceCharacters.map((character: Character) => character.name).join('、')} 缺少 Avatar`}
+                                                </span>
+                                                <button type="button" onClick={() => handleBindShotCharacter(idx)} className="rounded bg-slate-800 px-2 py-1 text-[10px] text-white hover:bg-slate-700">绑定本镜角色</button>
+                                                <button type="button" disabled={!actionableCharacter} onClick={() => actionableCharacter && handleGenerateCharacterAvatar(actionableCharacter)} className="rounded bg-indigo-700 px-2 py-1 text-[10px] text-white hover:bg-indigo-600 disabled:opacity-40">生成角色 Avatar</button>
+                                                <button type="button" disabled={!actionableCharacter} onClick={() => actionableCharacter && handleUploadCharacterAvatar(actionableCharacter)} className="rounded bg-violet-700 px-2 py-1 text-[10px] text-white hover:bg-violet-600 disabled:opacity-40">上传 Avatar</button>
+                                                <button type="button" disabled={!hasUsableCharacterReference || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'} onClick={() => handleGenerateShotImage(shot, idx)} className="rounded bg-blue-600 px-2 py-1 text-[10px] text-white hover:bg-blue-500 disabled:opacity-40">用角色参考图重新生成本镜</button>
+                                              </div>
+                                            )}
+                                            {hasUsableCharacterReference && (
+                                              <span className="basis-full rounded border border-emerald-500/50 bg-emerald-950/50 px-2 py-1 text-[10px] font-semibold text-emerald-300">将使用角色参考图生成</span>
+                                            )}
+                                          </div>
                                         </div>
 
                                         <div className="relative min-w-[80px] min-h-[32px] flex justify-end">
@@ -4471,7 +5185,7 @@ export default function App() {
       {/* CHARACTER DETAILS SLIDING DRAWER */}
       <AnimatePresence>
         {activeDrawerChar && (
-          <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             {/* Backdrop */}
             <motion.div
               initial={{ opacity: 0 }}
@@ -4482,11 +5196,11 @@ export default function App() {
             />
             {/* Drawer Panel */}
             <motion.div
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="relative w-full max-w-md h-full bg-slate-900 border-l border-slate-850 shadow-2xl flex flex-col z-10"
+              initial={{ opacity: 0, scale: 0.96, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 16 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="character-design-modal relative w-full max-w-3xl max-h-[90vh] bg-slate-900 border border-slate-800 shadow-2xl flex flex-col z-10 overflow-hidden"
             >
               {/* Header */}
               <div className="p-5 border-b border-slate-800 flex items-center justify-between">
@@ -4531,28 +5245,80 @@ export default function App() {
                   <div className="min-w-0 flex-1">
                     <h4 className="text-base font-bold text-white">{activeDrawerChar.name}</h4>
                     <p className="text-xs text-purple-400 font-mono font-medium mt-0.5">{activeDrawerChar.role}</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 border border-slate-800 bg-slate-950/45 p-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-semibold text-slate-400">
+                      角色母版模型选择
+                      <select
+                        value={comfyProjectPreferences.characterMasterPresetId}
+                        onChange={event => saveProjectPresetField('characterMasterPresetId', event.target.value)}
+                        className="mt-1.5 w-full border border-slate-700 bg-slate-900 px-2.5 py-2 text-[10px] text-slate-200 outline-none focus:border-blue-500"
+                      >
+                        {characterMasterPresets.map(preset => (
+                          <option key={preset.presetId} value={preset.presetId} disabled={!preset.available}>
+                            {preset.displayName}{preset.available ? '' : `（${preset.reason || '不可用'}）`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <button
                       type="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        handleGenerateThreeViews(activeDrawerChar);
-                      }}
-                      disabled={isGeneratingThreeViews}
-                      className="mt-3 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-800 disabled:text-slate-650 text-white rounded-lg text-[10px] flex items-center gap-1.5 cursor-pointer transition-colors"
+                      onClick={() => handleGenerateCharacterAvatar(activeDrawerChar)}
+                      disabled={isGeneratingCharImage || ['pending', 'processing'].includes(getCharacterTask(activeDrawerChar.id || '', 'avatar')?.status || '') || !selectedCharacterMasterPreset?.available}
+                      className="w-full bg-blue-600 px-3 py-2 text-[10px] font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
                     >
-                      {isGeneratingThreeViews ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          <span>生成三视图中...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>生成三视图</span>
-                        </>
-                      )}
+                      {isGeneratingCharImage ? '生成角色母版中…' : '生成角色母版'}
                     </button>
+                    <p className="truncate text-[9px] text-blue-300" title={selectedCharacterMasterPreset?.modelName}>
+                      当前模型：{selectedCharacterMasterPreset?.modelName || '读取中…'}
+                    </p>
                     {renderComfySlotStatusAndControls(activeDrawerChar, 'avatar')}
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-semibold text-slate-400">
+                      三视图模型选择
+                      <select
+                        value={effectiveThreeViewPresetId}
+                        onChange={event => saveProjectPresetField('threeViewPresetId', event.target.value)}
+                        className="mt-1.5 w-full border border-slate-700 bg-slate-900 px-2.5 py-2 text-[10px] text-slate-200 outline-none focus:border-purple-500"
+                      >
+                        {threeViewPresets.map(preset => (
+                          <option key={preset.presetId} value={preset.presetId} disabled={!preset.available}>
+                            {preset.displayName}{preset.available ? '' : `（${preset.reason || '不可用'}）`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateThreeViews(activeDrawerChar)}
+                      disabled={!activeDrawerChar.avatarUrl || isGeneratingThreeViews || !selectedThreeViewPreset?.available}
+                      title={!activeDrawerChar.avatarUrl ? '请先生成角色母版；三视图必须使用 avatar 作为 reference' : `使用 ${selectedThreeViewPreset?.modelName || '所选模型'} 生成三视图`}
+                      className="w-full bg-purple-600 px-3 py-2 text-[10px] font-semibold text-white hover:bg-purple-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                    >
+                      {isGeneratingThreeViews ? '生成三视图中…' : '生成三视图'}
+                    </button>
+                    <p className={`truncate text-[9px] ${activeDrawerChar.avatarUrl ? 'text-purple-300' : 'text-amber-400'}`} title={selectedThreeViewPreset?.modelName}>
+                      {activeDrawerChar.avatarUrl ? `当前模型：${selectedThreeViewPreset?.modelName || '读取中…'}` : '不可生成：请先生成角色母版 avatar'}
+                    </p>
+                  </div>
+                  <div className="border-t border-slate-800 pt-3 md:col-span-2">
+                    <button
+                      type="button"
+                      onClick={handleBatchGenerate}
+                      disabled={!activeDrawerChar.avatarUrl || isQueueingBatch || imagePlatform !== 'comfyui'}
+                      title={!activeDrawerChar.avatarUrl ? '请先生成角色母版；分镜生成会优先使用 avatar，并按需加入三视图' : '使用角色 avatar/三视图作为 reference 批量生成分镜'}
+                      className="w-full border border-emerald-800/70 bg-emerald-950/45 px-3 py-2 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-900/55 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-500"
+                    >
+                      {isQueueingBatch ? '正在提交分镜任务…' : '用角色图生成分镜'}
+                    </button>
+                    <p className="mt-1.5 text-[9px] text-slate-500">
+                      参考优先级：角色母版 avatar → 正/侧/背三视图；只注入 manifest 已验证的 LoadImage reference 节点。
+                    </p>
                   </div>
                 </div>
 
@@ -5452,6 +6218,60 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {shotCharacterModal && generatedScript && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4" onClick={() => setShotCharacterModal(null)}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="绑定本镜角色"
+              className="w-full max-w-lg rounded-xl border border-slate-700 bg-slate-900 shadow-2xl"
+              onClick={event => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+                <div><h3 className="text-sm font-bold text-white">绑定本镜角色</h3><p className="mt-1 text-[11px] text-slate-400">可多选；保存后写入 matchedCharacterIds</p></div>
+                <button type="button" aria-label="关闭角色选择" onClick={() => setShotCharacterModal(null)} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="max-h-[55vh] space-y-2 overflow-y-auto p-5">
+                {(generatedScript.newCharacters || []).map((character: Character) => {
+                  const characterId = String(character.id || '');
+                  const selected = shotCharacterModal.selectedIds.includes(characterId);
+                  const hasAvatar = !!(character.avatarImageUrl || character.avatarUrl);
+                  return (
+                    <button
+                      key={characterId || character.name}
+                      type="button"
+                      disabled={!characterId}
+                      aria-pressed={selected}
+                      onClick={() => characterId && handleModalCharacterToggle(characterId)}
+                      className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors ${selected ? 'border-blue-400 bg-blue-500/15' : 'border-slate-700 bg-slate-950/60 hover:border-slate-500'} disabled:opacity-40`}
+                    >
+                      <div className="h-10 w-10 overflow-hidden rounded-full bg-slate-800">{hasAvatar ? <img src={character.avatarImageUrl || character.avatarUrl} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-xs text-slate-500">无图</div>}</div>
+                      <div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold text-white">{character.name}</div><div className={`mt-1 text-[10px] ${hasAvatar ? 'text-emerald-400' : 'text-amber-400'}`}>{hasAvatar ? 'Avatar 已就绪' : '角色缺 Avatar'}</div></div>
+                      <div className={`flex h-5 w-5 items-center justify-center rounded border ${selected ? 'border-blue-400 bg-blue-500 text-white' : 'border-slate-600'}`}>{selected && <Check className="h-3 w-3" />}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-800 px-5 py-4">
+                <button type="button" onClick={() => setShotCharacterModal(null)} className="rounded bg-slate-800 px-4 py-2 text-xs text-slate-200 hover:bg-slate-700">取消</button>
+                <button type="button" onClick={() => handleSaveShotCharacters(false)} className="rounded bg-slate-700 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-600">保存角色绑定</button>
+                <button type="button" onClick={() => handleSaveShotCharacters(true)} className="rounded bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500">保存并用角色参考图重新生成</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {shotCharacterFeedback && (
+        <div role="status" className={`fixed bottom-6 right-6 z-[140] rounded-lg border px-4 py-3 text-xs font-semibold shadow-xl ${shotCharacterFeedback.kind === 'success' ? 'border-emerald-500/60 bg-emerald-950 text-emerald-200' : 'border-red-500/60 bg-red-950 text-red-200'}`}>
+          {shotCharacterFeedback.message}
+        </div>
+      )}
 
       {/* LIGHTBOX MODAL */}
       <AnimatePresence>

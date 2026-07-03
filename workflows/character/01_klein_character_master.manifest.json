@@ -38,6 +38,20 @@
     "heightInputKey": "value",
     "saveImageNodeId": "9"
   },
+  "parameterNodeIds": {
+    "positivePrompt": "76",
+    "negativePrompt": null,
+    "seed": "75:73",
+    "width": "75:68",
+    "height": "75:69",
+    "model": "75:70"
+  },
+  "modelMappings": {
+    "baseModel": { "label": "基础模型", "nodeId": "75:70", "inputKey": "unet_name", "editable": false },
+    "textEncoder": { "label": "文本编码器", "nodeId": "75:71", "inputKey": "clip_name", "editable": false },
+    "vae": { "label": "VAE", "nodeId": "75:72", "inputKey": "vae_name", "editable": false }
+  },
+  "requiredMappings": ["positivePrompt", "seed"],
   "defaultParameters": {
     "width": 1024,
     "height": 1024,

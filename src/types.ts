@@ -12,20 +12,40 @@ export interface Shot {
   videoUrl?: string;
   videoTaskId?: string;
   videoStatus?: 'submitted' | 'processing' | 'succeed' | 'failed';
+  characterIds?: string[];
+  characterNames?: string[];
+  matchedCharacterIds?: string[];
 }
 
 export interface Character {
   id?: string;
   name: string;
+  alias?: string | string[];
+  aliases?: string[];
   role: string;
   personality: string;
   clothing: string;
   avatarUrl?: string;
+  avatarImageUrl?: string;
+  sourceTaskId?: string | null;
+  hasReference?: boolean;
+  avatarGeneration?: {
+    presetId: string;
+    model: string;
+    imageUrl: string;
+    taskId: string;
+  };
   views?: {
     front: string;
     side: string;
     back: string;
   };
+  viewGenerations?: Partial<Record<'front' | 'side' | 'back', {
+    presetId: string;
+    model: string;
+    imageUrl: string;
+    taskId: string;
+  }>>;
   quote?: string;
   skills?: string[];
 }

@@ -75,11 +75,51 @@ dbSqlite.exec(`
     createdAt TEXT NOT NULL,
     submittedAt TEXT,
     completedAt TEXT,
+    characterReferenceImageUrl TEXT,
+    characterReferenceTaskId TEXT,
+    lockCharacterIdentity INTEGER NOT NULL DEFAULT 1,
+    batchOrder INTEGER,
     updatedAt TEXT NOT NULL
   )
 `);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON comfyui_tasks (status, createdAt)`);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON comfyui_tasks (projectId, updatedAt)`);
+dbSqlite.exec(`
+  CREATE TABLE IF NOT EXISTS comfyui_shot_batches (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL,
+    regenerateMode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    totalCount INTEGER NOT NULL DEFAULT 0,
+    queuedCount INTEGER NOT NULL DEFAULT 0,
+    enqueueFailedCount INTEGER NOT NULL DEFAULT 0,
+    errorsJson TEXT,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    stoppedAt TEXT
+  )
+`);
+dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_shot_batches_project_created ON comfyui_shot_batches (projectId, createdAt)`);
+dbSqlite.exec(`
+  CREATE TABLE IF NOT EXISTS comfyui_shot_batch_items (
+    id TEXT PRIMARY KEY,
+    batchId TEXT NOT NULL,
+    projectId TEXT NOT NULL,
+    targetId TEXT NOT NULL,
+    shotIndex INTEGER NOT NULL,
+    batchOrder INTEGER NOT NULL,
+    taskId TEXT,
+    matchedCharactersJson TEXT NOT NULL DEFAULT '[]',
+    workflowPresetId TEXT,
+    characterReferenceImageUrl TEXT,
+    workflowInjected INTEGER NOT NULL DEFAULT 0,
+    finalStatus TEXT NOT NULL,
+    error TEXT,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  )
+`);
+dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_shot_batch_items_batch_order ON comfyui_shot_batch_items (batchId, batchOrder)`);
 
 // Backward-compatible ComfyUI manual-import migration. Existing rows remain queue-originated.
 const comfyTaskColumns = new Set(
@@ -111,6 +151,27 @@ if (!comfyTaskColumns.has('outputNodeId')) {
 }
 if (!comfyTaskColumns.has('presetParametersJson')) {
   dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN presetParametersJson TEXT');
+}
+if (!comfyTaskColumns.has('characterReferenceImageUrl')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN characterReferenceImageUrl TEXT');
+}
+if (!comfyTaskColumns.has('characterReferenceTaskId')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN characterReferenceTaskId TEXT');
+}
+if (!comfyTaskColumns.has('lockCharacterIdentity')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN lockCharacterIdentity INTEGER NOT NULL DEFAULT 1');
+}
+if (!comfyTaskColumns.has('batchOrder')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN batchOrder INTEGER');
+}
+if (!comfyTaskColumns.has('comfyPromptId')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN comfyPromptId TEXT');
+}
+if (!comfyTaskColumns.has('queuePosition')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN queuePosition INTEGER');
+}
+if (!comfyTaskColumns.has('stateDetail')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN stateDetail TEXT');
 }
 
 dbSqlite.exec(`
@@ -830,24 +891,28 @@ ${topic}
     }
 
     // Create database record
+    const generatedCharacters = result.newCharacters.map((c: any) => ({
+      id: crypto.randomUUID(),
+      ...c,
+      avatarUrl: ''
+    }));
+    const generatedShots = result.newShots.map((s: any) => ({
+      id: crypto.randomUUID(),
+      ...s,
+      matchedCharacterIds: inferMatchedCharacterIds(s.description, generatedCharacters),
+      imageUrl: ''
+    }));
     const scriptRecord = {
       id: Date.now().toString(),
       templateId: templateId || 'demo',
       templateTitle: templateId === 'demo' ? 'æ¼”ç¤ºåˆ†é•œæ¨¡æ¿' : (db.videos.find((v: any) => v.id === templateId)?.title || 'æœªçŸ¥æ¨¡æ¿'),
       topic: topic,
       createdAt: new Date().toISOString(),
+      comfyuiPreferences: readDefaultComfyPreferences(),
       newTitle: result.newTitle,
       newNarrative: result.newNarrative,
-      newCharacters: result.newCharacters.map((c: any) => ({
-        id: crypto.randomUUID(),
-        ...c,
-        avatarUrl: ''
-      })),
-      newShots: result.newShots.map((s: any) => ({
-        id: crypto.randomUUID(),
-        ...s,
-        imageUrl: ''
-      }))
+      newCharacters: generatedCharacters,
+      newShots: generatedShots
     };
 
     await mutateDb((db) => {
@@ -867,7 +932,17 @@ ${topic}
 app.get('/api/generated-scripts', (req, res) => {
   try {
     const db = readDb();
-    const list = [...db.generated_scripts].sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const list = [...db.generated_scripts]
+      .map((script: any) => ({
+        ...script,
+        newShots: (script.newShots || []).map((shot: any) => ({
+          ...shot,
+          matchedCharacterIds: Array.isArray(shot.matchedCharacterIds)
+            ? shot.matchedCharacterIds
+            : inferMatchedCharacterIds(shot.description, script.newCharacters || []),
+        })),
+      }))
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     res.json(list);
   } catch (err) {
     console.error(err);
@@ -912,6 +987,58 @@ const PROJECT_PRESET_TO_WORKFLOW: Record<string, string | null> = {
   '04_esrgan_upscale': '04_esrgan_upscale',
 };
 
+type PresetPurpose = 'storyboard' | 'characterMaster' | 'identity' | 'threeView' | 'upscale';
+
+const BUILTIN_PRESET_METADATA: Record<string, { displayName: string; workflowFamily: string; purposes: PresetPurpose[]; modelName?: string }> = {
+  sdxl_legacy: { displayName: 'SDXL Legacy', workflowFamily: 'sdxl', purposes: ['storyboard', 'characterMaster'], modelName: process.env.COMFYUI_CKPT_NAME || 'ComfyUI 默认 SDXL Checkpoint' },
+  legacy_three_views: { displayName: '现有三视图流程', workflowFamily: 'legacy', purposes: ['threeView'], modelName: 'Legacy image workflow' },
+  '01_klein_character_master': { displayName: 'Pure Klein 4B', workflowFamily: 'flux/klein', purposes: ['storyboard', 'characterMaster'] },
+  '02_klein_pulid_identity': { displayName: 'PuLID Flux2', workflowFamily: 'flux/pulid', purposes: ['identity'] },
+  '03_qwen_2511_three_views': { displayName: 'Qwen 三视图', workflowFamily: 'qwen', purposes: ['threeView'] },
+  '04_esrgan_upscale': { displayName: 'ESRGAN 4x', workflowFamily: 'upscale', purposes: ['upscale'] },
+};
+
+const LOCAL_PRESET_DIR = path.resolve('workflows/local');
+
+function resolvePresetManifestPath(presetId: string): string | null {
+  if (!/^[a-zA-Z0-9_-]+$/.test(presetId)) return null;
+  for (const directory of [path.resolve('workflows/character'), LOCAL_PRESET_DIR]) {
+    const candidate = path.join(directory, `${presetId}.manifest.json`);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function workflowIdForSelection(selectedPreset: string): string | null | undefined {
+  if (selectedPreset in PROJECT_PRESET_TO_WORKFLOW) return PROJECT_PRESET_TO_WORKFLOW[selectedPreset];
+  return resolvePresetManifestPath(selectedPreset) ? selectedPreset : undefined;
+}
+
+function presetPurposes(presetId: string): PresetPurpose[] {
+  const builtin = BUILTIN_PRESET_METADATA[presetId];
+  if (builtin) return builtin.purposes;
+  const manifestPath = resolvePresetManifestPath(presetId);
+  if (!manifestPath) return [];
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return Array.isArray(manifest.purposes)
+      ? manifest.purposes.filter((purpose: string) => ['storyboard', 'characterMaster', 'identity', 'threeView', 'upscale'].includes(purpose))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function readDefaultComfyPreferences(): ComfyProjectPreferences {
+  const row = dbSqlite.prepare("SELECT value FROM store WHERE key = 'comfyui_default_preferences'").get() as { value: string } | undefined;
+  if (!row) return { ...LEGACY_PROJECT_COMFY_PREFERENCES };
+  try {
+    return { ...LEGACY_PROJECT_COMFY_PREFERENCES, ...JSON.parse(row.value) };
+  } catch {
+    return { ...LEGACY_PROJECT_COMFY_PREFERENCES };
+  }
+}
+
 function projectComfyPreferences(projectId: string): ComfyProjectPreferences {
   const script = readDb().generated_scripts.find((item: any) => String(item.id) === String(projectId));
   const saved = script?.comfyuiPreferences;
@@ -920,6 +1047,47 @@ function projectComfyPreferences(projectId: string): ComfyProjectPreferences {
     ...(saved && typeof saved === 'object' ? saved : {}),
   };
 }
+
+function normalizeComfyPreferences(requested: any): ComfyProjectPreferences {
+  return {
+    shotPresetId: String(requested?.shotPresetId || ''),
+    characterMasterPresetId: String(requested?.characterMasterPresetId || ''),
+    identityPresetId: String(requested?.identityPresetId || ''),
+    threeViewPresetId: String(requested?.threeViewPresetId || ''),
+    upscalePresetId: String(requested?.upscalePresetId || ''),
+  };
+}
+
+function validateComfyPreferences(preferences: ComfyProjectPreferences): string | null {
+  const requiredPurpose: Record<keyof ComfyProjectPreferences, PresetPurpose> = {
+    shotPresetId: 'storyboard',
+    characterMasterPresetId: 'characterMaster',
+    identityPresetId: 'identity',
+    threeViewPresetId: 'threeView',
+    upscalePresetId: 'upscale',
+  };
+  for (const key of Object.keys(requiredPurpose) as Array<keyof ComfyProjectPreferences>) {
+    const value = preferences[key];
+    const workflowId = workflowIdForSelection(value);
+    const normalizedId = workflowId === null ? value : workflowId;
+    if (workflowId === undefined || !presetPurposes(normalizedId || value).includes(requiredPurpose[key])) {
+      return `Unsupported ${key}: ${value}`;
+    }
+  }
+  return null;
+}
+
+app.get('/api/comfyui/default-preferences', (_req, res) => {
+  res.json({ preferences: readDefaultComfyPreferences() });
+});
+
+app.put('/api/comfyui/default-preferences', (req, res) => {
+  const preferences = normalizeComfyPreferences(req.body?.preferences);
+  const validationError = validateComfyPreferences(preferences);
+  if (validationError) return res.status(422).json({ error: validationError });
+  dbSqlite.prepare("INSERT OR REPLACE INTO store (key, value) VALUES ('comfyui_default_preferences', ?)").run(JSON.stringify(preferences));
+  return res.json({ success: true, preferences });
+});
 
 function qwenThreeViewsVerified(projectId: string): boolean {
   return !!dbSqlite.prepare(`
@@ -953,29 +1121,10 @@ app.put('/api/generated-scripts/:id/comfyui-preferences', async (req, res) => {
     return res.status(400).json({ error: 'preferences are required' });
   }
 
-  const preferences: ComfyProjectPreferences = {
-    shotPresetId: String(requested.shotPresetId || ''),
-    characterMasterPresetId: String(requested.characterMasterPresetId || ''),
-    identityPresetId: String(requested.identityPresetId || ''),
-    threeViewPresetId: String(requested.threeViewPresetId || ''),
-    upscalePresetId: String(requested.upscalePresetId || ''),
-  };
-  const allowed: Record<keyof ComfyProjectPreferences, string[]> = {
-    shotPresetId: ['sdxl_legacy', 'pure_klein'],
-    characterMasterPresetId: ['sdxl_legacy', 'pure_klein'],
-    identityPresetId: ['pulid_flux2'],
-    threeViewPresetId: ['legacy_three_views', 'qwen_2511_three_views'],
-    upscalePresetId: ['esrgan_4x'],
-  };
-  for (const key of Object.keys(allowed) as Array<keyof ComfyProjectPreferences>) {
-    if (!allowed[key].includes(preferences[key])) {
-      return res.status(422).json({ error: `Unsupported ${key}: ${preferences[key]}` });
-    }
-  }
+  const preferences = normalizeComfyPreferences(requested);
+  const validationError = validateComfyPreferences(preferences);
+  if (validationError) return res.status(422).json({ error: validationError });
   const qwenVerified = qwenThreeViewsVerified(projectId);
-  if (preferences.threeViewPresetId === 'qwen_2511_three_views' && !qwenVerified) {
-    return res.status(422).json({ error: 'Qwen 2511 Three Views is not verified for this project yet.' });
-  }
 
   let updatedScript: any = null;
   await mutateDb(db => {
@@ -994,7 +1143,7 @@ app.delete('/api/generated-scripts/:id', async (req, res) => {
     const id = req.params.id;
     let found = false;
     await mutateDb((db) => {
-      const index = db.generated_scripts.findIndex((s: any) => s.id === id);
+      const index = db.generated_scripts.findIndex((s: any) => String(s.id) === String(id));
       if (index !== -1) {
         db.generated_scripts.splice(index, 1);
         found = true;
@@ -1011,6 +1160,31 @@ app.delete('/api/generated-scripts/:id', async (req, res) => {
 });
 
 // 9.5. PUT /api/generated-scripts/:id - Update script record (e.g. shots, titles)
+function characterMatchTerms(character: any): string[] {
+  const aliases = Array.isArray(character?.aliases)
+    ? character.aliases
+    : Array.isArray(character?.alias)
+      ? character.alias
+      : character?.alias
+        ? [character.alias]
+        : [];
+  const name = String(character?.name || '').trim();
+  const bilingualNameParts = name
+    ? [name.replace(/\s*[（(][^）)]*[）)]\s*$/, ''), ...(name.match(/[（(]([^）)]+)[）)]/)?.slice(1) || [])]
+    : [];
+  return [name, ...bilingualNameParts, ...aliases]
+    .map(value => String(value || '').trim().toLocaleLowerCase())
+    .filter(Boolean);
+}
+
+function inferMatchedCharacterIds(description: unknown, characters: any[]): string[] {
+  const searchable = String(description || '').toLocaleLowerCase();
+  if (!searchable) return [];
+  return characters
+    .filter(character => character?.id && characterMatchTerms(character).some(term => searchable.includes(term)))
+    .map(character => String(character.id));
+}
+
 app.put('/api/generated-scripts/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1043,6 +1217,47 @@ app.put('/api/generated-scripts/:id', async (req, res) => {
   } catch (err: any) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update script: ' + err.message });
+  }
+});
+
+app.put('/api/generated-scripts/:id/shots/:shotId/matched-characters', async (req, res) => {
+  const projectId = String(req.params.id);
+  const shotId = String(req.params.shotId);
+  const requestedIds = req.body?.matchedCharacterIds;
+  const requestUrl = req.originalUrl;
+  const respond = (status: number, payload: any) => {
+    console.log('[RoleBindingSave]', JSON.stringify({ url: requestUrl, method: req.method, body: req.body, projectId, shotId, status }));
+    return res.status(status).json(payload);
+  };
+  if (!Array.isArray(requestedIds)) {
+    return respond(400, { error: 'matchedCharacterIds must be an array', projectId, shotId });
+  }
+  const matchedCharacterIds = [...new Set(requestedIds.map(value => String(value).trim()).filter(Boolean))];
+  let projectFound = false;
+  let shotFound = false;
+  let invalidCharacterIds: string[] = [];
+  let updatedShot: any = null;
+  try {
+    await mutateDb((db) => {
+      const script = db.generated_scripts.find((item: any) => String(item.id) === projectId);
+      if (!script) return;
+      projectFound = true;
+      const shot = (script.newShots || []).find((item: any) => String(item.id) === shotId);
+      if (!shot) return;
+      shotFound = true;
+      const validCharacterIds = new Set((script.newCharacters || []).map((character: any) => String(character.id || '')).filter(Boolean));
+      invalidCharacterIds = matchedCharacterIds.filter(characterId => !validCharacterIds.has(characterId));
+      if (invalidCharacterIds.length) return;
+      shot.matchedCharacterIds = matchedCharacterIds;
+      updatedShot = { ...shot };
+    });
+    if (!projectFound) return respond(404, { error: 'Project not found', projectId, shotId, matchedCharacterIds });
+    if (!shotFound) return respond(404, { error: 'Shot not found', projectId, shotId, matchedCharacterIds });
+    if (invalidCharacterIds.length) return respond(422, { error: 'Unknown character IDs', projectId, shotId, matchedCharacterIds, invalidCharacterIds });
+    return respond(200, { success: true, projectId, shotId, matchedCharacterIds, shot: updatedShot });
+  } catch (error: any) {
+    console.error('[Shot Character Binding]', { projectId, shotId, matchedCharacterIds, error });
+    return respond(500, { error: error.message || 'Failed to save shot character binding', projectId, shotId, matchedCharacterIds });
   }
 });
 
@@ -1332,6 +1547,19 @@ function escapeDrawtextText(text: string): string {
     .replace(/\\/g, '')  // Remove backslashes
     .replace(/\n/g, ' ') // Replace newlines with space
     .trim();
+}
+
+function srtTimestamp(seconds: number): string {
+  const milliseconds = Math.max(0, Math.round(seconds * 1000));
+  const hours = Math.floor(milliseconds / 3_600_000);
+  const minutes = Math.floor((milliseconds % 3_600_000) / 60_000);
+  const secs = Math.floor((milliseconds % 60_000) / 1000);
+  const ms = milliseconds % 1000;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+}
+
+function ffmpegSubtitlePath(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
 }
 
 // 10.91. GET /api/bgm-list - List uploaded BGM audio files
@@ -1961,17 +2189,30 @@ app.post('/api/compile-preview', async (req, res) => {
       const shot = shots[i];
       const localVidPath = path.join(tempDir, `shot_${i}.mp4`);
 
-      // Escape text for drawtext
-      const escapedText = escapeDrawtextText(shot.description || '');
+      const subtitleSource = shot.description || '';
+      const subtitlePath = path.join(tempDir, `shot_${i}.srt`);
+      const subtitleText = subtitleSource.replace(/\r\n?/g, '\n').trim();
+      const srt = `\uFEFF1\n00:00:00,000 --> ${srtTimestamp(Math.max(0.1, duration))}\n${subtitleText}\n`;
+      fs.writeFileSync(subtitlePath, srt, { encoding: 'utf8' });
+      const subtitleFilterPath = ffmpegSubtitlePath(subtitlePath);
+      const fontName = process.platform === 'win32' ? 'Microsoft YaHei' : process.platform === 'darwin' ? 'PingFang SC' : 'Noto Sans CJK SC';
+      console.log('[SubtitleDiagnostic]', JSON.stringify({
+        scriptId,
+        shotIndex: i,
+        shotId: shot.id || null,
+        sourceField: 'shot.description',
+        sourceText: subtitleSource,
+        sourceLength: subtitleSource.length,
+        sourceUtf8Hex: Buffer.from(subtitleSource, 'utf8').toString('hex'),
+        subtitlePath,
+        subtitleEncoding: 'utf8-bom',
+        subtitleBytes: fs.statSync(subtitlePath).size,
+        fontName,
+      }));
 
-      // Cross-platform font file path (PingFang for macOS, Microsoft YaHei for Windows, fall back to default for others)
-      let fontfile = '/System/Library/Fonts/PingFang.ttc';
-      if (process.platform === 'win32') {
-        fontfile = 'C\\:/Windows/Fonts/msyh.ttc';
-      }
-
-      // Scale to 1280x720, apply transitions, and draw Chinese subtitle overlay
-      const vfString = `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d=0.5,fade=t=out:st=${duration - 0.5}:d=0.5,drawtext=fontfile='${fontfile}':text='${escapedText}':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=8:x=(w-text_w)/2:y=h-80`;
+      // UTF-8 SRT is rendered by libass, avoiding drawtext escaping and Unicode parsing issues.
+      const vfString = `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fade=t=in:st=0:d=0.5,fade=t=out:st=${Math.max(0, duration - 0.5)}:d=0.5,subtitles=filename='${subtitleFilterPath}':charenc=UTF-8:force_style='FontName=${fontName},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=32,Alignment=2'`;
+      console.log('[SubtitleDiagnostic:Filter]', JSON.stringify({ scriptId, shotIndex: i, vfString }));
 
       const localInputVideoPath = shot.videoUrl ? path.join(__dirname, shot.videoUrl.substring(1)) : '';
       const hasVideo = localInputVideoPath && fs.existsSync(localInputVideoPath);
@@ -2108,6 +2349,157 @@ async function comfyFetch(relativePath: string, init: RequestInit = {}, timeoutM
   } finally {
     clearTimeout(timeout);
   }
+}
+
+type ReferenceImageFile = {
+  resolvedPath: string;
+  exists: boolean;
+  size: number;
+  mime: string;
+  ext: string;
+  canRead: boolean;
+  buffer?: Buffer;
+};
+
+function resolveReferenceImageFile(imageUrl: string, readFile = true): ReferenceImageFile {
+  const uploadsRoot = path.resolve(process.cwd(), 'uploads');
+  let pathname = String(imageUrl || '').trim();
+  let filenameFromQuery = '';
+  try {
+    const parsed = new URL(pathname, 'http://localhost');
+    pathname = decodeURIComponent(parsed.pathname);
+    filenameFromQuery = decodeURIComponent(parsed.searchParams.get('filename') || '');
+  } catch {
+    throw new Error('Reference image URL is invalid');
+  }
+
+  let resolvedPath: string;
+  if (pathname === '/api/comfy/image') {
+    if (!filenameFromQuery || path.basename(filenameFromQuery) !== filenameFromQuery) {
+      throw new Error('Reference image filename is invalid');
+    }
+    resolvedPath = path.resolve(uploadsRoot, 'images', filenameFromQuery);
+  } else {
+    const relative = pathname.replace(/^\/+/, '').replace(/^uploads[\\/]/, '');
+    resolvedPath = path.resolve(uploadsRoot, relative);
+  }
+  if (resolvedPath !== uploadsRoot && !resolvedPath.startsWith(`${uploadsRoot}${path.sep}`)) {
+    throw new Error('Reference image path traversal rejected');
+  }
+
+  const exists = fs.existsSync(resolvedPath);
+  if (!exists) return { resolvedPath, exists, size: 0, mime: '', ext: path.extname(resolvedPath).toLowerCase(), canRead: false };
+  const stat = fs.statSync(resolvedPath);
+  const size = stat.isFile() ? stat.size : 0;
+  const ext = path.extname(resolvedPath).toLowerCase();
+  const mimeByExt: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+  const mime = mimeByExt[ext] || '';
+  if (!readFile) return { resolvedPath, exists, size, mime, ext, canRead: stat.isFile() && size > 0 && !!mime };
+
+  let buffer: Buffer;
+  try {
+    buffer = fs.readFileSync(resolvedPath);
+  } catch (error: any) {
+    throw new Error(`Reference image read failed: ${error.message}`);
+  }
+  const validSignature = (mime === 'image/png' && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+    || (mime === 'image/jpeg' && buffer[0] === 0xff && buffer[1] === 0xd8)
+    || (mime === 'image/webp' && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP');
+  return { resolvedPath, exists, size: buffer.length, mime, ext, canRead: buffer.length > 0 && validSignature, buffer };
+}
+
+type ComfyPermissionCheck = { path: string; exists: boolean; writable: boolean; error: string | null };
+
+function probeDirectoryWritable(directory: string): ComfyPermissionCheck {
+  const result: ComfyPermissionCheck = { path: directory, exists: fs.existsSync(directory), writable: false, error: null };
+  if (!result.exists) {
+    result.error = 'directory not found';
+    return result;
+  }
+  const probe = path.join(directory, `.codex-write-test-${process.pid}-${crypto.randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(probe, 'permission-test', { flag: 'wx' });
+    fs.unlinkSync(probe);
+    result.writable = true;
+  } catch (error: any) {
+    result.error = error.message || String(error);
+    try { if (fs.existsSync(probe)) fs.unlinkSync(probe); } catch {}
+  }
+  return result;
+}
+
+async function runningComfyProcesses(comfyRoot: string): Promise<Array<{ processId: number; name: string; commandLine: string }>> {
+  if (process.platform !== 'win32') return [];
+  const escapedRoot = comfyRoot.replace(/'/g, "''");
+  const command = `powershell.exe -NoProfile -Command "$items = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*${escapedRoot.replace(/\\/g, '\\\\')}*') -and ($_.Name -match 'python|comfy') } | Select-Object ProcessId,Name,CommandLine; $items | ConvertTo-Json -Compress"`;
+  try {
+    const { stdout } = await execPromise(command, { windowsHide: true, timeout: 8_000 });
+    const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : [];
+    const matches = (Array.isArray(parsed) ? parsed : [parsed]).map((item: any) => ({ processId: Number(item.ProcessId), name: String(item.Name || ''), commandLine: String(item.CommandLine || '') }));
+    if (matches.length) return matches;
+  } catch (error: any) {
+    console.warn('[ComfyPreflight:ProcessCheckFailed]', error.message);
+  }
+  try {
+    const fallback = `powershell.exe -NoProfile -Command "$items = Get-NetTCPConnection -State Listen -LocalPort 8001 -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; [pscustomobject]@{ ProcessId = $_.OwningProcess; Name = $p.ProcessName; CommandLine = '[command line unavailable; detected by port 8001]' } }; $items | ConvertTo-Json -Compress"`;
+    const { stdout } = await execPromise(fallback, { windowsHide: true, timeout: 8_000 });
+    const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : [];
+    const matches = (Array.isArray(parsed) ? parsed : [parsed]).map((item: any) => ({ processId: Number(item.ProcessId), name: String(item.Name || ''), commandLine: String(item.CommandLine || '') }));
+    if (matches.length) return matches;
+  } catch (error: any) {
+    console.warn('[ComfyPreflight:PortOwnerCheckFailed]', error.message);
+  }
+  try {
+    const { stdout } = await execPromise('netstat -ano -p tcp', { windowsHide: true, timeout: 8_000 });
+    const pids = [...new Set(stdout.split(/\r?\n/)
+      .filter(line => /:8001\s+.*LISTENING\s+\d+\s*$/i.test(line))
+      .map(line => Number(line.trim().split(/\s+/).at(-1)))
+      .filter(Boolean))];
+    const detected = pids.map(processId => ({ processId, name: 'ComfyUI port owner', commandLine: '[detected by netstat port 8001]' }));
+    try {
+      const escapedRoot = comfyRoot.replace(/'/g, "''");
+      const rootCommand = `powershell.exe -NoProfile -Command "$items = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith('${escapedRoot}', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { [pscustomobject]@{ ProcessId=$_.Id; Name=$_.ProcessName; CommandLine=('[command line unavailable] executable=' + $_.Path) } }; $items | ConvertTo-Json -Compress"`;
+      const rootResult = await execPromise(rootCommand, { windowsHide: true, timeout: 8_000 });
+      const parsed = rootResult.stdout.trim() ? JSON.parse(rootResult.stdout.trim()) : [];
+      for (const item of (Array.isArray(parsed) ? parsed : [parsed])) detected.push({ processId: Number(item.ProcessId), name: String(item.Name || ''), commandLine: String(item.CommandLine || '') });
+    } catch (error: any) {
+      console.warn('[ComfyPreflight:RootProcessCheckFailed]', error.message);
+    }
+    return [...new Map(detected.map(item => [item.processId, item])).values()];
+  } catch (error: any) {
+    console.warn('[ComfyPreflight:NetstatCheckFailed]', error.message);
+    return [];
+  }
+}
+
+async function comfyPermissionPreflight() {
+  const comfyRoot = path.resolve(process.env.COMFYUI_ROOT || 'C:\\Users\\Owner\\Documents\\ComfyUI');
+  let online = false;
+  let onlineError: string | null = null;
+  try {
+    await comfyFetch('/system_stats', {}, 5_000);
+    online = true;
+  } catch (error: any) {
+    onlineError = error.message || String(error);
+  }
+  const input = probeDirectoryWritable(path.join(comfyRoot, 'input'));
+  const output = probeDirectoryWritable(path.join(comfyRoot, 'output'));
+  const userDefault = probeDirectoryWritable(path.join(comfyRoot, 'user', 'default'));
+  const processes = await runningComfyProcesses(comfyRoot);
+  const dbCandidates = [path.join(comfyRoot, 'user', 'default', 'comfyui.db'), path.join(comfyRoot, 'comfyui.db')];
+  const dbPath = dbCandidates.find(candidate => fs.existsSync(candidate)) || dbCandidates[0];
+  let dbLocked = false;
+  let dbLockError: string | null = null;
+  if (fs.existsSync(dbPath)) {
+    try {
+      const handle = fs.openSync(dbPath, 'r+');
+      fs.closeSync(handle);
+    } catch (error: any) {
+      dbLocked = true;
+      dbLockError = error.message || String(error);
+    }
+  }
+  return { comfyUrl: comfyBaseUrl(), comfyRoot, online, onlineError, input, output, userDefault, processes, multipleProcesses: processes.length > 1, dbPath, dbExists: fs.existsSync(dbPath), dbLocked, dbLockError };
 }
 
 function validateWorkflow(value: unknown): ComfyWorkflow {
@@ -2493,6 +2885,23 @@ let lastWorkflowFamily: string | null = null;
 
 async function submitComfyTask(task: any) {
   try {
+    console.log('[ComfySubmit:Request]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: task.comfyPromptId || task.id, status: task.status, error: null }));
+    const preflight = await comfyPermissionPreflight();
+    console.log('[ComfyPreflight:Result]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, ...preflight }));
+    if (!preflight.online) throw new Error(`ComfyUI 未连接：${preflight.onlineError || preflight.comfyUrl}`);
+    if (preflight.multipleProcesses || preflight.dbLocked) {
+      const processDetails = preflight.processes.map(item => `PID ${item.processId}: ${item.commandLine || item.name}`).join('; ');
+      const lockDetails = preflight.dbLocked ? `comfyui.db: ${preflight.dbLockError || preflight.dbPath}` : '';
+      throw new Error(`检测到 8001 已被占用或 comfyui.db 被锁，请关闭重复 ComfyUI 进程后，只启动一个 ComfyUI 实例。${[processDetails, lockDetails].filter(Boolean).join('; ')}`);
+    }
+    if (!preflight.input.writable || !preflight.output.writable || !preflight.userDefault.writable) {
+      const details = [
+        !preflight.input.writable ? `input: ${preflight.input.error || 'not writable'}` : '',
+        !preflight.output.writable ? `output: ${preflight.output.error || 'not writable'}` : '',
+        !preflight.userDefault.writable ? `user/default: ${preflight.userDefault.error || 'not writable'}` : '',
+      ].filter(Boolean).join('; ');
+      throw new Error(`ComfyUI input/output 无写入权限，请关闭重复 ComfyUI 进程或修复文件夹权限。${details}`);
+    }
     let workflow: any;
     if (task.apiWorkflowJson) {
       try {
@@ -2540,82 +2949,161 @@ async function submitComfyTask(task: any) {
     }
 
     if (task.workflowPresetId) {
-      const manifestPath = path.resolve(`workflows/character/${task.workflowPresetId}.manifest.json`);
-      if (fs.existsSync(manifestPath)) {
+      const manifestPath = resolvePresetManifestPath(task.workflowPresetId);
+      if (manifestPath && fs.existsSync(manifestPath)) {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         const mappings = manifest.nodeMappings || {};
 
+        console.log('[CharacterConsistency:WorkerMapping]', JSON.stringify({
+          taskId: task.id,
+          targetId: task.targetId,
+          shotIndex: task.shotIndex,
+          workflowPresetId: task.workflowPresetId,
+          workflowFamily: task.workflowFamily,
+          model: task.model,
+          sourceImageUrl: task.sourceImageUrl || null,
+          loadImageNodeId: mappings.loadImageNodeId || null,
+          loadImageInputKey: mappings.loadImageInputKey || null,
+          mappingNodeExists: !!workflow?.[mappings.loadImageNodeId],
+        }));
+
         if (mappings.loadImageNodeId && task.sourceImageUrl) {
-          console.log(`[Worker] Processing reference image upload for task ${task.id}: ${task.sourceImageUrl}`);
-          let relativePath = task.sourceImageUrl;
-          if (relativePath.startsWith('/')) relativePath = relativePath.slice(1);
-          if (relativePath.startsWith('uploads/')) {
-            relativePath = relativePath.slice('uploads/'.length);
+          const matchedCharacter = task.targetType === 'shot'
+            ? shotCharacters(String(task.projectId), task.shotIndex, task.prompt)[0]
+            : null;
+          const uploadContext = {
+            taskId: task.id,
+            shotId: task.targetId,
+            characterId: matchedCharacter?.id || null,
+            characterReferenceImageUrl: task.sourceImageUrl,
+            characterReferenceTaskId: task.characterReferenceTaskId || task.sourceTaskId || null,
+          };
+          console.log('[ReferenceUpload:Start]', JSON.stringify(uploadContext));
+          let referenceFile: ReferenceImageFile;
+          try {
+            referenceFile = resolveReferenceImageFile(task.sourceImageUrl, true);
+          } catch (error: any) {
+            console.error('[ReferenceUpload:Failed]', JSON.stringify({ ...uploadContext, status: null, responseText: null, error: error.message }));
+            throw error;
           }
-          const localFilePath = path.resolve(process.cwd(), 'uploads', relativePath);
-
-          if (fs.existsSync(localFilePath)) {
-            const formData = new FormData();
-            const blob = new Blob([fs.readFileSync(localFilePath)], { type: 'image/png' });
-            formData.append('image', blob, path.basename(localFilePath));
-            formData.append('overwrite', 'true');
-
-            const uploadUrl = (process.env.COMFYUI_API_URL || 'http://127.0.0.1:8188').replace(/\/+$/, '') + '/upload/image';
-            const uploadRes = await fetch(uploadUrl, {
-              method: 'POST',
-              body: formData
-            });
-
-            if (uploadRes.ok) {
-              const resJson: any = await uploadRes.json();
-              const comfyFilename = resJson.name;
-              console.log(`[Worker] Reference image uploaded successfully as: ${comfyFilename}`);
-
-              const loadNode = workflow[mappings.loadImageNodeId];
-              if (loadNode && loadNode.inputs) {
-                loadNode.inputs[mappings.loadImageInputKey] = comfyFilename;
-
-                dbSqlite.prepare(`
-                  UPDATE comfyui_tasks SET apiWorkflowJson = ?, updatedAt = ? WHERE id = ?
-                `).run(JSON.stringify(workflow), new Date().toISOString(), task.id);
-              }
-            } else {
-              throw new Error(`Failed to upload reference image to ComfyUI (status ${uploadRes.status})`);
-            }
-          } else {
-            throw new Error(`Source reference image file not found: ${localFilePath}`);
+          const localFilePath = referenceFile.resolvedPath;
+          console.log('[ReferenceUpload:Resolve]', JSON.stringify({ ...uploadContext, resolvedPath: localFilePath, exists: referenceFile.exists }));
+          console.log('[CharacterConsistency:ReferenceFile]', JSON.stringify({
+            taskId: task.id,
+            sourceImageUrl: task.sourceImageUrl,
+            localFilePath,
+            fileExists: referenceFile.exists,
+          }));
+          console.log('[ReferenceUpload:Read]', JSON.stringify({ ...uploadContext, resolvedPath: localFilePath, exists: referenceFile.exists, size: referenceFile.size, mime: referenceFile.mime, ext: referenceFile.ext, canRead: referenceFile.canRead }));
+          if (!referenceFile.exists) {
+            const error = `Reference image file not found: ${localFilePath}`;
+            console.error('[ReferenceUpload:Failed]', JSON.stringify({ ...uploadContext, resolvedPath: localFilePath, exists: false, status: null, responseText: null, error }));
+            throw new Error(error);
           }
+          if (!referenceFile.canRead || !referenceFile.buffer?.length) {
+            const error = `Reference image invalid or empty: ${localFilePath}`;
+            console.error('[ReferenceUpload:Failed]', JSON.stringify({ ...uploadContext, resolvedPath: localFilePath, exists: true, size: referenceFile.size, mime: referenceFile.mime, status: null, responseText: null, error }));
+            throw new Error(error);
+          }
+
+          const safeCharacterId = safePathSegment(matchedCharacter?.id, 'character');
+          const safeFilename = `reference_${safePathSegment(task.id, 'task')}_${safeCharacterId}${referenceFile.ext}`;
+          const formData = new FormData();
+          const blob = new Blob([referenceFile.buffer], { type: referenceFile.mime });
+          formData.append('image', blob, safeFilename);
+          formData.append('type', 'input');
+          formData.append('overwrite', 'true');
+
+          const uploadUrl = `${comfyBaseUrl()}/upload/image`;
+          console.log('[ReferenceUpload:ComfyRequest]', JSON.stringify({ ...uploadContext, resolvedPath: localFilePath, size: referenceFile.size, mime: referenceFile.mime, ext: referenceFile.ext, uploadUrl, multipartField: 'image', fields: { type: 'input', overwrite: 'true' }, filename: safeFilename }));
+          let uploadRes: Response;
+          let responseText = '';
+          try {
+            uploadRes = await fetch(uploadUrl, { method: 'POST', body: formData });
+            responseText = await uploadRes.text();
+          } catch (error: any) {
+            console.error('[ReferenceUpload:Failed]', JSON.stringify({ ...uploadContext, uploadUrl, status: null, responseText: null, error: error.message }));
+            throw new Error(`ComfyUI upload/image request failed: ${error.message}`);
+          }
+          console.log('[ReferenceUpload:ComfyResponse]', JSON.stringify({ ...uploadContext, uploadUrl, status: uploadRes.status, responseText }));
+          if (!uploadRes.ok) {
+            const detail = responseText || uploadRes.statusText || 'empty response';
+            console.error('[ReferenceUpload:Failed]', JSON.stringify({ ...uploadContext, uploadUrl, status: uploadRes.status, responseText: detail, error: 'ComfyUI upload/image failed' }));
+            throw new Error(`ComfyUI upload/image ${uploadRes.status}: ${detail}`);
+          }
+
+          let resJson: any;
+          try {
+            resJson = JSON.parse(responseText);
+          } catch {
+            throw new Error(`ComfyUI upload/image returned invalid JSON: ${responseText || 'empty response'}`);
+          }
+          if (!resJson?.name) throw new Error(`ComfyUI upload/image response missing name: ${responseText}`);
+          const comfyFilename = [resJson.subfolder, resJson.name].filter(Boolean).join('/').replace(/\\/g, '/');
+          const loadNode = workflow[mappings.loadImageNodeId];
+          if (loadNode && loadNode.inputs) {
+            const previousValue = loadNode.inputs[mappings.loadImageInputKey];
+            loadNode.inputs[mappings.loadImageInputKey] = comfyFilename;
+            console.log('[CharacterConsistency:WorkflowInjected]', JSON.stringify({
+              taskId: task.id,
+              nodeId: mappings.loadImageNodeId,
+              inputKey: mappings.loadImageInputKey,
+              previousValue: previousValue ?? null,
+              injectedValue: comfyFilename,
+              uploadedImage: { name: resJson.name, subfolder: resJson.subfolder || '', type: resJson.type || 'input' },
+              verified: loadNode.inputs[mappings.loadImageInputKey] === comfyFilename,
+            }));
+            dbSqlite.prepare(`UPDATE comfyui_tasks SET apiWorkflowJson = ?, updatedAt = ? WHERE id = ?`)
+              .run(JSON.stringify(workflow), new Date().toISOString(), task.id);
+          }
+        } else {
+          console.warn('[CharacterConsistency:ReferenceNotInjected]', JSON.stringify({
+            taskId: task.id,
+            workflowPresetId: task.workflowPresetId,
+            hasLoadImageMapping: !!mappings.loadImageNodeId,
+            sourceImageUrl: task.sourceImageUrl || null,
+          }));
         }
       }
     }
 
     const clientId = crypto.randomUUID();
+    const uiWorkflow = exportedUiWorkflow(task);
 
     console.log(`[Worker] Submitting workflow to ComfyUI for task ${task.id} with prompt: "${task.prompt.slice(0, 100)}..."`);
 
     const response = await comfyFetch('/prompt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: workflow, client_id: clientId, prompt_id: task.id }),
+      body: JSON.stringify({
+        prompt: workflow,
+        client_id: clientId,
+        prompt_id: task.id,
+        extra_data: {
+          extra_pnginfo: {
+            workflow: uiWorkflow,
+          },
+        },
+      }),
     });
 
     const result: any = await response.json();
+    console.log('[ComfySubmit:Response]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: result?.prompt_id || null, status: response.status, error: result?.error || result?.node_errors || null }));
     if (!result?.prompt_id) {
       const detail = result?.error || result?.node_errors;
       throw new Error(`ComfyUI did not accept the workflow: ${JSON.stringify(detail).slice(0, 500)}`);
     }
 
+    dbSqlite.prepare(`UPDATE comfyui_tasks SET comfyPromptId = ?, stateDetail = 'queued', queuePosition = NULL, updatedAt = ? WHERE id = ? AND status = 'processing'`).run(String(result.prompt_id), new Date().toISOString(), task.id);
+    console.log('[TaskState:Update]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: result.prompt_id, status: 'processing', error: null }));
+
     console.log(`[Worker] Task ${task.id} accepted by ComfyUI successfully.`);
   } catch (err: any) {
     console.error(`[Worker] Failed to submit task ${task.id} to ComfyUI:`, err.message);
-    const isNetwork = err.code === 'ECONNREFUSED' || err.message.includes('fetch');
-    if (isNetwork) {
-      console.warn(`[Worker] Re-queuing task ${task.id} due to connection error.`);
-      dbSqlite.prepare(`
-        UPDATE comfyui_tasks SET status = 'pending', updatedAt = ? WHERE id = ?
-      `).run(new Date().toISOString(), task.id);
-    } else {
-      let finalError = err.message || 'Unknown error';
+    {
+      let finalError = (err.code === 'ECONNREFUSED' || err.message.includes('fetch'))
+        ? `ComfyUI connection failed: ${err.message}`
+        : (err.message || 'Unknown error');
       if (
         finalError.toLowerCase().includes('out of memory') ||
         finalError.toLowerCase().includes('cuda out of memory') ||
@@ -2624,8 +3112,9 @@ async function submitComfyTask(task: any) {
         finalError = 'CUDA out of memory. Please restart ComfyUI with --lowvram --reserve-vram 1.';
       }
       dbSqlite.prepare(`
-        UPDATE comfyui_tasks SET status = 'failed', error = ?, completedAt = ?, updatedAt = ? WHERE id = ?
+        UPDATE comfyui_tasks SET status = 'failed', error = ?, stateDetail = 'failed', completedAt = ?, updatedAt = ? WHERE id = ?
       `).run(finalError, new Date().toISOString(), new Date().toISOString(), task.id);
+      console.error('[TaskState:Failed]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: task.comfyPromptId || task.id, status: 'failed', error: finalError }));
     }
   }
 }
@@ -2683,7 +3172,7 @@ app.get('/api/comfyui/status', async (_req, res) => {
 async function checkComfyTaskState(promptId: string): Promise<
   | { status: 'succeeded'; image: any }
   | { status: 'failed'; error: string }
-  | { status: 'processing' }
+  | { status: 'processing'; queuePosition: number; phase: 'queued' | 'running' }
   | { status: 'network_error' }
   | { status: 'missing' }
 > {
@@ -2692,6 +3181,7 @@ async function checkComfyTaskState(promptId: string): Promise<
     const historyRes = await comfyFetch(`/history/${promptId}`, {}, 5_000);
     const history = await historyRes.json();
     const record = history?.[promptId];
+    console.log('[ComfyHistory:Result]', JSON.stringify({ taskId: promptId, shotId: null, presetId: null, prompt_id: promptId, status: record?.status?.status_str || (record ? 'found' : 'missing'), error: record?.status?.status_str === 'error' ? comfyErrorMessage(record) : null }));
     if (record) {
       if (record.status?.status_str === 'error') {
         const errMsg = comfyErrorMessage(record);
@@ -2742,14 +3232,15 @@ async function checkComfyTaskState(promptId: string): Promise<
     const pending = queue.queue_pending || [];
 
     const inRunning = running.some((item: any) => item[1] === promptId);
-    const inPending = pending.some((item: any) => item[1] === promptId);
+    const pendingIndex = pending.findIndex((item: any) => item[1] === promptId);
+    const inPending = pendingIndex >= 0;
+    console.log('[ComfyQueue:Status]', JSON.stringify({ taskId: promptId, shotId: null, presetId: null, prompt_id: promptId, status: inRunning ? 'running' : inPending ? 'queued' : 'missing', queuePosition: inRunning ? 0 : inPending ? pendingIndex + 1 : null, error: null }));
 
-    if (inRunning || inPending) {
-      return { status: 'processing' };
-    }
+    if (inRunning) return { status: 'processing', queuePosition: 0, phase: 'running' };
+    if (inPending) return { status: 'processing', queuePosition: pendingIndex + 1, phase: 'queued' };
 
     // 3. Not in history and not in queue
-    return { status: 'missing' };
+    return { status: 'failed', error: `ComfyUI prompt '${promptId}' is missing from both queue and history` };
   } catch (err: any) {
     const isNetwork = err.code === 'ECONNREFUSED' || err.message.includes('fetch');
     if (isNetwork) {
@@ -2768,10 +3259,18 @@ async function checkComfyTaskState(promptId: string): Promise<
 }
 
 async function pollActiveTasks() {
+  const timeoutCutoff = new Date(Date.now() - 10 * 60_000).toISOString();
+  const timedOutTasks = dbSqlite.prepare(`SELECT id,targetId,workflowPresetId,comfyPromptId,status FROM comfyui_tasks WHERE status IN ('pending','processing') AND createdAt < ?`).all(timeoutCutoff) as any[];
+  for (const timedOut of timedOutTasks) {
+    const timeoutError = 'Task timed out after 10 minutes';
+    dbSqlite.prepare(`UPDATE comfyui_tasks SET status='failed', stateDetail='timeout', error=?, completedAt=?, updatedAt=? WHERE id=? AND status IN ('pending','processing')`).run(timeoutError, new Date().toISOString(), new Date().toISOString(), timedOut.id);
+    console.error('[TaskState:Timeout]', JSON.stringify({ taskId: timedOut.id, shotId: timedOut.targetId, presetId: timedOut.workflowPresetId || null, prompt_id: timedOut.comfyPromptId || null, status: 'timeout', error: timeoutError }));
+  }
   const activeTasks = dbSqlite.prepare("SELECT * FROM comfyui_tasks WHERE status = 'processing'").all() as any[];
   for (const task of activeTasks) {
     try {
-      const state = await checkComfyTaskState(task.id);
+      const promptId = task.comfyPromptId || task.id;
+      const state = await checkComfyTaskState(promptId);
       if (state.status === 'succeeded') {
         console.log(`[Worker] Task ${task.id} succeeded. Fetching image...`);
         const image = state.image;
@@ -2811,11 +3310,11 @@ async function pollActiveTasks() {
           }
 
           // Update script
-          const scriptIndex = db.generated_scripts.findIndex((s: any) => s.id === task.projectId);
+          const scriptIndex = db.generated_scripts.findIndex((s: any) => String(s.id) === String(task.projectId));
           if (scriptIndex !== -1) {
             const script = db.generated_scripts[scriptIndex];
             if (task.targetType === 'shot') {
-              const shot = script.newShots?.find((s: any) => s.id === task.targetId);
+              const shot = script.newShots?.find((s: any) => String(s.id) === String(task.targetId));
               if (shot) {
                 shot.imageUrl = imageUrl;
                 shot.generatedImageUrl = imageUrl;
@@ -2828,11 +3327,24 @@ async function pollActiveTasks() {
                 if (task.viewType && task.viewType !== 'avatar') {
                   if (!char.views) char.views = {};
                   char.views[task.viewType] = imageUrl;
-                  if (task.viewType === 'front') {
-                    char.avatarUrl = imageUrl;
-                  }
+                  if (!char.viewGenerations) char.viewGenerations = {};
+                  char.viewGenerations[task.viewType] = {
+                    presetId: task.workflowPresetId || 'sdxl_legacy',
+                    model: task.model,
+                    imageUrl,
+                    taskId: task.id,
+                  };
                 } else {
                   char.avatarUrl = imageUrl;
+                  char.avatarImageUrl = imageUrl;
+                  char.sourceTaskId = task.id;
+                  char.hasReference = true;
+                  char.avatarGeneration = {
+                    presetId: task.workflowPresetId || 'sdxl_legacy',
+                    model: task.model,
+                    imageUrl,
+                    taskId: task.id,
+                  };
                 }
                 char.imageGeneration = generation;
                 char.imageGenerations = [...(char.imageGenerations || []), generation];
@@ -2847,9 +3359,14 @@ async function pollActiveTasks() {
             SET status = 'succeeded', imageUrl = ?, completedAt = ?, updatedAt = ?
             WHERE id = ? AND status = 'processing'
           `).run(imageUrl, new Date().toISOString(), new Date().toISOString(), task.id);
+          dbSqlite.prepare(`UPDATE comfyui_tasks SET stateDetail='succeeded', queuePosition=NULL WHERE id=?`).run(task.id);
+          console.log('[TaskState:Update]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: promptId, status: 'succeeded', outputImageUrl: imageUrl, error: null }));
+          dbSqlite.prepare(`UPDATE comfyui_shot_batch_items SET finalStatus = 'success', updatedAt = ? WHERE taskId = ?`).run(new Date().toISOString(), task.id);
         });
 
       } else if (state.status === 'processing') {
+        dbSqlite.prepare(`UPDATE comfyui_tasks SET stateDetail=?, queuePosition=?, updatedAt=? WHERE id=? AND status='processing'`).run(state.phase, state.queuePosition, new Date().toISOString(), task.id);
+        console.log('[TaskState:Update]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: promptId, status: state.phase, queuePosition: state.queuePosition, error: null }));
         // Reset missing counters if found active in ComfyUI queue
         if (task.missingSince || task.recoveryCheckCount > 0) {
           dbSqlite.prepare(`
@@ -2857,8 +3374,9 @@ async function pollActiveTasks() {
           `).run(new Date().toISOString(), task.id);
         }
       } else if (state.status === 'network_error') {
-        // ComfyUI disconnected, do nothing (keep state)
-        console.warn(`[Worker] ComfyUI disconnected. Keeping task ${task.id} in processing status.`);
+        const error = 'ComfyUI disconnected while checking task state';
+        dbSqlite.prepare(`UPDATE comfyui_tasks SET status='failed', stateDetail='failed', error=?, completedAt=?, updatedAt=? WHERE id=? AND status='processing'`).run(error, new Date().toISOString(), new Date().toISOString(), task.id);
+        console.error('[TaskState:Failed]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: promptId, status: 'failed', error }));
       } else if (state.status === 'missing') {
         // Increment missing counter
         let missingSince = task.missingSince;
@@ -2875,12 +3393,12 @@ async function pollActiveTasks() {
 
         const elapsed = Date.now() - new Date(missingSince).getTime();
         if (count >= 5 && elapsed >= 60_000) {
-          console.log(`[Worker] Task ${task.id} is confirmed lost after ${count} checks and ${elapsed}ms. Resetting to pending.`);
+          console.log(`[Worker] Task ${task.id} is confirmed lost after ${count} checks and ${elapsed}ms. Failing task.`);
           dbSqlite.prepare(`
             UPDATE comfyui_tasks
-            SET status = 'pending', missingSince = NULL, recoveryCheckCount = 0, error = 'ComfyUI task lost', updatedAt = ?
+            SET status = 'failed', stateDetail='failed', missingSince = NULL, recoveryCheckCount = 0, error = 'ComfyUI task lost: missing from queue and history', completedAt=?, updatedAt = ?
             WHERE id = ? AND status = 'processing'
-          `).run(new Date().toISOString(), task.id);
+          `).run(new Date().toISOString(), new Date().toISOString(), task.id);
         }
       } else if (state.status === 'failed') {
         console.log(`[Worker] Task ${task.id} failed in ComfyUI: ${state.error}`);
@@ -2889,11 +3407,19 @@ async function pollActiveTasks() {
           SET status = 'failed', error = ?, completedAt = ?, updatedAt = ?
           WHERE id = ? AND status = 'processing'
         `).run(state.error, new Date().toISOString(), new Date().toISOString(), task.id);
+        dbSqlite.prepare(`UPDATE comfyui_tasks SET stateDetail='failed', queuePosition=NULL WHERE id=?`).run(task.id);
+        console.error('[TaskState:Failed]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: promptId, status: 'failed', error: state.error }));
+        dbSqlite.prepare(`UPDATE comfyui_shot_batch_items SET finalStatus = 'failed', error = ?, updatedAt = ? WHERE taskId = ?`).run(state.error, new Date().toISOString(), task.id);
       }
     } catch (err: any) {
       console.error(`[Worker] Error checking state for task ${task.id}:`, err);
     }
   }
+  dbSqlite.prepare(`
+    UPDATE comfyui_shot_batches SET status = CASE
+      WHEN EXISTS (SELECT 1 FROM comfyui_shot_batch_items i WHERE i.batchId = comfyui_shot_batches.id AND i.finalStatus IN ('pending','processing')) THEN 'running'
+      ELSE 'completed' END, updatedAt = ? WHERE status = 'running'
+  `).run(new Date().toISOString());
 }
 
 
@@ -2928,11 +3454,12 @@ function startComfyWorker() {
         if (nextTask) {
           const updateResult = dbSqlite.prepare(`
             UPDATE comfyui_tasks
-            SET status = 'processing', submittedAt = ?, updatedAt = ?
+            SET status = 'processing', stateDetail = 'submitting', submittedAt = ?, updatedAt = ?
             WHERE id = ? AND status = 'pending'
           `).run(new Date().toISOString(), new Date().toISOString(), nextTask.id);
 
           if (updateResult.changes === 1) {
+            console.log('[TaskState:Update]', JSON.stringify({ taskId: nextTask.id, shotId: nextTask.targetId, presetId: nextTask.workflowPresetId || null, prompt_id: null, status: 'submitting', error: null }));
             console.log(`[Worker] Atomically locked task ${nextTask.id} for execution.`);
             await submitComfyTask(nextTask);
           }
@@ -3241,6 +3768,38 @@ app.get('/api/comfyui/runtime', async (req, res) => {
   res.json(comfyUiRuntime.toJSON());
 });
 
+app.get('/api/comfyui/reference-diagnostic', requireLocalhost, (req, res) => {
+  try {
+    const characterId = String(req.query.characterId || '').trim();
+    let imageUrl = String(req.query.imageUrl || '').trim();
+    let character: any = null;
+    if (!imageUrl && characterId) {
+      for (const script of readDb().generated_scripts || []) {
+        character = (script.newCharacters || []).find((item: any) => String(item.id) === characterId);
+        if (character) {
+          imageUrl = String(character.avatarImageUrl || character.avatarUrl || '');
+          break;
+        }
+      }
+    }
+    if (!imageUrl) return res.status(400).json({ error: 'characterId has no Avatar, or imageUrl is required' });
+    const result = resolveReferenceImageFile(imageUrl, true);
+    res.json({
+      characterId: characterId || character?.id || null,
+      imageUrl,
+      resolvedPath: result.resolvedPath,
+      exists: result.exists,
+      size: result.size,
+      mime: result.mime,
+      ext: result.ext,
+      canRead: result.canRead,
+      validForComfyUpload: result.exists && result.canRead && result.size > 0,
+    });
+  } catch (error: any) {
+    res.status(422).json({ error: error.message });
+  }
+});
+
 app.post('/api/comfyui/runtime/start', requireLocalhost, async (req, res) => {
   try {
     const stateBefore = comfyUiRuntime.getState();
@@ -3287,6 +3846,138 @@ const DEFAULT_PARAMETER_NODE_IDS = Object.freeze({
   latent: '4',
 });
 
+const PRESET_PARAMETER_KEYS = [
+  'positivePrompt',
+  'negativePrompt',
+  'seed',
+  'width',
+  'height',
+  'model',
+] as const;
+
+type PresetParameterKey = typeof PRESET_PARAMETER_KEYS[number];
+type PresetParameterNodeIds = Record<PresetParameterKey, string | null>;
+
+function presetParameterNodeIds(manifest: any): PresetParameterNodeIds {
+  const raw = manifest?.parameterNodeIds;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ImportResultError(422, `Preset manifest '${manifest?.presetId || 'unknown'}' has no parameterNodeIds mapping.`);
+  }
+  const result = {} as PresetParameterNodeIds;
+  for (const key of PRESET_PARAMETER_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) {
+      throw new ImportResultError(422, `Preset manifest parameter mapping '${key}' is missing.`);
+    }
+    const value = raw[key];
+    result[key] = value === null ? null : String(value).trim() || null;
+  }
+  return result;
+}
+
+function mappedPresetUiNode(uiWorkflow: any, nodeId: string, label: string): any {
+  const parts = String(nodeId).split(':');
+  if (parts.length > 2) {
+    throw new ImportResultError(422, `Mapped ${label} node '${nodeId}' has an unsupported nested node ID.`);
+  }
+  if (parts.length === 1) {
+    const matches = (uiWorkflow?.nodes || []).filter((node: any) => String(node.id) === parts[0]);
+    if (matches.length !== 1) {
+      throw new ImportResultError(422, `Mapped ${label} node '${nodeId}' is missing or duplicated in the UI workflow.`);
+    }
+    return matches[0];
+  }
+
+  const [outerId, innerId] = parts;
+  const outerMatches = (uiWorkflow?.nodes || []).filter((node: any) => String(node.id) === outerId);
+  if (outerMatches.length !== 1) {
+    throw new ImportResultError(422, `Mapped ${label} subgraph '${outerId}' is missing or duplicated in the UI workflow.`);
+  }
+  const definitionMatches = (uiWorkflow?.definitions?.subgraphs || [])
+    .filter((definition: any) => String(definition.id) === String(outerMatches[0].type));
+  if (definitionMatches.length !== 1) {
+    throw new ImportResultError(422, `Mapped ${label} subgraph definition for '${nodeId}' is missing or ambiguous.`);
+  }
+  const innerMatches = (definitionMatches[0].nodes || [])
+    .filter((node: any) => String(node.id) === innerId);
+  if (innerMatches.length !== 1) {
+    throw new ImportResultError(422, `Mapped ${label} node '${nodeId}' is missing or duplicated in its UI subgraph.`);
+  }
+  return innerMatches[0];
+}
+
+function validatePresetManifest(
+  manifest: any,
+  apiWorkflow: any,
+  uiWorkflow: any,
+  expectedPresetId?: string,
+): PresetParameterNodeIds {
+  if (!manifest?.presetId || (expectedPresetId && manifest.presetId !== expectedPresetId)) {
+    throw new ImportResultError(422, `Preset manifest ID does not match '${expectedPresetId || 'the requested preset'}'.`);
+  }
+  if (!Array.isArray(manifest.requiredMappings)) {
+    throw new ImportResultError(422, `Preset manifest '${manifest.presetId}' has no requiredMappings list.`);
+  }
+  const mappings = presetParameterNodeIds(manifest);
+  const executionNodeKeys: Partial<Record<PresetParameterKey, string>> = {
+    positivePrompt: 'promptNodeId',
+    seed: 'seedNodeId',
+    width: 'widthNodeId',
+    height: 'heightNodeId',
+  };
+  for (const required of manifest.requiredMappings) {
+    if (!PRESET_PARAMETER_KEYS.includes(required)) {
+      throw new ImportResultError(422, `Preset manifest required mapping '${required}' is unsupported.`);
+    }
+    if (!mappings[required as PresetParameterKey]) {
+      throw new ImportResultError(422, `Preset manifest required mapping '${required}' is empty.`);
+    }
+    const executionKey = executionNodeKeys[required as PresetParameterKey];
+    if (executionKey && String(manifest.nodeMappings?.[executionKey] || '') !== mappings[required as PresetParameterKey]) {
+      throw new ImportResultError(422, `Preset manifest execution mapping '${executionKey}' does not match '${required}'.`);
+    }
+  }
+  for (const key of PRESET_PARAMETER_KEYS) {
+    const nodeId = mappings[key];
+    if (!nodeId) continue;
+    const apiNode = apiWorkflow?.[nodeId];
+    if (!apiNode || typeof apiNode !== 'object' || !apiNode.class_type) {
+      throw new ImportResultError(422, `Mapped preset node '${key}' (${nodeId}) is missing from the API workflow.`);
+    }
+    const uiNode = mappedPresetUiNode(uiWorkflow, nodeId, key);
+    if (uiNode.type !== apiNode.class_type) {
+      throw new ImportResultError(
+        422,
+        `Mapped preset node '${key}' (${nodeId}) type mismatch: API '${apiNode.class_type}', UI '${uiNode.type || 'unknown'}'.`,
+      );
+    }
+  }
+  if (manifest.modelMappings) {
+    for (const [key, mapping] of Object.entries(manifest.modelMappings) as Array<[string, any]>) {
+      const node = apiWorkflow?.[String(mapping.nodeId)];
+      if (!node?.inputs || typeof node.inputs[mapping.inputKey] !== 'string') {
+        throw new ImportResultError(422, `Preset model mapping '${key}' is invalid.`);
+      }
+    }
+    if (manifest.modelMappings.baseModel && String(manifest.modelMappings.baseModel.nodeId) !== String(mappings.model || '')) {
+      throw new ImportResultError(422, "Preset baseModel mapping must match parameterNodeIds.model.");
+    }
+  }
+  return mappings;
+}
+
+function validatePresetReferenceMapping(manifest: any, apiWorkflow: any): { nodeId: string; inputKey: string } {
+  const nodeId = String(manifest?.nodeMappings?.loadImageNodeId || '');
+  const inputKey = String(manifest?.nodeMappings?.loadImageInputKey || '');
+  if (!nodeId || !inputKey) {
+    throw new ImportResultError(422, `Preset '${manifest?.presetId || 'unknown'}' has no explicit reference image mapping.`);
+  }
+  const node = apiWorkflow?.[nodeId];
+  if (!node || node.class_type !== 'LoadImage' || !node.inputs || !(inputKey in node.inputs)) {
+    throw new ImportResultError(422, `Preset '${manifest.presetId}' reference mapping does not point to a verified LoadImage input.`);
+  }
+  return { nodeId, inputKey };
+}
+
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 const MAX_IMPORT_METADATA_BYTES = 5 * 1024 * 1024;
 const MAX_IMPORT_CHUNK_BYTES = 8 * 1024 * 1024;
@@ -3296,6 +3987,131 @@ class ImportResultError extends Error {
     super(message);
   }
 }
+
+function validateAllPresetManifests() {
+  const presetDirectory = path.resolve('workflows/character');
+  if (!fs.existsSync(presetDirectory)) return;
+  for (const filename of fs.readdirSync(presetDirectory).filter(name => name.endsWith('.manifest.json'))) {
+    const manifestPath = path.join(presetDirectory, filename);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const apiWorkflow = JSON.parse(fs.readFileSync(path.resolve(presetDirectory, manifest.apiFile), 'utf8'));
+    const uiWorkflow = JSON.parse(fs.readFileSync(path.resolve(presetDirectory, manifest.uiFile), 'utf8'));
+    validatePresetManifest(manifest, apiWorkflow, uiWorkflow, manifest.presetId);
+  }
+}
+
+validateAllPresetManifests();
+
+const presetImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 3 },
+});
+
+async function presetAvailability(publicPresetId: string, workflowPresetId: string | null) {
+  const metadata = workflowPresetId ? BUILTIN_PRESET_METADATA[workflowPresetId] : BUILTIN_PRESET_METADATA[publicPresetId];
+  if (!workflowPresetId) {
+    try {
+      const checkpoints = await getComfyCheckpointsList();
+      const modelName = process.env.COMFYUI_CKPT_NAME || checkpoints[0] || metadata?.modelName || 'SDXL Checkpoint';
+      return { available: checkpoints.length > 0 || !!process.env.COMFYUI_CKPT_NAME, modelName, missingModels: checkpoints.length ? [] : ['SDXL Checkpoint'], missingNodes: [], reason: checkpoints.length || process.env.COMFYUI_CKPT_NAME ? null : 'ComfyUI 未发现可用 SDXL Checkpoint' };
+    } catch (error: any) {
+      return { available: false, modelName: metadata?.modelName || 'SDXL Checkpoint', missingModels: ['SDXL Checkpoint'], missingNodes: [], reason: `无法验证 ComfyUI：${error.message}` };
+    }
+  }
+
+  const manifestPath = resolvePresetManifestPath(workflowPresetId);
+  if (!manifestPath) return { available: false, modelName: '未知模型', missingModels: [], missingNodes: [], reason: '缺少 preset manifest' };
+  try {
+    const directory = path.dirname(manifestPath);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const apiWorkflow = JSON.parse(fs.readFileSync(path.join(directory, manifest.apiFile), 'utf8'));
+    const uiWorkflow = JSON.parse(fs.readFileSync(path.join(directory, manifest.uiFile), 'utf8'));
+    validatePresetManifest(manifest, apiWorkflow, uiWorkflow, workflowPresetId);
+    const requiredModels = Array.isArray(manifest.requiredModels) ? manifest.requiredModels.map(String) : [];
+    const requiredNodes = [...new Set(Object.values(apiWorkflow).map((node: any) => String(node?.class_type || '')).filter(Boolean))];
+    try {
+      const objectInfoResponse = await comfyFetch('/object_info', {}, 5000);
+      const objectInfo = await objectInfoResponse.json();
+      const serializedInfo = JSON.stringify(objectInfo);
+      const missingModels = requiredModels.filter((model: string) => !serializedInfo.includes(model));
+      const missingNodes = requiredNodes.filter((nodeType: string) => !objectInfo?.[nodeType]);
+      const reason = missingModels.length
+        ? `缺少模型：${missingModels.join('、')}`
+        : missingNodes.length ? `缺少节点：${missingNodes.join('、')}` : null;
+      return { available: !reason, modelName: requiredModels[0] || metadata?.modelName || '工作流内置模型', missingModels, missingNodes, reason };
+    } catch (error: any) {
+      return { available: false, modelName: requiredModels[0] || metadata?.modelName || '工作流内置模型', missingModels: [], missingNodes: [], reason: `无法验证 ComfyUI：${error.message}` };
+    }
+  } catch (error: any) {
+    return { available: false, modelName: '未知模型', missingModels: [], missingNodes: [], reason: error.message || '工作流文件校验失败' };
+  }
+}
+
+app.get('/api/comfyui/presets', async (req, res) => {
+  const requestedPurpose = String(req.query.purpose || '') as PresetPurpose | '';
+  const builtins = [
+    { presetId: 'sdxl_legacy', workflowPresetId: null },
+    { presetId: 'pure_klein', workflowPresetId: '01_klein_character_master' },
+    { presetId: 'pulid_flux2', workflowPresetId: '02_klein_pulid_identity' },
+    { presetId: 'qwen_2511_three_views', workflowPresetId: '03_qwen_2511_three_views' },
+    { presetId: 'esrgan_4x', workflowPresetId: '04_esrgan_upscale' },
+  ];
+  const imported = fs.existsSync(LOCAL_PRESET_DIR)
+    ? fs.readdirSync(LOCAL_PRESET_DIR).filter(name => name.endsWith('.manifest.json')).map(name => {
+      const manifest = JSON.parse(fs.readFileSync(path.join(LOCAL_PRESET_DIR, name), 'utf8'));
+      return { presetId: String(manifest.presetId), workflowPresetId: String(manifest.presetId) };
+    })
+    : [];
+  const presets = await Promise.all([...builtins, ...imported].map(async item => {
+    const metadataId = item.workflowPresetId || item.presetId;
+    const metadata = BUILTIN_PRESET_METADATA[metadataId];
+    const manifestPath = item.workflowPresetId ? resolvePresetManifestPath(item.workflowPresetId) : null;
+    const manifest = manifestPath ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : null;
+    const purposes = metadata?.purposes || presetPurposes(metadataId);
+    return {
+      presetId: item.presetId,
+      workflowPresetId: item.workflowPresetId,
+      displayName: metadata?.displayName || manifest?.displayName || item.presetId,
+      workflowFamily: metadata?.workflowFamily || manifest?.workflowFamily || 'custom',
+      purposes,
+      ...(await presetAvailability(item.presetId, item.workflowPresetId)),
+    };
+  }));
+  return res.json({ presets: requestedPurpose ? presets.filter(preset => preset.purposes.includes(requestedPurpose)) : presets });
+});
+
+app.post('/api/comfyui/presets/import', presetImportUpload.fields([
+  { name: 'manifest', maxCount: 1 },
+  { name: 'uiWorkflow', maxCount: 1 },
+  { name: 'apiWorkflow', maxCount: 1 },
+]), (req, res) => {
+  try {
+    const files = req.files as Record<string, Express.Multer.File[]>;
+    const manifestFile = files?.manifest?.[0];
+    const uiFile = files?.uiWorkflow?.[0];
+    const apiFile = files?.apiWorkflow?.[0];
+    if (!manifestFile || !uiFile || !apiFile) return res.status(400).json({ error: '必须同时提供 manifest、UI workflow 和 API workflow' });
+    const manifest = JSON.parse(manifestFile.buffer.toString('utf8'));
+    const uiWorkflow = JSON.parse(uiFile.buffer.toString('utf8'));
+    const apiWorkflow = JSON.parse(apiFile.buffer.toString('utf8'));
+    const presetId = String(manifest.presetId || '');
+    if (!/^[a-zA-Z0-9_-]+$/.test(presetId)) return res.status(422).json({ error: 'manifest presetId 只能包含字母、数字、下划线和连字符' });
+    if (BUILTIN_PRESET_METADATA[presetId] || PROJECT_PRESET_TO_WORKFLOW[presetId] !== undefined) return res.status(409).json({ error: '不能覆盖内置工作流预设' });
+    if (!Array.isArray(manifest.purposes) || !manifest.purposes.length) return res.status(422).json({ error: 'manifest 必须显式声明 purposes；系统不会自动猜用途或节点' });
+    if (manifest.apiFile !== apiFile.originalname || manifest.uiFile !== uiFile.originalname) return res.status(422).json({ error: 'manifest 中的 apiFile/uiFile 必须与上传文件名完全一致' });
+    validatePresetManifest(manifest, apiWorkflow, uiWorkflow, presetId);
+    fs.mkdirSync(LOCAL_PRESET_DIR, { recursive: true });
+    const manifestName = `${presetId}.manifest.json`;
+    if ([manifestName, manifest.apiFile, manifest.uiFile].some((name: string) => fs.existsSync(path.join(LOCAL_PRESET_DIR, name)))) return res.status(409).json({ error: '本地预设已存在，请更换 presetId 或文件名' });
+    fs.writeFileSync(path.join(LOCAL_PRESET_DIR, manifestName), JSON.stringify(manifest, null, 2));
+    fs.writeFileSync(path.join(LOCAL_PRESET_DIR, manifest.apiFile), JSON.stringify(apiWorkflow, null, 2));
+    fs.writeFileSync(path.join(LOCAL_PRESET_DIR, manifest.uiFile), JSON.stringify(uiWorkflow, null, 2));
+    return res.status(201).json({ success: true, presetId });
+  } catch (error: any) {
+    const status = error instanceof ImportResultError ? error.status : 422;
+    return res.status(status).json({ error: error.message || '导入预设失败' });
+  }
+});
 
 function taskParameterNodeIds(uiWorkflow: any): Record<keyof typeof DEFAULT_PARAMETER_NODE_IDS, string> {
   const embedded = uiWorkflow?.extra?.aiVideoWorkbench?.parameterNodeIds;
@@ -3337,12 +4153,31 @@ function exportedUiWorkflow(task: any): any {
   // Preset tasks already contain their exact UI workflow snapshot. Export a decorated copy only;
   // never rebuild it from the global SDXL template and never mutate the stored task JSON.
   if (task.workflowPresetId && task.workflowPresetId !== 'sdxl_legacy') {
-    const manifestPath = path.resolve(`workflows/character/${task.workflowPresetId}.manifest.json`);
-    if (!fs.existsSync(manifestPath)) {
+    const manifestPath = resolvePresetManifestPath(task.workflowPresetId);
+    if (!manifestPath || !fs.existsSync(manifestPath)) {
       throw new ImportResultError(409, `Task '${task.id}' preset manifest is no longer available.`);
     }
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const mappings = manifest.nodeMappings || {};
+    let apiWorkflow: any;
+    try {
+      apiWorkflow = JSON.parse(task.apiWorkflowJson || '');
+    } catch {
+      throw new ImportResultError(409, `Task '${task.id}' API workflow JSON is corrupted or invalid.`);
+    }
+    workflow = applyPresetUiParameters(workflow, manifest, {
+      prompt: task.prompt,
+      negativePrompt: task.negativePrompt,
+      seed: task.seed,
+      width: task.width,
+      height: task.height,
+      model: task.model,
+    });
+    const parameterNodeIds = validatePresetManifest(
+      manifest,
+      apiWorkflow,
+      workflow,
+      task.workflowPresetId,
+    );
     workflow.extra = {
       ...(workflow.extra && typeof workflow.extra === 'object' ? workflow.extra : {}),
       aiVideoWorkbench: {
@@ -3353,13 +4188,8 @@ function exportedUiWorkflow(task: any): any {
         targetType: task.targetType,
         viewType: task.viewType,
         workflowPresetId: task.workflowPresetId,
-        parameterNodeIds: {
-          positivePrompt: String(mappings.promptNodeId || ''),
-          negativePrompt: '',
-          sampler: String(mappings.seedNodeId || ''),
-          checkpoint: '',
-          latent: String(mappings.widthNodeId || ''),
-        },
+        parameterNodeIds,
+        requiredMappings: manifest.requiredMappings,
       },
     };
     return workflow;
@@ -3542,7 +4372,114 @@ function requireMappedNode(
   return apiNode;
 }
 
-async function readImportedPng(filePath: string) {
+function presetTextValue(node: any): unknown {
+  if (node?.class_type === 'PrimitiveStringMultiline') return node.inputs?.value;
+  if (node?.class_type === 'CLIPTextEncode') return node.inputs?.text;
+  if (node?.class_type === 'TextEncodeQwenImageEditPlus') return node.inputs?.prompt;
+  return undefined;
+}
+
+function presetSeedValue(node: any): unknown {
+  if (node?.class_type === 'RandomNoise') return node.inputs?.noise_seed;
+  if (node?.class_type === 'KSampler') return node.inputs?.seed;
+  if (node?.class_type === 'KSamplerAdvanced') return node.inputs?.noise_seed;
+  return undefined;
+}
+
+function presetModelValue(node: any): unknown {
+  if (node?.class_type === 'UNETLoader') return node.inputs?.unet_name;
+  if (node?.class_type === 'CheckpointLoaderSimple') return node.inputs?.ckpt_name;
+  if (node?.class_type === 'UpscaleModelLoader') return node.inputs?.model_name;
+  return undefined;
+}
+
+function presetDimensionValue(node: any, dimension: 'width' | 'height'): unknown {
+  if (node?.inputs && Object.prototype.hasOwnProperty.call(node.inputs, dimension)) {
+    return node.inputs[dimension];
+  }
+  if (node?.class_type === 'PrimitiveInt') return node.inputs?.value;
+  return undefined;
+}
+
+function extractPresetImportParameters(
+  sourceTask: any,
+  manifest: any,
+  apiWorkflow: any,
+  uiWorkflow: any,
+  provenance: any,
+) {
+  const mappings = validatePresetManifest(manifest, apiWorkflow, uiWorkflow, sourceTask.workflowPresetId);
+  const embedded = provenance?.parameterNodeIds;
+  if (!embedded || typeof embedded !== 'object') {
+    throw new ImportResultError(422, 'Workflow provenance has no preset parameterNodeIds mapping.');
+  }
+  for (const key of PRESET_PARAMETER_KEYS) {
+    const embeddedValue = embedded[key] === null ? null : String(embedded[key] ?? '').trim() || null;
+    if (embeddedValue !== mappings[key]) {
+      throw new ImportResultError(422, `Workflow provenance mapping '${key}' does not match the preset manifest.`);
+    }
+  }
+
+  const requiredMappings = new Set<string>(manifest.requiredMappings || []);
+  const mappedNode = (key: PresetParameterKey) => {
+    const nodeId = mappings[key];
+    if (!nodeId) {
+      if (requiredMappings.has(key)) {
+        throw new ImportResultError(422, `Required preset mapping '${key}' is missing.`);
+      }
+      return null;
+    }
+    return apiWorkflow[nodeId];
+  };
+
+  const positiveNode = mappedNode('positivePrompt');
+  if (!positiveNode) throw new ImportResultError(422, "Required preset mapping 'positivePrompt' is missing.");
+  const prompt = presetTextValue(positiveNode);
+  if (typeof prompt !== 'string' || !prompt.trim()) {
+    throw new ImportResultError(422, 'Mapped positive prompt node does not contain text.');
+  }
+
+  const negativeNode = mappedNode('negativePrompt');
+  const negativeValue = negativeNode ? presetTextValue(negativeNode) : '';
+  if (negativeNode && typeof negativeValue !== 'string') {
+    throw new ImportResultError(422, 'Mapped negative prompt node does not contain text.');
+  }
+  const negativePrompt = typeof negativeValue === 'string' ? negativeValue : '';
+
+  const seedNode = mappedNode('seed');
+  const seedValue = seedNode ? presetSeedValue(seedNode) : sourceTask.seed;
+  if ((typeof seedValue !== 'string' && typeof seedValue !== 'number') || String(seedValue).trim() === '') {
+    throw new ImportResultError(422, 'Mapped seed node does not contain a valid seed.');
+  }
+
+  const modelNode = mappedNode('model');
+  const modelValue = modelNode ? presetModelValue(modelNode) : sourceTask.model;
+  if (typeof modelValue !== 'string' || !modelValue.trim()) {
+    throw new ImportResultError(422, 'Mapped model node does not contain a valid model name.');
+  }
+
+  const widthNode = mappedNode('width');
+  const heightNode = mappedNode('height');
+  const width = Number(widthNode ? presetDimensionValue(widthNode, 'width') : sourceTask.width);
+  const height = Number(heightNode ? presetDimensionValue(heightNode, 'height') : sourceTask.height);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 32768 || height > 32768) {
+    throw new ImportResultError(422, 'Mapped preset dimensions are invalid.');
+  }
+
+  return {
+    apiWorkflow,
+    uiWorkflow,
+    prompt,
+    negativePrompt,
+    seed: String(seedValue),
+    model: modelValue,
+    width,
+    height,
+    provenance,
+  };
+}
+
+async function readImportedPng(filePath: string, sourceTask: any) {
   const handle = await fs.promises.open(filePath, 'r');
   try {
     const signature = Buffer.alloc(8);
@@ -3598,6 +4535,18 @@ async function readImportedPng(filePath: string) {
     throw new ImportResultError(422, 'Workflow is missing supported aiVideoWorkbench provenance metadata.');
   }
 
+  if (sourceTask.workflowPresetId && sourceTask.workflowPresetId !== 'sdxl_legacy') {
+    if (String(provenance.workflowPresetId || '') !== String(sourceTask.workflowPresetId)) {
+      throw new ImportResultError(422, "Workflow provenance 'workflowPresetId' does not match the source task.");
+    }
+    const manifestPath = resolvePresetManifestPath(sourceTask.workflowPresetId);
+    if (!manifestPath || !fs.existsSync(manifestPath)) {
+      throw new ImportResultError(422, `Preset manifest '${sourceTask.workflowPresetId}' is unavailable.`);
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return extractPresetImportParameters(sourceTask, manifest, apiWorkflow, uiWorkflow, provenance);
+  }
+
   const ids = taskParameterNodeIds(uiWorkflow);
   const positive = requireMappedNode(apiWorkflow, uiWorkflow, ids.positivePrompt, 'positive prompt', ['CLIPTextEncode']);
   const negative = requireMappedNode(apiWorkflow, uiWorkflow, ids.negativePrompt, 'negative prompt', ['CLIPTextEncode']);
@@ -3647,6 +4596,9 @@ function updateImportedSlot(scripts: any[], task: any, imageUrl: string, generat
     if (!character) throw new ImportResultError(422, 'The source character slot no longer exists.');
     if (task.viewType === 'avatar') {
       character.avatarUrl = imageUrl;
+      character.avatarImageUrl = imageUrl;
+      character.sourceTaskId = task.id;
+      character.hasReference = true;
     } else {
       character.views = { ...(character.views || {}), [task.viewType]: imageUrl };
       if (task.viewType === 'front') character.avatarUrl = imageUrl;
@@ -3667,7 +4619,7 @@ function publicComfyTask(task: any) {
     hasUiWorkflow = false;
   }
   const { apiWorkflowJson: _apiWorkflowJson, uiWorkflowJson: _uiWorkflowJson, ...publicTask } = task;
-  return { ...publicTask, hasUiWorkflow };
+  return { ...publicTask, errorMessage: publicTask.error || null, outputImageUrl: publicTask.imageUrl || null, hasUiWorkflow };
 }
 
 function storedGeneratedScript(projectId: string) {
@@ -3689,6 +4641,13 @@ app.get('/api/comfyui/tasks', (req, res) => {
     return res.status(400).json({ error: 'projectId is required' });
   }
   try {
+    const timeoutCutoff = new Date(Date.now() - 10 * 60_000).toISOString();
+    const staleTasks = dbSqlite.prepare(`SELECT id,targetId,workflowPresetId,comfyPromptId FROM comfyui_tasks WHERE projectId=? AND status IN ('pending','processing') AND createdAt < ?`).all(projectId, timeoutCutoff) as any[];
+    for (const stale of staleTasks) {
+      const error = 'Task timed out after 10 minutes';
+      dbSqlite.prepare(`UPDATE comfyui_tasks SET status='failed', stateDetail='timeout', error=?, completedAt=?, updatedAt=? WHERE id=? AND status IN ('pending','processing')`).run(error, new Date().toISOString(), new Date().toISOString(), stale.id);
+      console.error('[TaskState:Timeout]', JSON.stringify({ taskId: stale.id, shotId: stale.targetId, presetId: stale.workflowPresetId || null, prompt_id: stale.comfyPromptId || null, status: 'timeout', error }));
+    }
     const tasks = dbSqlite.prepare(`
       SELECT
         id, projectId, targetId, targetType, viewType, shotIndex, characterName,
@@ -3697,14 +4656,40 @@ app.get('/api/comfyui/tasks', (req, res) => {
         origin, importedFromTaskId, importSha256, imageUrl,
         workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId,
         outputNodeId, presetParametersJson,
+        characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity,
         createdAt, submittedAt, completedAt, updatedAt,
-        apiWorkflowJson, uiWorkflowJson
+        apiWorkflowJson, uiWorkflowJson, batchOrder, comfyPromptId, queuePosition, stateDetail
       FROM comfyui_tasks
       WHERE projectId = ?
       ORDER BY createdAt ASC
     `).all(projectId) as any[];
 
-    const mapped = tasks.map(publicComfyTask);
+    const skipped = dbSqlite.prepare(`
+      SELECT i.*, b.createdAt AS batchCreatedAt
+      FROM comfyui_shot_batch_items i
+      JOIN comfyui_shot_batches b ON b.id = i.batchId
+      WHERE i.projectId = ? AND i.taskId IS NULL AND i.finalStatus IN ('skipped_missing_avatar', 'failed')
+    `).all(projectId) as any[];
+    const mapped = tasks.map(publicComfyTask).concat(skipped.map(item => ({
+      id: `batch-item:${item.id}`,
+      projectId: item.projectId,
+      targetId: item.targetId,
+      targetType: 'shot',
+      viewType: 'main',
+      shotIndex: item.shotIndex,
+      status: item.finalStatus,
+      error: item.error,
+      workflowPresetId: item.workflowPresetId,
+      workflowBatchId: item.batchId,
+      characterReferenceImageUrl: item.characterReferenceImageUrl,
+      workflowInjected: !!item.workflowInjected,
+      matchedCharacters: JSON.parse(item.matchedCharactersJson || '[]'),
+      finalStatus: item.finalStatus,
+      batchOrder: item.batchOrder,
+      createdAt: item.batchCreatedAt,
+      updatedAt: item.updatedAt,
+      syntheticBatchItem: true,
+    })));
     return res.json(mapped);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -3769,7 +4754,7 @@ app.post('/api/comfyui/tasks/:sourceTaskId/import-result', (req, res) => {
       if (!sourceTask) throw new ImportResultError(404, `Source task '${req.params.sourceTaskId}' not found.`);
       if (sourceTask.status !== 'succeeded') throw new ImportResultError(409, 'Source task must be succeeded before importing a result.');
 
-      const imported = await readImportedPng(uploadedPath);
+      const imported = await readImportedPng(uploadedPath, sourceTask);
       const provenance = imported.provenance;
 
       if (!provenance || provenance.schemaVersion !== 1) {
@@ -3983,10 +4968,10 @@ app.get('/api/comfyui/open-ui', (req, res) => {
 app.get('/api/comfyui/workflow-template', async (req, res) => {
   try {
     const requestedPreset = String(req.query.presetId || 'sdxl_legacy');
-    if (!(requestedPreset in PROJECT_PRESET_TO_WORKFLOW)) {
+    const workflowPresetId = workflowIdForSelection(requestedPreset);
+    if (workflowPresetId === undefined) {
       return res.status(422).json({ error: `Unsupported workflow template: ${requestedPreset}` });
     }
-    const workflowPresetId = PROJECT_PRESET_TO_WORKFLOW[requestedPreset];
     let workflow: any;
     let filename: string;
     if (!workflowPresetId) {
@@ -4001,12 +4986,12 @@ app.get('/api/comfyui/workflow-template', async (req, res) => {
       );
       filename = 'comfyui_template_sdxl_legacy.json';
     } else {
-      const manifestPath = path.resolve(`workflows/character/${workflowPresetId}.manifest.json`);
-      if (!fs.existsSync(manifestPath)) {
+      const manifestPath = resolvePresetManifestPath(workflowPresetId);
+      if (!manifestPath || !fs.existsSync(manifestPath)) {
         return res.status(404).json({ error: `Workflow preset manifest not found: ${workflowPresetId}` });
       }
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      workflow = JSON.parse(fs.readFileSync(path.resolve(`workflows/character/${manifest.uiFile}`), 'utf8'));
+      workflow = JSON.parse(fs.readFileSync(path.join(path.dirname(manifestPath), manifest.uiFile), 'utf8'));
       filename = `comfyui_template_${requestedPreset}.json`;
     }
     // Generic templates intentionally have no slot provenance and cannot be imported as a result.
@@ -4049,6 +5034,48 @@ app.get('/api/comfyui/checkpoints', async (req, res) => {
 
 app.get('/api/comfyui/workflow-info', (req, res) => {
   try {
+    const presetId = String(req.query.presetId || '');
+    if (presetId && presetId !== 'sdxl_legacy') {
+      if (!/^[a-zA-Z0-9_-]+$/.test(presetId)) {
+        return res.status(400).json({ error: 'Invalid workflow preset ID.' });
+      }
+      const manifestPath = resolvePresetManifestPath(presetId);
+      if (!manifestPath || !fs.existsSync(manifestPath)) {
+        return res.status(404).json({ error: `Workflow preset manifest not found: ${presetId}` });
+      }
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const apiWorkflow = JSON.parse(fs.readFileSync(path.join(path.dirname(manifestPath), manifest.apiFile), 'utf8'));
+      const uiWorkflow = JSON.parse(fs.readFileSync(path.join(path.dirname(manifestPath), manifest.uiFile), 'utf8'));
+      validatePresetManifest(manifest, apiWorkflow, uiWorkflow, presetId);
+      const modelFields = Object.entries(manifest.modelMappings || {}).map(([key, mapping]: [string, any]) => {
+        const node = apiWorkflow[String(mapping.nodeId)];
+        if (!node || !node.inputs || typeof node.inputs[mapping.inputKey] !== 'string') {
+          throw new ImportResultError(422, `Preset model mapping '${key}' is invalid.`);
+        }
+        return {
+          key,
+          label: String(mapping.label || key),
+          nodeId: String(mapping.nodeId),
+          inputKey: String(mapping.inputKey),
+          value: node.inputs[mapping.inputKey],
+          editable: mapping.editable === true,
+        };
+      });
+      return res.json({
+        isCustom: false,
+        presetId,
+        modelParameterType: modelFields.length ? 'manifest' : 'readonly',
+        modelFields,
+        supported: {
+          prompt: !!manifest.parameterNodeIds?.positivePrompt,
+          negativePrompt: !!manifest.parameterNodeIds?.negativePrompt,
+          seed: !!manifest.parameterNodeIds?.seed,
+          model: modelFields.some((field: any) => field.editable),
+          width: !!manifest.parameterNodeIds?.width,
+          height: !!manifest.parameterNodeIds?.height,
+        },
+      });
+    }
     const customWorkflow = loadCustomComfyWorkflow();
     if (!customWorkflow) {
       return res.json({
@@ -4126,8 +5153,10 @@ app.post('/api/comfyui/tasks/:id/retry', async (req, res) => {
         INSERT INTO comfyui_tasks (
           id, projectId, targetId, targetType, viewType, shotIndex, characterName,
           prompt, negativePrompt, seed, model, width, height, status, retryCount, retryOfTaskId,
-          apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
+          workflowPresetId, workflowFamily, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson,
+          characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, workflowBatchId, batchOrder
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         newTaskId,
         oldTask.projectId,
@@ -4148,7 +5177,18 @@ app.post('/api/comfyui/tasks/:id/retry', async (req, res) => {
         oldTask.apiWorkflowJson,
         oldTask.uiWorkflowJson,
         new Date().toISOString(),
-        new Date().toISOString()
+        new Date().toISOString(),
+        oldTask.workflowPresetId,
+        oldTask.workflowFamily,
+        oldTask.sourceImageUrl,
+        oldTask.sourceTaskId,
+        oldTask.outputNodeId,
+        oldTask.presetParametersJson,
+        oldTask.characterReferenceImageUrl,
+        oldTask.characterReferenceTaskId,
+        oldTask.lockCharacterIdentity,
+        oldTask.workflowBatchId,
+        oldTask.batchOrder
       );
     });
     tx();
@@ -4175,36 +5215,401 @@ app.post('/api/comfyui/tasks/:id/cancel', async (req, res) => {
     // Cancel locally in SQLite first
     dbSqlite.prepare(`
       UPDATE comfyui_tasks
-      SET status = 'cancelled', completedAt = ?, updatedAt = ?
+      SET status = 'cancelled', stateDetail = 'cancelled', queuePosition = NULL, completedAt = ?, updatedAt = ?
       WHERE id = ?
     `).run(new Date().toISOString(), new Date().toISOString(), id);
 
-    // Best-effort cancel on ComfyUI if task is processing
-    if (task.status === 'processing') {
+    const promptId = task.comfyPromptId || task.id;
+    if (promptId) {
       console.log(`[Queue] Best-effort delete from ComfyUI queue for cancelled task ${id}`);
       comfyFetch('/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ delete: [id] })
+        body: JSON.stringify({ delete: [promptId] })
       }).catch(err => {
         console.warn(`[Queue] Failed to delete task ${id} from ComfyUI queue:`, err.message);
       });
+      if (task.status === 'processing') {
+        comfyFetch('/interrupt', { method: 'POST' }).catch(err => {
+          console.warn(`[Queue] Failed to interrupt processing task ${id}:`, err.message);
+        });
+      }
     }
 
     console.log(`[Queue] Cancelled task ${id} successfully.`);
+    console.log('[TaskState:Update]', JSON.stringify({ taskId: id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: promptId, status: 'cancelled', error: null }));
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
+function getStyleEnglishBackend(style: string): string {
+  switch (style) {
+    case "写实":
+      return "Cinematic photo-realistic, dramatic lighting, highly detailed, 8k resolution";
+    case "动漫":
+      return "Anime style, Japanese animation, cell-shaded, high quality";
+    case "赛博朋克":
+      return "Cyberpunk style, neon lights, dark alley reflections, futuristic";
+    case "油画":
+      return "Oil painting style, textured brush strokes, classical masterpiece, artistic";
+    default:
+      return "Cinematic, dramatic lighting, highly detailed";
+  }
+}
+
+app.post('/api/comfyui/shots/generate-all', async (req, res) => {
+  const { projectId, regenerateMode, confirmed } = req.body;
+  if (!projectId) {
+    return res.status(400).json({ error: 'projectId is required' });
+  }
+
+  try {
+    // 1. Check if there is already an active batch for this project
+    const activeBatchTask = dbSqlite.prepare(`
+      SELECT workflowBatchId FROM comfyui_tasks
+      WHERE projectId = ? AND targetType = 'shot' AND status IN ('pending', 'processing') AND workflowBatchId IS NOT NULL
+      LIMIT 1
+    `).get(projectId) as { workflowBatchId: string } | undefined;
+
+    if (activeBatchTask) {
+      console.log(`[Generate All] Found existing active batch ${activeBatchTask.workflowBatchId} for project ${projectId}.`);
+      return res.json({
+        success: true,
+        workflowBatchId: activeBatchTask.workflowBatchId,
+        message: 'Batch already running',
+        count: 0
+      });
+    }
+
+    const script = getGeneratedScript(String(projectId));
+    if (!script) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const mode = regenerateMode || 'missing'; // 'all', 'missing', 'failed'
+    const shots = script.newShots || [];
+
+    const selectedShots = shots.map((shot: any, idx: number) => ({ shot, idx })).filter(({ shot, idx }: any) => {
+      const latestTask = dbSqlite.prepare(`SELECT status, imageUrl FROM comfyui_tasks WHERE projectId = ? AND targetId = ? AND viewType = 'main' ORDER BY createdAt DESC LIMIT 1`).get(projectId, shot.id) as any;
+      if (mode === 'all') return true;
+      if (mode === 'failed') return !!latestTask && ['failed', 'cancelled'].includes(latestTask.status);
+      return !(latestTask?.status === 'succeeded' && latestTask.imageUrl && shot.imageUrl);
+    });
+    const preflightItems = selectedShots.map(({ shot, idx }: any) => {
+      const characters = shotCharacters(String(projectId), idx, shot.description || '');
+      const missing = characters.filter((character: any) => !character.avatarUrl);
+      return { shotIndex: idx, targetId: shot.id, matchedCharacters: characters.map((c: any) => ({ id: c.id || null, name: c.name || null })), missingAvatar: missing.map((c: any) => c.name || c.id) };
+    });
+    const preflight = {
+      total: preflightItems.length,
+      pulid: preflightItems.filter(item => item.matchedCharacters.length > 0 && item.missingAvatar.length === 0).length,
+      missingAvatar: preflightItems.filter(item => item.missingAvatar.length > 0).length,
+      klein: preflightItems.filter(item => item.matchedCharacters.length === 0).length,
+      items: preflightItems,
+    };
+    // Accepted production baseline: 10 shots in 7m35s = 45.5 seconds per shot.
+    const averageSeconds = 455 / 10;
+    const oldPendingCount = (dbSqlite.prepare(`SELECT COUNT(*) AS count FROM comfyui_tasks WHERE projectId = ? AND targetType = 'shot' AND status IN ('pending','processing')`).get(projectId) as any)?.count || 0;
+    const suspiciousUnboundShots = preflightItems.filter(item => {
+      const shot = shots[item.shotIndex];
+      return item.matchedCharacters.length > 0 && (!Array.isArray(shot?.matchedCharacterIds) || shot.matchedCharacterIds.length === 0);
+    }).map(item => ({ shotIndex: item.shotIndex, targetId: item.targetId, matchedCharacters: item.matchedCharacters }));
+    Object.assign(preflight, {
+      averageSecondsPerShot: averageSeconds,
+      estimatedSeconds: Math.round(averageSeconds * (preflight.pulid + preflight.klein)),
+      estimated60ShotSeconds: Math.round(averageSeconds * 60),
+      requiresLargeBatchConfirmation: preflight.total > 30,
+      hasPendingOldTasks: oldPendingCount > 0,
+      pendingOldTaskCount: oldPendingCount,
+      hasSuspiciousUnboundCharacterText: suspiciousUnboundShots.length > 0,
+      suspiciousUnboundShots,
+    });
+    if (preflight.total === 0) return res.json({ success: true, requiresConfirmation: false, count: 0, message: 'No shots match the selected batch mode' });
+    if (confirmed !== true) return res.json({ success: true, requiresConfirmation: true, preflight });
+    const workflowBatchId = crypto.randomUUID();
+
+    const tasksToCreate: any[] = [];
+    let batchOrder = 0;
+
+    const batchItems: any[] = [];
+    for (const selected of selectedShots) {
+      const { shot, idx } = selected;
+      const targetId = shot.id;
+      const viewType = 'main';
+
+      // Check if there is already a pending task for this shot/main
+      const pendingTask = dbSqlite.prepare(`
+        SELECT id FROM comfyui_tasks
+        WHERE projectId = ? AND targetId = ? AND viewType = ? AND status = 'pending'
+        LIMIT 1
+      `).get(projectId, targetId, viewType) as { id: string } | undefined;
+
+      // "如果已有同项目 shot/main 的 pending 任务，默认跳过；除非 regenerateMode=all 且明确创建新版本。"
+      if (pendingTask && mode !== 'all') {
+        console.log(`[Generate All] Shot ${idx} (${targetId}) already has a pending task. Skipping.`);
+        continue;
+      }
+
+      const preflightItem = preflightItems.find(item => item.shotIndex === idx)!;
+      if (preflightItem.missingAvatar.length) {
+        batchItems.push({ id: crypto.randomUUID(), targetId, shotIndex: idx, batchOrder: batchOrder++, taskId: null, matchedCharacters: preflightItem.matchedCharacters, workflowPresetId: '02_klein_pulid_identity', characterReferenceImageUrl: null, workflowInjected: 0, finalStatus: 'skipped_missing_avatar', error: `Missing Avatar: ${preflightItem.missingAvatar.join(', ')}` });
+        continue;
+      }
+
+      // Reuse the existing single shot ComfyUI logic by calling prepareComfyTaskData
+      // "失败的某个分镜不得阻塞后续分镜执行。"
+      try {
+        const prepared = await prepareComfyTaskData({
+          projectId,
+          targetType: 'shot',
+          targetId,
+          viewType,
+          shotIndex: idx,
+          prompt: shot.description || '',
+          style: getStyleEnglishBackend(shot.style || '写实'),
+          negativePrompt: undefined,
+          seed: undefined,
+          seedMode: 'random',
+          lockCharacterIdentity: req.body.lockCharacterIdentity !== false,
+          workflowBatchId
+        });
+
+        const taskId = crypto.randomUUID();
+        tasksToCreate.push({
+          ...prepared.taskData,
+          id: taskId,
+          batchOrder
+        });
+        batchItems.push({ id: crypto.randomUUID(), targetId, shotIndex: idx, batchOrder, taskId, matchedCharacters: preflightItem.matchedCharacters, workflowPresetId: prepared.taskData.workflowPresetId, characterReferenceImageUrl: prepared.taskData.characterReferenceImageUrl, workflowInjected: prepared.taskData.workflowPresetId === '02_klein_pulid_identity' && !!prepared.taskData.characterReferenceImageUrl ? 1 : 0, finalStatus: 'pending', error: null });
+        batchOrder++;
+      } catch (err: any) {
+        console.error(`[Generate All] Failed to prepare task for shot ${idx} (${targetId}):`, err.message);
+        batchItems.push({ id: crypto.randomUUID(), targetId, shotIndex: idx, batchOrder: batchOrder++, taskId: null, matchedCharacters: preflightItem.matchedCharacters, workflowPresetId: null, characterReferenceImageUrl: null, workflowInjected: 0, finalStatus: 'failed', error: err.message });
+      }
+    }
+
+    // Insert all batch tasks in a single database transaction
+    const tx = dbSqlite.transaction(() => {
+      const now = new Date().toISOString();
+      dbSqlite.prepare(`INSERT INTO comfyui_shot_batches (id, projectId, regenerateMode, status, totalCount, queuedCount, enqueueFailedCount, errorsJson, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        workflowBatchId, projectId, mode, tasksToCreate.length ? 'running' : 'completed', batchItems.length, tasksToCreate.length, batchItems.filter(item => item.finalStatus === 'failed').length, JSON.stringify(batchItems.filter(item => item.error).map(item => ({ shotIndex: item.shotIndex, error: item.error }))), now, now
+      );
+      const insertItem = dbSqlite.prepare(`INSERT INTO comfyui_shot_batch_items (id, batchId, projectId, targetId, shotIndex, batchOrder, taskId, matchedCharactersJson, workflowPresetId, characterReferenceImageUrl, workflowInjected, finalStatus, error, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const item of batchItems) insertItem.run(item.id, workflowBatchId, projectId, item.targetId, item.shotIndex, item.batchOrder, item.taskId, JSON.stringify(item.matchedCharacters), item.workflowPresetId, item.characterReferenceImageUrl, item.workflowInjected, item.finalStatus, item.error, now, now);
+      for (const t of tasksToCreate) {
+        // Cancel existing pending tasks for the same targetId and viewType (but NOT processing tasks!)
+        dbSqlite.prepare(`
+          UPDATE comfyui_tasks
+          SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by batch task', completedAt = ?, updatedAt = ?
+          WHERE targetId = ? AND viewType = ? AND status = 'pending'
+        `).run(t.id, new Date().toISOString(), new Date().toISOString(), t.targetId, t.viewType);
+
+        dbSqlite.prepare(`
+          INSERT INTO comfyui_tasks (
+            id, projectId, targetId, targetType, viewType, shotIndex, characterName,
+            prompt, negativePrompt, seed, model, width, height, status, retryCount,
+            apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
+            workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson,
+            characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, batchOrder
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          t.id,
+          t.projectId,
+          t.targetId,
+          t.targetType,
+          t.viewType,
+          t.shotIndex,
+          t.characterName,
+          t.prompt,
+          t.negativePrompt,
+          t.seed,
+          t.model,
+          t.width,
+          t.height,
+          'pending',
+          0,
+          t.apiWorkflowJson,
+          t.uiWorkflowJson,
+          new Date().toISOString(),
+          new Date().toISOString(),
+          t.workflowPresetId,
+          t.workflowFamily,
+          t.workflowBatchId,
+          t.sourceImageUrl,
+          t.sourceTaskId,
+          t.outputNodeId,
+          t.presetParametersJson,
+          t.characterReferenceImageUrl,
+          t.characterReferenceTaskId,
+          t.lockCharacterIdentity,
+          t.batchOrder
+        );
+      }
+    });
+    tx();
+
+    console.log(`[Generate All] Successfully enqueued batch ${workflowBatchId} with ${tasksToCreate.length} tasks.`);
+    return res.json({
+      success: true,
+      workflowBatchId,
+      count: tasksToCreate.length,
+      preflight,
+      summary: { total: batchItems.length, success: 0, failed: batchItems.filter(item => item.finalStatus === 'failed').length, skipped: batchItems.filter(item => item.finalStatus === 'skipped_missing_avatar').length },
+      taskIds: tasksToCreate.map(t => t.id)
+    });
+  } catch (err: any) {
+    console.error("[Generate All Endpoint Error]", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+function reportImagePath(imageUrl: string | null | undefined): string | null {
+  if (!imageUrl || /^https?:\/\//i.test(imageUrl)) return null;
+  const clean = imageUrl.split('?')[0].replace(/^\/+/, '');
+  const resolved = clean.startsWith('uploads/')
+    ? path.resolve(UPLOADS_DIR, clean.slice('uploads/'.length))
+    : path.resolve(__dirname, clean);
+  return resolved.startsWith(path.resolve(__dirname)) && fs.existsSync(resolved) ? resolved : null;
+}
+
+function escapeReportHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!));
+}
+
+app.post('/api/comfyui/shot-batches/:batchId/report', async (req, res) => {
+  try {
+    const batch = dbSqlite.prepare('SELECT * FROM comfyui_shot_batches WHERE id = ?').get(req.params.batchId) as any;
+    if (!batch) return res.status(404).json({ error: 'Batch not found' });
+    const script = getGeneratedScript(batch.projectId);
+    const rows = dbSqlite.prepare(`
+      SELECT i.*, t.status AS taskStatus, t.imageUrl, t.model, t.workflowFamily, t.error AS taskError,
+             t.createdAt AS taskCreatedAt, t.submittedAt, t.completedAt
+      FROM comfyui_shot_batch_items i LEFT JOIN comfyui_tasks t ON t.id = i.taskId
+      WHERE i.batchId = ? ORDER BY i.batchOrder
+    `).all(batch.id) as any[];
+    const items = rows.map(row => {
+      const finalStatus = row.taskStatus === 'succeeded' ? 'success'
+        : row.taskStatus === 'failed' || row.taskStatus === 'cancelled' ? 'failed'
+          : row.finalStatus;
+      return {
+        shotIndex: row.shotIndex,
+        targetId: row.targetId,
+        matchedCharacters: JSON.parse(row.matchedCharactersJson || '[]'),
+        workflowPresetId: row.workflowPresetId,
+        model: row.model || null,
+        characterReferenceImageUrl: row.characterReferenceImageUrl,
+        workflowInjected: !!row.workflowInjected,
+        finalStatus,
+        imageUrl: row.imageUrl || null,
+        error: row.taskError || row.error || null,
+        durationSeconds: row.submittedAt && row.completedAt ? Math.max(0, Math.round((Date.parse(row.completedAt) - Date.parse(row.submittedAt)) / 1000)) : null,
+      };
+    });
+    const summary = {
+      total: items.length,
+      success: items.filter(item => item.finalStatus === 'success').length,
+      failed: items.filter(item => item.finalStatus === 'failed').length,
+      skipped: items.filter(item => item.finalStatus === 'skipped_missing_avatar').length,
+    };
+    const relativeDir = path.join('reports', safePathSegment(batch.id, 'batch'));
+    const outputDir = path.join(UPLOADS_DIR, relativeDir);
+    fs.mkdirSync(outputDir, { recursive: true });
+    const tileWidth = 320, tileHeight = 220, columns = Math.min(4, Math.max(1, items.length)), rowsCount = Math.max(1, Math.ceil(items.length / columns));
+    const tiles = await Promise.all(items.map(async (item, index) => {
+      const source = reportImagePath(item.imageUrl);
+      const background = item.finalStatus === 'success' ? '#172033' : item.finalStatus === 'failed' ? '#451a1a' : '#3f2d12';
+      const image = source
+        ? await sharp(source).rotate().resize(tileWidth, tileHeight, { fit: 'cover' }).png().toBuffer()
+        : await sharp({ create: { width: tileWidth, height: tileHeight, channels: 3, background } }).png().toBuffer();
+      const characterNames = item.matchedCharacters.map((c: any) => c.name).filter(Boolean).join(', ') || '无角色';
+      const taskShortId = String(rows[index]?.taskId || '-').slice(0, 8);
+      const label = Buffer.from(`<svg width="${tileWidth}" height="${tileHeight}"><rect y="158" width="${tileWidth}" height="62" fill="rgba(0,0,0,.82)"/><text x="10" y="178" fill="white" font-size="14" font-family="sans-serif">镜头 ${item.shotIndex + 1} · ${escapeReportHtml(characterNames)}</text><text x="10" y="197" fill="#cbd5e1" font-size="10" font-family="sans-serif">${escapeReportHtml(item.workflowPresetId || 'no preset')}</text><text x="10" y="214" fill="#cbd5e1" font-size="10" font-family="sans-serif">task ${escapeReportHtml(taskShortId)} · injected ${item.workflowInjected}</text></svg>`);
+      return sharp(image).composite([{ input: label }]).png().toBuffer();
+    }));
+    const contactSheetPath = path.join(outputDir, 'contact-sheet.png');
+    await sharp({ create: { width: columns * tileWidth, height: rowsCount * tileHeight, channels: 3, background: '#0f172a' } })
+      .composite(tiles.map((input, index) => ({ input, left: (index % columns) * tileWidth, top: Math.floor(index / columns) * tileHeight })))
+      .png().toFile(contactSheetPath);
+    const startedAt = rows.map(row => row.submittedAt || row.taskCreatedAt).filter(Boolean).sort()[0] || batch.createdAt;
+    const completedAt = rows.map(row => row.completedAt).filter(Boolean).sort().at(-1) || batch.updatedAt;
+    const durationSeconds = startedAt && completedAt ? Math.max(0, Math.round((Date.parse(completedAt) - Date.parse(startedAt)) / 1000)) : null;
+    const reportItems = items.map((item, index) => ({
+      shotIndex: item.shotIndex,
+      status: item.finalStatus,
+      skipReason: item.finalStatus === 'skipped_missing_avatar' ? item.error : null,
+      taskId: rows[index]?.taskId || null,
+      workflowPresetId: item.workflowPresetId,
+      matchedCharacters: item.matchedCharacters,
+      characterReferenceImageUrl: item.characterReferenceImageUrl,
+      workflowInjected: item.workflowInjected,
+      outputImageUrl: item.imageUrl,
+      errorMessage: item.finalStatus === 'skipped_missing_avatar' ? null : item.error,
+      model: item.model,
+    }));
+    const report = { batchId: batch.id, total: summary.total, succeeded: summary.success, failed: summary.failed, skipped: summary.skipped, duration: durationSeconds, startedAt, completedAt, generatedAt: new Date().toISOString(), projectId: batch.projectId, projectTitle: script?.title || script?.scriptTitle || script?.storyTitle || null, shots: reportItems };
+    fs.writeFileSync(path.join(outputDir, 'report.json'), JSON.stringify(report, null, 2), 'utf8');
+    const cards = reportItems.map(item => `<article><div class="thumb">${item.outputImageUrl ? `<img src="${escapeReportHtml(item.outputImageUrl)}">` : `<div class="placeholder">${escapeReportHtml(item.skipReason || item.errorMessage || item.status)}</div>`}</div><h3>镜头 ${item.shotIndex + 1} · ${escapeReportHtml(item.status)}</h3><p>角色：${escapeReportHtml(item.matchedCharacters.map((c: any) => c.name).join(', ') || '无角色')}</p><p>模型：${escapeReportHtml(item.model || '-')}</p><p>预设：${escapeReportHtml(item.workflowPresetId || '-')}</p><p>Task：<code>${escapeReportHtml(item.taskId || '-')}</code></p><p>Injected：${item.workflowInjected}</p></article>`).join('');
+    const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>批次验收报告</title><style>body{font:14px system-ui;margin:32px;color:#e2e8f0;background:#0f172a}h1{margin-bottom:4px}.summary{display:flex;gap:24px;margin:20px 0}.sheet{max-width:100%;border:1px solid #475569}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:24px}article{background:#1e293b;border:1px solid #475569;border-radius:10px;padding:12px}.thumb{height:180px;background:#334155;display:flex;align-items:center;justify-content:center;overflow:hidden}.thumb img{width:100%;height:100%;object-fit:cover}.placeholder{color:#cbd5e1;padding:20px;text-align:center}p{margin:5px 0;color:#cbd5e1}code{font-size:11px}</style></head><body><h1>分镜批次验收报告</h1><div>项目：${escapeReportHtml(report.projectTitle || report.projectId)}　批次：${escapeReportHtml(batch.id)}</div><div class="summary"><b>总数 ${summary.total}</b><b>成功 ${summary.success}</b><b>失败 ${summary.failed}</b><b>跳过 ${summary.skipped}</b><b>耗时 ${escapeReportHtml(durationSeconds ?? '-')} 秒</b></div><img class="sheet" src="contact-sheet.png" alt="Contact sheet"><section class="grid">${cards}</section></body></html>`;
+    fs.writeFileSync(path.join(outputDir, 'report.html'), html, 'utf8');
+    fs.writeFileSync(path.join(outputDir, 'README.txt'), `批量验收报告\r\nBatch ID: ${batch.id}\r\n总数: ${summary.total}\r\n成功: ${summary.success}\r\n失败: ${summary.failed}\r\n跳过: ${summary.skipped}\r\n耗时: ${durationSeconds ?? '未知'} 秒\r\n\r\nreport.json 为机器可读明细；report.html 为可视化卡片报告；contact-sheet.png 为十宫格/批量视觉对比。\r\n`, 'utf8');
+    const baseUrl = `/uploads/${relativeDir.replace(/\\/g, '/')}`;
+    return res.json({ success: true, summary, reportJsonUrl: `${baseUrl}/report.json`, reportHtmlUrl: `${baseUrl}/report.html`, contactSheetUrl: `${baseUrl}/contact-sheet.png`, readmeUrl: `${baseUrl}/README.txt`, paths: [`${baseUrl}/report.json`, `${baseUrl}/report.html`, `${baseUrl}/contact-sheet.png`, `${baseUrl}/README.txt`] });
+  } catch (error: any) {
+    console.error('[Batch Report Error]', error);
+    return res.status(500).json({ error: error.message || 'Failed to generate report' });
+  }
+});
+
+app.post('/api/comfyui/shots/stop-generation', async (req, res) => {
+  const { projectId, workflowBatchId } = req.body;
+  if (!projectId) {
+    return res.status(400).json({ error: 'projectId is required' });
+  }
+
+  try {
+    let query = `
+      UPDATE comfyui_tasks
+      SET status = 'cancelled', completedAt = ?, updatedAt = ?, error = 'Stopped by user batch cancellation'
+      WHERE projectId = ? AND status = 'pending' AND targetType = 'shot' AND viewType = 'main'
+    `;
+    const params = [new Date().toISOString(), new Date().toISOString(), projectId];
+
+    if (workflowBatchId) {
+      query += ` AND workflowBatchId = ?`;
+      params.push(workflowBatchId);
+    }
+
+    const result = dbSqlite.prepare(query).run(...params);
+    if (workflowBatchId) {
+      dbSqlite.prepare(`UPDATE comfyui_shot_batch_items SET finalStatus = 'failed', error = 'Stopped by user', updatedAt = ? WHERE batchId = ? AND finalStatus IN ('pending','processing')`).run(new Date().toISOString(), workflowBatchId);
+      dbSqlite.prepare(`UPDATE comfyui_shot_batches SET status = 'completed', stoppedAt = ?, updatedAt = ? WHERE id = ?`).run(new Date().toISOString(), new Date().toISOString(), workflowBatchId);
+    }
+    console.log(`[Stop Generation] Cancelled ${result.changes} pending shot tasks for project ${projectId}.`);
+    return res.json({ success: true, cancelledCount: result.changes });
+  } catch (err: any) {
+    console.error("[Stop Generation Error]", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // 11. POST /api/generate-image - Generate image using Pollinations AI, Kling AI, or local ComfyUI
-function getCharacterAvatarUrl(projectId: string, targetId: string): string | null {
+function getGeneratedScript(projectId: string): any | null {
   try {
     const row = dbSqlite.prepare("SELECT value FROM store WHERE key = 'generated_scripts'").get() as { value: string } | undefined;
     if (!row) return null;
     const scripts = JSON.parse(row.value);
-    const script = scripts.find((s: any) => s.id === projectId);
+    return scripts.find((s: any) => String(s.id) === String(projectId)) || null;
+  } catch (err) {
+    console.error("[getGeneratedScript Error]", err);
+    return null;
+  }
+}
+
+function getCharacterAvatarUrl(projectId: string, targetId: string): string | null {
+  try {
+    const script = getGeneratedScript(projectId);
     if (!script) return null;
     const char = script.newCharacters?.find((c: any) => c.id === targetId || String(c.id) === String(targetId));
     return char?.avatarUrl || null;
@@ -4212,6 +5617,153 @@ function getCharacterAvatarUrl(projectId: string, targetId: string): string | nu
     console.error("[getCharacterAvatarUrl Error]", err);
     return null;
   }
+}
+
+function shotCharacters(projectId: string, shotIndex: number | undefined, prompt: string): any[] {
+  const script = getGeneratedScript(projectId);
+  if (!script) return [];
+  const shot = typeof shotIndex === 'number' ? script.newShots?.[shotIndex] : null;
+  const matchedCharacterIds = new Set(
+    [...(shot?.matchedCharacterIds || [])]
+      .map((value: any) => String(value).trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+  const legacyCharacterKeys = new Set(
+    [...(shot?.characterIds || []), ...(shot?.characters || []), ...(shot?.characterNames || [])]
+      .map((value: any) => String(value).trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+  const searchable = `${prompt || ''} ${shot?.description || ''}`.toLocaleLowerCase();
+  const matchedCharacters = (script.newCharacters || []).filter((character: any) => {
+    const id = String(character.id || '').trim().toLocaleLowerCase();
+    if (matchedCharacterIds.size > 0) return id && matchedCharacterIds.has(id);
+    return (id && legacyCharacterKeys.has(id)) || characterMatchTerms(character).some(term => (
+      legacyCharacterKeys.has(term) || searchable.includes(term)
+    ));
+  });
+  console.log('[CharacterConsistency:Detect]', JSON.stringify({
+    projectId,
+    shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+    shotId: shot?.id || null,
+    matchedCharacterIds: [...matchedCharacterIds],
+    legacyCharacterKeys: [...legacyCharacterKeys],
+    promptPreview: String(prompt || '').slice(0, 200),
+    descriptionPreview: String(shot?.description || '').slice(0, 200),
+    availableCharacters: (script.newCharacters || []).map((character: any) => ({
+      id: character.id || null,
+      name: character.name || null,
+      avatarUrl: character.avatarUrl || null,
+      frontUrl: character.views?.front || null,
+      sideUrl: character.views?.side || null,
+      backUrl: character.views?.back || null,
+    })),
+    matchedCharacters: matchedCharacters.map((character: any) => ({ id: character.id || null, name: character.name || null })),
+  }));
+  return matchedCharacters;
+}
+
+async function readCharacterReferenceImage(imageUrl: string): Promise<Buffer | null> {
+  try {
+    if (/^https?:\/\//i.test(imageUrl)) {
+      const response = await fetch(imageUrl);
+      if (!response.ok) return null;
+      return Buffer.from(await response.arrayBuffer());
+    }
+    const clean = imageUrl.split('?')[0].replace(/^\/+/, '');
+    const candidates = clean.startsWith('uploads/')
+      ? [path.resolve(UPLOADS_DIR, clean.slice('uploads/'.length))]
+      : [path.resolve(__dirname, clean), path.resolve(UPLOADS_DIR, clean)];
+    const localPath = candidates.find(candidate => fs.existsSync(candidate));
+    return localPath ? fs.readFileSync(localPath) : null;
+  } catch (err) {
+    console.warn(`[Character Consistency] Could not read reference '${imageUrl}':`, err);
+    return null;
+  }
+}
+
+async function createShotCharacterReference(
+  projectId: string,
+  shotIndex: number | undefined,
+  prompt: string,
+): Promise<{ sourceImageUrl: string | null; referenceTaskId: string | null; characters: any[]; warning?: string }> {
+  const characters = shotCharacters(projectId, shotIndex, prompt);
+  if (!characters.length) {
+    console.warn('[CharacterConsistency:NoCharacterMatch]', JSON.stringify({ projectId, shotIndex: typeof shotIndex === 'number' ? shotIndex : null }));
+    return { sourceImageUrl: null, referenceTaskId: null, characters: [] };
+  }
+  const missingAvatar = characters.find(character => !character.avatarUrl);
+  if (missingAvatar) {
+    return {
+      sourceImageUrl: null,
+      referenceTaskId: null,
+      characters,
+      warning: `角色“${missingAvatar.name}”尚无 Avatar。请先生成角色母版/参考图，再生成分镜。`,
+    };
+  }
+  const sources = characters.flatMap(character => [
+    character.avatarUrl, character.views?.front, character.views?.side, character.views?.back,
+  ].filter(Boolean).map((url: string) => ({ character, url })));
+  console.log('[CharacterConsistency:ReferenceSources]', JSON.stringify({
+    projectId,
+    shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+    characterIds: characters.map(character => character.id || null),
+    sources: sources.map(source => ({ characterId: source.character.id || null, characterName: source.character.name || null, url: source.url })),
+  }));
+  if (!sources.length) {
+    return { sourceImageUrl: null, referenceTaskId: null, characters, warning: '镜头中的角色尚无 Avatar，当前预设无法锁定角色身份。' };
+  }
+
+  const tiles: Buffer[] = [];
+  for (const source of sources) {
+    const input = await readCharacterReferenceImage(source.url);
+    console.log('[CharacterConsistency:ReferenceRead]', JSON.stringify({
+      projectId,
+      shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+      characterId: source.character.id || null,
+      url: source.url,
+      loaded: !!input,
+      bytes: input?.length || 0,
+    }));
+    if (input) tiles.push(await sharp(input).rotate().resize(512, 512, { fit: 'contain', background: '#ffffff' }).png().toBuffer());
+  }
+  if (!tiles.length) {
+    return { sourceImageUrl: null, referenceTaskId: null, characters, warning: '角色参考图无法读取，当前预设无法锁定角色身份。' };
+  }
+
+  const columns = Math.min(4, tiles.length);
+  const rows = Math.ceil(tiles.length / columns);
+  const hash = crypto.createHash('sha256').update(sources.map(item => item.url).join('|')).digest('hex');
+  const relativeDir = path.join('projects', safePathSegment(projectId, 'project'), 'character-references');
+  const outputDir = path.join(UPLOADS_DIR, relativeDir);
+  const outputPath = path.join(outputDir, `${hash}.png`);
+  if (!fs.existsSync(outputPath)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+    await sharp({ create: { width: columns * 512, height: rows * 512, channels: 3, background: '#ffffff' } })
+      .composite(tiles.map((input, index) => ({ input, left: (index % columns) * 512, top: Math.floor(index / columns) * 512 })))
+      .png().toFile(outputPath);
+  }
+  const primaryCharacter = characters[0];
+  const referenceTask = dbSqlite.prepare(`
+    SELECT id FROM comfyui_tasks
+    WHERE projectId = ? AND targetId = ? AND targetType = 'character'
+      AND viewType IN ('avatar', 'front') AND status = 'succeeded'
+    ORDER BY completedAt DESC, createdAt DESC LIMIT 1
+  `).get(projectId, String(primaryCharacter.id || '')) as { id: string } | undefined;
+  const sourceImageUrl = `/uploads/${relativeDir.replace(/\\/g, '/')}/${hash}.png`;
+  console.log('[CharacterConsistency:CompositeReady]', JSON.stringify({
+    projectId,
+    shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+    characterIds: characters.map(character => character.id || null),
+    tileCount: tiles.length,
+    outputPath,
+    sourceImageUrl,
+    referenceTaskId: referenceTask?.id || null,
+  }));
+  return {
+    sourceImageUrl,
+    referenceTaskId: referenceTask?.id || null,
+    characters,
+  };
 }
 
 function applyPresetParameters(
@@ -4282,6 +5834,312 @@ function applyPresetParameters(
   return cloned;
 }
 
+function applyPresetUiParameters(
+  uiWorkflow: any,
+  manifest: any,
+  params: {
+    prompt?: string;
+    negativePrompt?: string;
+    seed?: string;
+    width?: number;
+    height?: number;
+    model?: string;
+  },
+) {
+  const cloned = JSON.parse(JSON.stringify(uiWorkflow));
+  const mappings = presetParameterNodeIds(manifest);
+  const setWidget = (key: PresetParameterKey, value: string | number | undefined) => {
+    const nodeId = mappings[key];
+    if (!nodeId || value === undefined) return;
+    const node = mappedPresetUiNode(cloned, nodeId, key);
+    if (!Array.isArray(node.widgets_values)) node.widgets_values = [];
+    const widgetIndex = key === 'height' && mappings.width === mappings.height ? 1 : 0;
+    node.widgets_values[widgetIndex] = key === 'seed' ? Number(value) || value : value;
+  };
+
+  setWidget('positivePrompt', params.prompt);
+  setWidget('negativePrompt', params.negativePrompt);
+  setWidget('seed', params.seed);
+  setWidget('width', params.width);
+  setWidget('height', params.height);
+  setWidget('model', params.model);
+  return cloned;
+}
+
+async function prepareComfyTaskData(reqBody: any) {
+  const {
+    prompt, style, isCharacter, skipTranslation, negativePrompt, negative_prompt, seed,
+    projectId, targetType, shotIndex, characterName, targetId: reqTargetId, viewType: reqViewType,
+    presetId: reqPresetId, workflowPresetId: reqWorkflowPresetId, presetRole: reqPresetRole,
+    width: reqWidth, height: reqHeight, seedMode, lockCharacterIdentity: reqLockCharacterIdentity,
+    workflowBatchId, strength: reqStrength, loraStrength: reqLoraStrength, model: reqModel
+  } = reqBody;
+
+  let optimizedPrompt = prompt || '';
+  if (prompt && !skipTranslation) {
+    optimizedPrompt = await optimizePrompt(prompt, !!isCharacter, style);
+  } else if (prompt) {
+    console.log(`[prepareComfyTaskData] Skipping translation. Using direct prompt: "${prompt}"`);
+  }
+
+  const targetId = reqTargetId || (targetType === 'shot' ? `shot_${shotIndex}` : `char_${characterName}`);
+  const viewType = reqViewType || (targetType === 'shot' ? 'main' : 'avatar');
+  const projectPreferences = projectComfyPreferences(String(projectId || ''));
+  const hasExplicitPreset = reqPresetId !== undefined || reqWorkflowPresetId !== undefined;
+  const explicitPreset = reqPresetId ?? reqWorkflowPresetId;
+  const lockCharacterIdentity = targetType === 'shot' ? reqLockCharacterIdentity !== false : false;
+
+  const characterReference = targetType === 'shot' && lockCharacterIdentity
+    ? await createShotCharacterReference(String(projectId || ''), typeof shotIndex === 'number' ? shotIndex : undefined, String(prompt || ''))
+    : { sourceImageUrl: null, referenceTaskId: null, characters: [] as any[], warning: undefined as string | undefined };
+
+  if (targetType === 'shot') {
+    console.log('[CharacterConsistency:Preflight]', JSON.stringify({
+      projectId: String(projectId || ''),
+      targetId,
+      shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+      lockCharacterIdentity,
+      detectedCharacterIds: characterReference.characters.map((character: any) => character.id || null),
+      detectedCharacterNames: characterReference.characters.map((character: any) => character.name || null),
+      referenceImageUrl: characterReference.sourceImageUrl,
+      referenceTaskId: characterReference.referenceTaskId,
+      warning: characterReference.warning || null,
+    }));
+  }
+
+  if (lockCharacterIdentity && characterReference.characters.length && !characterReference.sourceImageUrl) {
+    throw new Error(characterReference.warning || '请先生成角色母版/参考图，再生成分镜。');
+  }
+
+  let selectedPreset: string;
+  if (hasExplicitPreset) {
+    selectedPreset = String(explicitPreset || 'sdxl_legacy');
+  } else if (reqPresetRole === 'threeView') {
+    selectedPreset = projectPreferences.threeViewPresetId;
+  } else if (reqPresetRole === 'identity') {
+    selectedPreset = projectPreferences.identityPresetId;
+  } else if (reqPresetRole === 'upscale') {
+    selectedPreset = projectPreferences.upscalePresetId;
+  } else if (targetType === 'character') {
+    selectedPreset = projectPreferences.characterMasterPresetId;
+  } else {
+    selectedPreset = projectPreferences.shotPresetId;
+  }
+  if (targetType === 'shot' && lockCharacterIdentity && characterReference.sourceImageUrl) {
+    selectedPreset = projectPreferences.identityPresetId;
+  }
+
+  const resolvedWorkflowId = workflowIdForSelection(selectedPreset);
+  if (resolvedWorkflowId === undefined) {
+    throw new Error(`Unsupported workflow preset: ${selectedPreset}`);
+  }
+  const presetId = resolvedWorkflowId || undefined;
+  if (targetType === 'shot') {
+    console.log('[CharacterConsistency:PresetDecision]', JSON.stringify({
+      projectId: String(projectId || ''),
+      targetId,
+      shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+      projectShotPresetId: projectPreferences.shotPresetId,
+      projectIdentityPresetId: projectPreferences.identityPresetId,
+      selectedPreset,
+      resolvedWorkflowPresetId: presetId || 'sdxl_legacy',
+      usedIdentityPreset: !!characterReference.sourceImageUrl,
+    }));
+  }
+
+  const requestedWidth = Number(reqWidth) || (isCharacter ? 512 : 768);
+  const requestedHeight = Number(reqHeight) || (isCharacter ? 768 : 512);
+  const width = Math.max(256, Math.min(2048, Math.floor(requestedWidth / 64) * 64));
+  const height = Math.max(256, Math.min(2048, Math.floor(requestedHeight / 64) * 64));
+
+  const taskSeed = (seedMode === 'random' || !seed)
+    ? String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n))
+    : String(seed);
+  const comfyNegative = String(negativePrompt || negative_prompt || DEFAULT_COMFY_NEGATIVE_PROMPT);
+
+  if (presetId) {
+    const manifestPath = resolvePresetManifestPath(presetId);
+    if (!manifestPath || !fs.existsSync(manifestPath)) {
+      throw new Error(`Workflow preset manifest not found for: ${presetId}`);
+    }
+
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const sourceTaskId = reqBody.sourceTaskId || null;
+    const sourceTask = sourceTaskId ? dbSqlite.prepare(`
+      SELECT apiWorkflowJson, uiWorkflowJson FROM comfyui_tasks
+      WHERE id = ? AND projectId = ? AND targetId = ? AND workflowPresetId = ? AND status = 'succeeded'
+    `).get(sourceTaskId, String(projectId || ''), targetId, presetId) as any : null;
+    let uiJson = JSON.parse(fs.readFileSync(path.join(path.dirname(manifestPath), manifest.uiFile), 'utf8'));
+    let apiJson = JSON.parse(fs.readFileSync(path.join(path.dirname(manifestPath), manifest.apiFile), 'utf8'));
+    if (sourceTask) {
+      apiJson = JSON.parse(sourceTask.apiWorkflowJson);
+      uiJson = JSON.parse(sourceTask.uiWorkflowJson);
+    }
+    const parameterNodeIds = validatePresetManifest(manifest, apiJson, uiJson, presetId);
+    const presetNegative = parameterNodeIds.negativePrompt ? comfyNegative : '';
+
+    let sourceImageUrl = characterReference.sourceImageUrl || reqBody.characterReferenceImageUrl || reqBody.sourceImageUrl || null;
+
+    if (sourceImageUrl) validatePresetReferenceMapping(manifest, apiJson);
+
+    if (presetId === '02_klein_pulid_identity' && !sourceImageUrl) {
+      throw new Error("Reference image is required for PuLID identity lock.");
+    }
+    if (presetId === '04_esrgan_upscale' && !sourceImageUrl) {
+      throw new Error("Source image is required for ESRGAN upscale.");
+    }
+    if (presetId === '03_qwen_2511_three_views') {
+      const avatarUrl = getCharacterAvatarUrl(String(projectId || ''), targetId);
+      if (!avatarUrl) {
+        throw new Error("Character avatar is required as a reference to generate three views.");
+      }
+      sourceImageUrl = avatarUrl;
+    }
+
+    if (presetId === '03_qwen_2511_three_views' && targetType === 'shot') {
+      throw new Error("Three views workflow is not supported for shot generation.");
+    }
+
+    const strength = reqStrength !== undefined ? Number(reqStrength) : manifest.defaultParameters?.strength;
+    const loraStrength = reqLoraStrength !== undefined ? Number(reqLoraStrength) : manifest.defaultParameters?.loraStrength;
+
+    const identityPrompt = characterReference.characters.length
+      ? `IDENTITY PRIORITY: preserve the supplied character design exactly; do not redesign face, hair, clothing, colors, age, or body shape. ${characterReference.characters.map((character: any) => `${character.name}: ${character.clothing || character.role || ''}`).join('; ')}. SHOT: ${optimizedPrompt}`
+      : optimizedPrompt;
+    const apiSnapshot = applyPresetParameters(apiJson, manifest, {
+      prompt: identityPrompt,
+      seed: taskSeed,
+      width,
+      height,
+      strength,
+      loraStrength
+    });
+    const mappedModelNode = parameterNodeIds.model ? apiJson[parameterNodeIds.model] : null;
+    const presetModel = mappedModelNode ? presetModelValue(mappedModelNode) : (manifest.requiredModels?.[0] || 'preset_model');
+    if (targetType === 'shot') {
+      console.log('[CharacterConsistency:TaskSnapshot]', JSON.stringify({
+        projectId: String(projectId || ''),
+        targetId,
+        shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+        workflowPresetId: presetId,
+        workflowFamily: manifest.workflowFamily,
+        model: presetModel,
+        sourceImageUrl,
+        referenceMappingValidated: !!sourceImageUrl,
+      }));
+    }
+    const uiSnapshot = applyPresetUiParameters(uiJson, manifest, {
+      prompt: identityPrompt,
+      negativePrompt: presetNegative,
+      seed: taskSeed,
+      width,
+      height,
+      model: presetModel,
+    });
+
+    return {
+      success: true,
+      presetId,
+      taskData: {
+        projectId: String(projectId || ''),
+        targetId,
+        targetType: targetType || (isCharacter ? 'character' : 'shot'),
+        viewType,
+        shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+        characterName: characterName ? String(characterName) : null,
+        prompt: identityPrompt,
+        negativePrompt: presetNegative,
+        seed: taskSeed,
+        model: presetModel,
+        width,
+        height,
+        apiWorkflowJson: JSON.stringify(apiSnapshot),
+        uiWorkflowJson: JSON.stringify(uiSnapshot),
+        workflowPresetId: presetId,
+        workflowFamily: manifest.workflowFamily,
+        workflowBatchId: workflowBatchId || null,
+        sourceImageUrl,
+        sourceTaskId,
+        outputNodeId: manifest.nodeMappings?.saveImageNodeId || '9',
+        presetParametersJson: JSON.stringify({ strength, loraStrength }),
+        characterReferenceImageUrl: characterReference.sourceImageUrl,
+        characterReferenceTaskId: characterReference.referenceTaskId,
+        lockCharacterIdentity: lockCharacterIdentity ? 1 : 0
+      },
+      warning: characterReference.warning || (
+        characterReference.characters.length && presetId !== '02_klein_pulid_identity'
+          ? '当前分镜预设不支持参考图身份锁定；已保留文本提示，但角色外观可能漂移。'
+          : undefined
+      )
+    };
+  }
+
+  // Custom workflow path
+  const customWorkflow = loadCustomComfyWorkflow();
+  let checkpoint = '';
+  if (!customWorkflow) {
+    const available = await getComfyCheckpointsList();
+    if (reqModel) {
+      if (available.length > 0 && !available.includes(reqModel)) {
+        throw new Error(`Model '${reqModel}' is not available in ComfyUI checkpoints.`);
+      }
+      checkpoint = reqModel;
+    } else {
+      checkpoint = await getComfyCheckpoint();
+    }
+  }
+
+  const workflowSnapshot = customWorkflow
+    ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, taskSeed)
+    : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
+
+  let apiWorkflowJson = '';
+  let uiWorkflowJson = '';
+  if (customWorkflow) {
+    apiWorkflowJson = JSON.stringify(workflowSnapshot);
+    uiWorkflowJson = '';
+  } else {
+    apiWorkflowJson = JSON.stringify(workflowSnapshot);
+    const uiWorkflow = buildDefaultUIWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
+    uiWorkflowJson = JSON.stringify(uiWorkflow);
+  }
+  const model = checkpoint || workflowCheckpoint(workflowSnapshot);
+
+  return {
+    success: true,
+    presetId: 'sdxl_legacy',
+    taskData: {
+      projectId: String(projectId || ''),
+      targetId,
+      targetType: targetType || (isCharacter ? 'character' : 'shot'),
+      viewType,
+      shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+      characterName: characterName ? String(characterName) : null,
+      prompt: optimizedPrompt,
+      negativePrompt: comfyNegative,
+      seed: taskSeed,
+      model,
+      width,
+      height,
+      apiWorkflowJson,
+      uiWorkflowJson,
+      workflowPresetId: 'sdxl_legacy',
+      workflowFamily: 'sdxl',
+      workflowBatchId: workflowBatchId || null,
+      sourceImageUrl: null,
+      sourceTaskId: null,
+      outputNodeId: '9',
+      presetParametersJson: JSON.stringify({}),
+      characterReferenceImageUrl: null,
+      characterReferenceTaskId: null,
+      lockCharacterIdentity: lockCharacterIdentity ? 1 : 0
+    },
+    warning: characterReference.characters.length
+      ? '当前 SDXL Legacy 分镜预设不支持参考图身份锁定；已继续使用旧流程，角色外观可能漂移。'
+      : undefined
+  };
+}
+
 // 11. POST /api/generate-image - Generate image using Pollinations AI, Kling AI, or local ComfyUI
 app.post('/api/generate-image', async (req, res) => {
   const {
@@ -4304,6 +6162,31 @@ app.post('/api/generate-image', async (req, res) => {
     if (platform === 'comfyui') {
       const targetId = req.body.targetId || (targetType === 'shot' ? `shot_${shotIndex}` : `char_${characterName}`);
       const viewType = req.body.viewType || (targetType === 'shot' ? 'main' : 'avatar');
+      if (targetType === 'shot') {
+        const script = getGeneratedScript(String(projectId || ''));
+        const shot = script?.newShots?.find((item: any) => String(item.id) === String(targetId));
+        console.log('[RegenerateWithReference:Start]', JSON.stringify({ taskId: null, shotId: targetId, projectId: String(projectId || ''), matchedCharacterIds: shot?.matchedCharacterIds || [], presetId: req.body.presetId || req.body.workflowPresetId || null, prompt_id: null, status: 'request_received', error: null }));
+      }
+      
+      const existingActiveTask = dbSqlite.prepare(`
+        SELECT id,status,workflowPresetId,characterReferenceImageUrl FROM comfyui_tasks
+        WHERE projectId = ? AND targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
+        LIMIT 1
+      `).get(String(projectId || ''), targetId, viewType) as any;
+
+      if (existingActiveTask) {
+        console.log(`[Generate Image] Found existing active task ${existingActiveTask.id} for slot ${targetId}:${viewType}. Rejecting duplicate.`);
+        return res.status(409).json({ error: '已有任务进行中', existingTaskId: existingActiveTask.id, task: existingActiveTask, action: 'cancel_then_retry' });
+      }
+
+      try {
+        await comfyFetch('/system_stats', {}, 3_000);
+      } catch (error: any) {
+        const message = `ComfyUI 未连接：${error.message || 'connection failed'}`;
+        console.error('[TaskState:Failed]', JSON.stringify({ taskId: null, shotId: targetId, presetId: req.body.presetId || null, prompt_id: null, status: 'failed', error: message }));
+        return res.status(503).json({ error: message, code: 'COMFYUI_UNAVAILABLE' });
+      }
+
       const projectPreferences = projectComfyPreferences(String(projectId || ''));
       const hasExplicitPreset = Object.prototype.hasOwnProperty.call(req.body, 'presetId')
         || Object.prototype.hasOwnProperty.call(req.body, 'workflowPresetId');
@@ -4322,290 +6205,210 @@ app.post('/api/generate-image', async (req, res) => {
       } else {
         selectedPreset = projectPreferences.shotPresetId;
       }
-      if (!(selectedPreset in PROJECT_PRESET_TO_WORKFLOW)) {
-        return res.status(422).json({ error: `Unsupported workflow preset: ${selectedPreset}` });
-      }
-      const presetId = PROJECT_PRESET_TO_WORKFLOW[selectedPreset] || undefined;
-
-      const requestedWidth = Number(req.body.width) || (isCharacter ? 512 : 768);
-      const requestedHeight = Number(req.body.height) || (isCharacter ? 768 : 512);
-      const width = Math.max(256, Math.min(2048, Math.floor(requestedWidth / 64) * 64));
-      const height = Math.max(256, Math.min(2048, Math.floor(requestedHeight / 64) * 64));
-
-      const seedMode = req.body.seedMode;
-      const taskSeed = (seedMode === 'random' || !seed)
-        ? String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n))
-        : String(seed);
-      const comfyNegative = String(negativePrompt || negative_prompt || DEFAULT_COMFY_NEGATIVE_PROMPT);
-
-      const existingActiveTask = dbSqlite.prepare(`
-        SELECT id FROM comfyui_tasks
-        WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
-        LIMIT 1
-      `).get(targetId, viewType) as { id: string } | undefined;
-
-      if (existingActiveTask) {
-        console.log(`[Generate Image] Found existing active task ${existingActiveTask.id} for slot ${targetId}:${viewType}. Returning existing.`);
-        return res.json({ taskId: existingActiveTask.id });
+      
+      const lockCharacterIdentity = targetType === 'shot' ? req.body.lockCharacterIdentity !== false : false;
+      const characterReference = targetType === 'shot' && lockCharacterIdentity
+        ? await createShotCharacterReference(String(projectId || ''), typeof shotIndex === 'number' ? shotIndex : undefined, String(prompt || ''))
+        : { sourceImageUrl: null, referenceTaskId: null, characters: [] as any[], warning: undefined as string | undefined };
+      
+      if (targetType === 'shot' && lockCharacterIdentity && characterReference.sourceImageUrl) {
+        selectedPreset = projectPreferences.identityPresetId;
       }
 
-      if (presetId) {
-        const manifestPath = path.resolve(`workflows/character/${presetId}.manifest.json`);
-        if (!fs.existsSync(manifestPath)) {
+      const resolvedWorkflowId = workflowIdForSelection(selectedPreset);
+      if (resolvedWorkflowId === undefined) return res.status(422).json({ error: `Unsupported workflow preset: ${selectedPreset}` });
+      const presetId = resolvedWorkflowId || undefined;
+
+      // Handle Qwen Three Views batch task manually as it creates 3 tasks
+      if (presetId === '03_qwen_2511_three_views' && !req.body.sequentialThreeView) {
+        const workflowBatchId = crypto.randomUUID();
+        const allViewPrompts = [
+          { view: 'front', prompt: '<sks> front view eye-level shot medium shot' },
+          { view: 'side', prompt: '<sks> right side view eye-level shot medium shot' },
+          { view: 'back', prompt: '<sks> back view eye-level shot medium shot' }
+        ];
+        const requestedSequentialView = req.body.sequentialThreeView
+          && ['front', 'side', 'back'].includes(String(viewType))
+          ? String(viewType)
+          : null;
+        const viewPrompts = requestedSequentialView
+          ? allViewPrompts.filter(item => item.view === requestedSequentialView)
+          : allViewPrompts;
+
+        const taskIds: string[] = [];
+        const taskSeed = (req.body.seedMode === 'random' || !seed)
+          ? String(Number(BigInt(`0x${crypto.randomBytes(8).toString('hex')}`) % 9_007_199_254_740_991n))
+          : String(seed);
+        const comfyNegative = String(negativePrompt || negative_prompt || DEFAULT_COMFY_NEGATIVE_PROMPT);
+
+        const manifestPath = resolvePresetManifestPath(presetId);
+        if (!manifestPath || !fs.existsSync(manifestPath)) {
           return res.status(400).json({ error: `Workflow preset manifest not found for: ${presetId}` });
         }
-
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        const uiJson = JSON.parse(fs.readFileSync(path.resolve(`workflows/character/${manifest.uiFile}`), 'utf8'));
-        const apiJson = JSON.parse(fs.readFileSync(path.resolve(`workflows/character/${manifest.apiFile}`), 'utf8'));
-
-        let sourceImageUrl = req.body.sourceImageUrl || null;
-        const sourceTaskId = req.body.sourceTaskId || null;
-
-        if (presetId === '02_klein_pulid_identity' && !sourceImageUrl) {
-          return res.status(400).json({ error: "Reference image is required for PuLID identity lock." });
+        let uiJson = JSON.parse(fs.readFileSync(path.join(path.dirname(manifestPath), manifest.uiFile), 'utf8'));
+        let apiJson = JSON.parse(fs.readFileSync(path.join(path.dirname(manifestPath), manifest.apiFile), 'utf8'));
+        
+        const parameterNodeIds = validatePresetManifest(manifest, apiJson, uiJson, presetId);
+        const presetNegative = parameterNodeIds.negativePrompt ? comfyNegative : '';
+        
+        let sourceImageUrl = characterReference.sourceImageUrl || req.body.characterReferenceImageUrl || req.body.sourceImageUrl || null;
+        if (!sourceImageUrl) {
+          return res.status(422).json({ error: '请先生成角色母版；三视图必须使用 avatar 作为 reference。' });
         }
-        if (presetId === '04_esrgan_upscale' && !sourceImageUrl) {
-          return res.status(400).json({ error: "Source image is required for ESRGAN upscale." });
-        }
-        if (presetId === '03_qwen_2511_three_views') {
-          const avatarUrl = getCharacterAvatarUrl(String(projectId || ''), targetId);
-          if (!avatarUrl) {
-            return res.status(400).json({ error: "Character avatar is required as a reference to generate three views." });
+        validatePresetReferenceMapping(manifest, apiJson);
+        const avatarTask = dbSqlite.prepare(`
+          SELECT id FROM comfyui_tasks
+          WHERE projectId = ? AND targetId = ? AND targetType = 'character' AND viewType = 'avatar' AND status = 'succeeded'
+          ORDER BY completedAt DESC, createdAt DESC LIMIT 1
+        `).get(String(projectId || ''), targetId) as { id: string } | undefined;
+        const sourceTaskId = req.body.sourceTaskId || avatarTask?.id || null;
+
+        const tx = dbSqlite.transaction(() => {
+          for (const vp of viewPrompts) {
+            const taskId = crypto.randomUUID();
+            taskIds.push(taskId);
+
+            dbSqlite.prepare(`
+              UPDATE comfyui_tasks
+              SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by batch task', completedAt = ?, updatedAt = ?
+              WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
+            `).run(taskId, new Date().toISOString(), new Date().toISOString(), targetId, vp.view);
+
+            const apiSnapshot = applyPresetParameters(apiJson, manifest, {
+              prompt: vp.prompt,
+              seed: taskSeed,
+              loraStrength: 1.0
+            });
+            const uiSnapshot = applyPresetUiParameters(uiJson, manifest, {
+              prompt: vp.prompt,
+              negativePrompt: presetNegative,
+              seed: taskSeed,
+              model: manifest.requiredModels?.[0],
+            });
+
+            dbSqlite.prepare(`
+              INSERT INTO comfyui_tasks (
+                id, projectId, targetId, targetType, viewType, shotIndex, characterName,
+                prompt, negativePrompt, seed, model, width, height, status, retryCount,
+                apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
+                workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+              taskId,
+              String(projectId || ''),
+              targetId,
+              'character',
+              vp.view,
+              null,
+              characterName ? String(characterName) : null,
+              vp.prompt,
+              presetNegative,
+              taskSeed,
+              'qwen_image_edit_2511_fp8_e4m3fn.safetensors',
+              1024,
+              1024,
+              'pending',
+              0,
+              JSON.stringify(apiSnapshot),
+              JSON.stringify(uiSnapshot),
+              new Date().toISOString(),
+              new Date().toISOString(),
+              presetId,
+              manifest.workflowFamily,
+              workflowBatchId,
+              sourceImageUrl,
+              sourceTaskId,
+              manifest.nodeMappings?.saveImageNodeId || '9',
+              JSON.stringify({ loraStrength: 1.0 })
+            );
           }
-          sourceImageUrl = avatarUrl;
-        }
-
-        if (presetId === '03_qwen_2511_three_views') {
-          const workflowBatchId = crypto.randomUUID();
-          const viewPrompts = [
-            { view: 'front', prompt: '<sks> front view eye-level shot medium shot' },
-            { view: 'side', prompt: '<sks> right side view eye-level shot medium shot' },
-            { view: 'back', prompt: '<sks> back view eye-level shot medium shot' }
-          ];
-
-          const taskIds: string[] = [];
-          const tx = dbSqlite.transaction(() => {
-            for (const vp of viewPrompts) {
-              const taskId = crypto.randomUUID();
-              taskIds.push(taskId);
-
-              dbSqlite.prepare(`
-                UPDATE comfyui_tasks
-                SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by batch task', completedAt = ?, updatedAt = ?
-                WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
-              `).run(taskId, new Date().toISOString(), new Date().toISOString(), targetId, vp.view);
-
-              const apiSnapshot = applyPresetParameters(apiJson, manifest, {
-                prompt: vp.prompt,
-                seed: taskSeed,
-                loraStrength: 1.0
-              });
-
-              dbSqlite.prepare(`
-                INSERT INTO comfyui_tasks (
-                  id, projectId, targetId, targetType, viewType, shotIndex, characterName,
-                  prompt, negativePrompt, seed, model, width, height, status, retryCount,
-                  apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
-                  workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              `).run(
-                taskId,
-                String(projectId || ''),
-                targetId,
-                'character',
-                vp.view,
-                null,
-                characterName ? String(characterName) : null,
-                vp.prompt,
-                comfyNegative,
-                taskSeed,
-                'qwen_image_edit_2511_fp8_e4m3fn.safetensors',
-                1024,
-                1024,
-                'pending',
-                0,
-                JSON.stringify(apiSnapshot),
-                JSON.stringify(uiJson),
-                new Date().toISOString(),
-                new Date().toISOString(),
-                presetId,
-                manifest.workflowFamily,
-                workflowBatchId,
-                sourceImageUrl,
-                sourceTaskId,
-                manifest.nodeMappings?.saveImageNodeId || '9',
-                JSON.stringify({ loraStrength: 1.0 })
-              );
-            }
-          });
-          tx();
-
-          console.log(`[Queue] Enqueued batch tasks for Qwen Three Views: ${taskIds.join(', ')}`);
-          return res.json({
-            success: true,
-            batchId: workflowBatchId,
-            taskIds,
-            taskId: taskIds[0],
-            status: 'pending',
-            provider: 'comfyui',
-            workflowPresetId: presetId,
-          });
-        }
-
-        const taskId = crypto.randomUUID();
-        const strength = req.body.strength !== undefined ? Number(req.body.strength) : manifest.defaultParameters?.strength;
-        const loraStrength = req.body.loraStrength !== undefined ? Number(req.body.loraStrength) : manifest.defaultParameters?.loraStrength;
-
-        const apiSnapshot = applyPresetParameters(apiJson, manifest, {
-          prompt: optimizedPrompt,
-          seed: taskSeed,
-          width,
-          height,
-          strength,
-          loraStrength
         });
+        tx();
+
+        console.log(`[Queue] Enqueued ${requestedSequentialView || 'batch'} task(s) for Qwen Three Views: ${taskIds.join(', ')}`);
+        return res.json({
+          success: true,
+          batchId: workflowBatchId,
+          taskIds,
+          taskId: taskIds[0],
+          status: 'pending',
+          provider: 'comfyui',
+          workflowPresetId: presetId,
+        });
+      } else {
+        const taskId = crypto.randomUUID();
+        const prepared = await prepareComfyTaskData(req.body);
 
         const tx = dbSqlite.transaction(() => {
           dbSqlite.prepare(`
             UPDATE comfyui_tasks
-            SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by preset task', completedAt = ?, updatedAt = ?
+            SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by new task', completedAt = ?, updatedAt = ?
             WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
-          `).run(taskId, new Date().toISOString(), new Date().toISOString(), targetId, viewType);
+          `).run(taskId, new Date().toISOString(), new Date().toISOString(), prepared.taskData.targetId, prepared.taskData.viewType);
 
           dbSqlite.prepare(`
             INSERT INTO comfyui_tasks (
               id, projectId, targetId, targetType, viewType, shotIndex, characterName,
               prompt, negativePrompt, seed, model, width, height, status, retryCount,
               apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
-              workflowPresetId, workflowFamily, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson,
+              characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             taskId,
-            String(projectId || ''),
-            targetId,
-            targetType || (isCharacter ? 'character' : 'shot'),
-            viewType,
-            typeof shotIndex === 'number' ? shotIndex : null,
-            characterName ? String(characterName) : null,
-            optimizedPrompt,
-            comfyNegative,
-            taskSeed,
-            manifest.requiredModels?.[0] || 'preset_model',
-            width,
-            height,
+            prepared.taskData.projectId,
+            prepared.taskData.targetId,
+            prepared.taskData.targetType,
+            prepared.taskData.viewType,
+            prepared.taskData.shotIndex,
+            prepared.taskData.characterName,
+            prepared.taskData.prompt,
+            prepared.taskData.negativePrompt,
+            prepared.taskData.seed,
+            prepared.taskData.model,
+            prepared.taskData.width,
+            prepared.taskData.height,
             'pending',
             0,
-            JSON.stringify(apiSnapshot),
-            JSON.stringify(uiJson),
+            prepared.taskData.apiWorkflowJson,
+            prepared.taskData.uiWorkflowJson,
             new Date().toISOString(),
             new Date().toISOString(),
-            presetId,
-            manifest.workflowFamily,
-            sourceImageUrl,
-            sourceTaskId,
-            manifest.nodeMappings?.saveImageNodeId || '9',
-            JSON.stringify({ strength, loraStrength })
+            prepared.taskData.workflowPresetId,
+            prepared.taskData.workflowFamily,
+            prepared.taskData.workflowBatchId,
+            prepared.taskData.sourceImageUrl,
+            prepared.taskData.sourceTaskId,
+            prepared.taskData.outputNodeId,
+            prepared.taskData.presetParametersJson,
+            prepared.taskData.characterReferenceImageUrl,
+            prepared.taskData.characterReferenceTaskId,
+            prepared.taskData.lockCharacterIdentity
           );
         });
         tx();
 
-        console.log(`[Queue] Enqueued preset task ${taskId} (${presetId}) for ${targetId}:${viewType}`);
+        console.log(`[Queue] Enqueued preset/custom task ${taskId} for ${prepared.taskData.targetId}:${prepared.taskData.viewType}`);
+        if (prepared.taskData.targetType === 'shot') {
+          console.log('[RegenerateWithReference:Start]', JSON.stringify({ taskId, shotId: prepared.taskData.targetId, projectId: prepared.taskData.projectId, matchedCharacterIds: shotCharacters(prepared.taskData.projectId, prepared.taskData.shotIndex, prepared.taskData.prompt).map((character: any) => character.id), presetId: prepared.taskData.workflowPresetId, prompt_id: null, status: 'pending', characterReferenceImageUrl: prepared.taskData.characterReferenceImageUrl || null, error: null }));
+        }
         return res.json({
           success: true,
           taskId,
           status: 'pending',
           provider: 'comfyui',
-          workflowPresetId: presetId,
-          seed: taskSeed,
-          width,
-          height
+          workflowPresetId: prepared.taskData.workflowPresetId,
+          seed: prepared.taskData.seed,
+          width: prepared.taskData.width,
+          height: prepared.taskData.height,
+          characterConsistency: prepared.taskData.characterReferenceImageUrl ? 'pulid' : 'none',
+          characterReferenceImageUrl: prepared.taskData.characterReferenceImageUrl,
+          characterReferenceTaskId: prepared.taskData.characterReferenceTaskId,
+          lockCharacterIdentity: prepared.taskData.lockCharacterIdentity === 1,
+          characterConsistencyWarning: prepared.warning
         });
       }
-
-      const customWorkflow = loadCustomComfyWorkflow();
-      let checkpoint = '';
-      if (!customWorkflow) {
-        const available = await getComfyCheckpointsList();
-        if (req.body.model) {
-          if (available.length > 0 && !available.includes(req.body.model)) {
-            return res.status(400).json({ error: `Model '${req.body.model}' is not available in ComfyUI checkpoints.` });
-          }
-          checkpoint = req.body.model;
-        } else {
-          checkpoint = await getComfyCheckpoint();
-        }
-      }
-
-      const workflowSnapshot = customWorkflow
-        ? applyCustomComfyInputs(customWorkflow, optimizedPrompt, comfyNegative, width, height, taskSeed)
-        : buildDefaultComfyWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
-
-      let apiWorkflowJson = '';
-      let uiWorkflowJson = '';
-      if (customWorkflow) {
-        apiWorkflowJson = JSON.stringify(workflowSnapshot);
-        uiWorkflowJson = '';
-      } else {
-        apiWorkflowJson = JSON.stringify(workflowSnapshot);
-        const uiWorkflow = buildDefaultUIWorkflow(checkpoint, optimizedPrompt, comfyNegative, width, height, taskSeed);
-        uiWorkflowJson = JSON.stringify(uiWorkflow);
-      }
-      const model = checkpoint || workflowCheckpoint(workflowSnapshot);
-
-      const taskId = crypto.randomUUID();
-
-      const tx = dbSqlite.transaction(() => {
-        dbSqlite.prepare(`
-          UPDATE comfyui_tasks
-          SET status = 'cancelled', supersededByTaskId = ?, error = 'Superseded by new task', completedAt = ?, updatedAt = ?
-          WHERE targetId = ? AND viewType = ? AND status IN ('pending', 'processing')
-        `).run(taskId, new Date().toISOString(), new Date().toISOString(), targetId, viewType);
-
-        dbSqlite.prepare(`
-          INSERT INTO comfyui_tasks (
-            id, projectId, targetId, targetType, viewType, shotIndex, characterName,
-            prompt, negativePrompt, seed, model, width, height, status, retryCount,
-            apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt, workflowPresetId, workflowFamily
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          taskId,
-          String(projectId || ''),
-          targetId,
-          targetType || (isCharacter ? 'character' : 'shot'),
-          viewType,
-          typeof shotIndex === 'number' ? shotIndex : null,
-          characterName ? String(characterName) : null,
-          optimizedPrompt,
-          comfyNegative,
-          taskSeed,
-          model,
-          width,
-          height,
-          'pending',
-          Number(req.body.retryCount) || 0,
-          apiWorkflowJson,
-          uiWorkflowJson,
-          new Date().toISOString(),
-          new Date().toISOString(),
-          'sdxl_legacy',
-          'sdxl'
-        );
-      });
-      tx();
-
-      console.log(`[Queue] Enqueued ComfyUI task ${taskId} for target ${targetId} (${viewType})`);
-
-      return res.json({
-        success: true,
-        taskId,
-        status: 'pending',
-        provider: 'comfyui',
-        workflowPresetId: 'sdxl_legacy',
-        seed: taskSeed,
-        width,
-        height
-      });
     }
 
     const useKling = platform === 'kling';

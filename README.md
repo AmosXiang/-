@@ -9,6 +9,12 @@ https://ai.studio/apps/dc35e0da-a407-43b6-bf7e-ffd293baa8f7
 
 ## Run Locally
 
+### Windows 一键启动
+
+直接双击项目根目录的 `启动工具.bat`。它会启动网页、后端和已配置的 ComfyUI，并在网页就绪后自动打开浏览器。关闭启动窗口即可停止网页服务。
+
+如果提示缺少项目依赖，请先在项目目录运行一次 `npm install`。
+
 **Prerequisites:**  Node.js
 
 
