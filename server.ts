@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import Database from 'better-sqlite3';
 import PQueue from 'p-queue';
 import sharp, { type Metadata } from 'sharp';
+import { registerShotAnalysisModule } from './server/modules/shot-analysis/index.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -6548,6 +6549,8 @@ try {
 } catch (e) {
   console.error('[SQLite] Initialization failed:', e);
 }
+
+registerShotAnalysisModule(app, dbSqlite);
 
 // Start Server
 app.listen(PORT, () => {
