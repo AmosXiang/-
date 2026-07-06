@@ -1,0 +1,1740 @@
+{
+  "timestamp": "2026-07-06T08:37:06.804Z",
+  "pricing": {
+    "INPUT_PRICE_PER_M": 0.3,
+    "OUTPUT_PRICE_PER_M": 2.5
+  },
+  "verdict": {
+    "event": "acceptance_passed",
+    "runs": 3,
+    "perEpisodeCostsUSD": [
+      0.0703,
+      0.0581,
+      0.0651
+    ],
+    "totalCostUSD": 0.1935,
+    "estimateRangeUSD": [
+      0.02,
+      0.05
+    ],
+    "allWithinEstimate": false
+  },
+  "runs": [
+    {
+      "event": "run_summary",
+      "videoId": "1782541753229",
+      "reportId": "27a2ab6e-df02-4589-a117-508e0134624d",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.0.0",
+      "overallScore": 5.5,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 10,
+        "postProductionDependency": 5
+      },
+      "shotRiskCount": 42,
+      "riskBreakdown": {
+        "multi_character_interaction": 20,
+        "text_in_frame": 15,
+        "graphics_overlay_dependency": 7
+      },
+      "usage": {
+        "promptTokenCount": 8606,
+        "candidatesTokenCount": 6793,
+        "totalTokenCount": 35690,
+        "thoughtsTokens": 20291,
+        "billedOutputTokens": 27084
+      },
+      "costUSD": {
+        "input": 0.0026,
+        "output": 0.0677,
+        "total": 0.0703
+      },
+      "durationMs": 108001,
+      "report": {
+        "shotRisks": [
+          {
+            "shotRef": "镜头6 00:10-00:15",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "林晓与陈建海在一个冷库内对话"
+            ],
+            "recommendation": "此镜头涉及林晓与陈建海两位具名角色同框对话，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头11 00:30-00:33",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一位女同事（林晓）坐在陆远身后，关切地询问他是否没事，并主动递纸巾，陆远回头看她"
+            ],
+            "recommendation": "此镜头涉及陆远与林晓两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头13 00:34-00:36",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "手机，屏幕显示日期为2023年4月15日下午5:30，距离末世爆发还有30天"
+            ],
+            "recommendation": "此镜头需要手机屏幕清晰显示日期和倒计时文字，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头13 00:34-00:36",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "手机屏幕上显示日期为2023年4月15日下午5:30，距离末世爆发还有30天"
+            ],
+            "recommendation": "此镜头需要精确显示手机屏幕内容，生成链路不产出这些元素，必须后期制作图形层。建议明确标注为后期项。"
+          },
+          {
+            "shotRef": "镜头19 00:49-00:51",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "街角的链家房产中介门店"
+            ],
+            "recommendation": "此镜头需要清晰显示门店招牌文字，建议后期贴字幕层或虚化处理，或调整构图/运镜角度避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头21 00:53-00:58",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远与链家房产中介经理对话"
+            ],
+            "recommendation": "此镜头涉及陆远与链家房产中介经理两位具名角色同框对话，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头22 00:58-01:00",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "签署购房合同"
+            ],
+            "recommendation": "此镜头需要合同上的文字清晰可辨，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头23 01:00-01:04",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远与中介经理继续办理手续"
+            ],
+            "recommendation": "此镜头涉及陆远与链家房产中介经理两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头24 01:04-01:07",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远与中介经理握手"
+            ],
+            "recommendation": "此镜头涉及陆远与链家房产中介经理两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头25 01:07-01:08",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "中介经理向陆远挥手告别"
+            ],
+            "recommendation": "此镜头涉及陆远与链家房产中介经理两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头26 01:08-01:10",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "手机屏幕上显示银行到账信息"
+            ],
+            "recommendation": "此镜头需要手机屏幕清晰显示银行到账信息，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头26 01:08-01:10",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "手机屏幕上显示银行到账信息"
+            ],
+            "recommendation": "此镜头需要精确显示手机屏幕内容，生成链路不产出这些元素，必须后期制作图形层。建议明确标注为后期项。"
+          },
+          {
+            "shotRef": "镜头27 01:10-01:13",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "笔记本电脑操作，申请各种网贷"
+            ],
+            "recommendation": "此镜头需要笔记本电脑屏幕清晰显示网贷界面文字，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头27 01:10-01:13",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "笔记本电脑操作，申请各种网贷"
+            ],
+            "recommendation": "此镜头需要精确显示笔记本电脑屏幕内容，生成链路不产出这些元素，必须后期制作图形层。建议明确标注为后期项。"
+          },
+          {
+            "shotRef": "镜头28 01:13-01:15",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "强调“下月还款日，世道早已倾覆”的文字"
+            ],
+            "recommendation": "此镜头需要清晰显示特定文字，建议后期贴字幕层或虚化处理，或调整构图/运镜角度避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头28 01:13-01:15",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "强调“下月还款日，世道早已倾覆”的文字"
+            ],
+            "recommendation": "此镜头需要精确显示画面内文字，生成链路不产出这些元素，必须后期制作图形层。建议明确标注为后期项。"
+          },
+          {
+            "shotRef": "镜头30 01:18-01:20",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两名幸存者在下水道里为了一个馒头而大打出手"
+            ],
+            "recommendation": "此镜头涉及两名角色同框肢体互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头31 01:20-01:23",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远心爱的狗狗洛卡的脸部特写，它安静地依偎在陆远身旁"
+            ],
+            "recommendation": "此镜头涉及陆远与宠物狗洛卡同框，生成人与特定动物同框并保持一致性存在挑战，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头32 01:23-01:25",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远坐在桌前，一边轻抚着洛卡"
+            ],
+            "recommendation": "此镜头涉及陆远与宠物狗洛卡同框互动，生成人与特定动物同框并保持一致性存在挑战，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头32 01:23-01:25",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "看着笔记本电脑"
+            ],
+            "recommendation": "此镜头需要笔记本电脑屏幕内容清晰，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头32 01:23-01:25",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "看着笔记本电脑"
+            ],
+            "recommendation": "此镜头需要精确显示笔记本电脑屏幕内容，生成链路不产出这些元素，必须后期制作图形层。建议明确标注为后期项。"
+          },
+          {
+            "shotRef": "镜头33 01:25-01:28",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "手机屏幕上不断弹出银行到账通知，余额一路飙升，突破900万大关"
+            ],
+            "recommendation": "此镜头需要手机屏幕清晰显示银行到账通知和余额数字，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头33 01:25-01:28",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "手机屏幕上不断弹出银行到账通知，余额一路飙升，突破900万大关"
+            ],
+            "recommendation": "此镜头需要精确显示手机屏幕内容，生成链路不产出这些元素，必须后期制作图形层。建议明确标注为后期项。"
+          },
+          {
+            "shotRef": "镜头34 01:28-01:31",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远抱着洛卡"
+            ],
+            "recommendation": "此镜头涉及陆远与宠物狗洛卡同框互动，生成人与特定动物同框并保持一致性存在挑战，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头36 01:35-01:37",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远与房东在室内对话"
+            ],
+            "recommendation": "此镜头涉及陆远与房东两位具名角色同框对话，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头37 01:37-01:39",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "传媒公司制片主任的名片"
+            ],
+            "recommendation": "此镜头需要名片上的文字清晰可辨，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头39 01:40-01:42",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远与房东握手"
+            ],
+            "recommendation": "此镜头涉及陆远与房东两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头40 01:42-01:44",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "房东从公文包里拿出钥匙，递给陆远"
+            ],
+            "recommendation": "此镜头涉及陆远与房东两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头41 01:44-01:46",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "房东将钥匙交到陆远手中，两人再次握手"
+            ],
+            "recommendation": "此镜头涉及陆远与房东两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头42 01:46-01:48",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "房东心满意足地向陆远挥手告别"
+            ],
+            "recommendation": "此镜头涉及陆远与房东两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头47 01:58-02:01",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远和工头老周在地下室，对着图纸讨论改造方案"
+            ],
+            "recommendation": "此镜头涉及陆远与工头老周两位具名角色同框讨论，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头47 01:58-02:01",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "对着图纸讨论改造方案"
+            ],
+            "recommendation": "此镜头需要图纸上的文字或图示清晰可辨，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头49 02:03-02:05",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "陆远和老周俯视着摊开的图纸，老周指着图纸"
+            ],
+            "recommendation": "此镜头涉及陆远与工头老周两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头49 02:03-02:05",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "俯视着摊开的图纸"
+            ],
+            "recommendation": "此镜头需要图纸上的文字或图示清晰可辨，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头50 02:05-02:08",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "老周质疑改造的造价过于夸张，陆远保持沉默"
+            ],
+            "recommendation": "此镜头涉及陆远与工头老周两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头51 02:08-02:11",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "老周继续表达自己的担忧，陆远冷静地看着他"
+            ],
+            "recommendation": "此镜头涉及陆远与工头老周两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头52 02:11-02:13",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "里面装满了成捆的钞票"
+            ],
+            "recommendation": "此镜头需要清晰显示成捆钞票的细节，生成时可能出现模糊或不真实感，建议后期处理或调整构图避免特写钞票细节。"
+          },
+          {
+            "shotRef": "镜头53 02:13-02:14",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "手提包里满满的现金特写"
+            ],
+            "recommendation": "此镜头需要清晰显示成捆钞票的细节，生成时可能出现模糊或不真实感，建议后期处理或调整构图避免特写钞票细节。"
+          },
+          {
+            "shotRef": "镜头54 02:14-02:17",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "老周看到现金后...立刻表示会听从陆远的所有安排"
+            ],
+            "recommendation": "此镜头涉及陆远与工头老周两位具名角色同框互动，建议改写为正反打或单人特写交替，若必须同框，则明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头58 02:22-02:29",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "外面拉起了剧组拍摄的警戒线"
+            ],
+            "recommendation": "此镜头需要警戒线上的文字清晰可辨，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头59 02:29-02:32",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "看着平板电脑"
+            ],
+            "recommendation": "此镜头需要平板电脑屏幕内容清晰，建议后期贴字幕层或虚化处理，或调整构图避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头59 02:29-02:32",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "看着平板电脑"
+            ],
+            "recommendation": "此镜头需要精确显示平板电脑屏幕内容，生成链路不产出这些元素，必须后期制作图形层。建议明确标注为后期项。"
+          }
+        ],
+        "scores": [
+          {
+            "dimensionId": "stillFrameGenerability",
+            "score": 5,
+            "evidence": [
+              "60个镜头中，有15个镜头（占比25%）包含需要清晰可辨认文字的元素，如手机屏幕、门店招牌、购房合同、笔记本电脑屏幕、图纸、钞票和警戒线。"
+            ],
+            "reasoning": "虽然需要清晰文字的镜头占比较高，但这些元素均可通过后期贴字幕层、虚化处理或调整构图等方案进行规避或解决，未达到大量镜头无法替代的程度。"
+          },
+          {
+            "dimensionId": "identityConsistencyPressure",
+            "score": 2,
+            "evidence": [
+              "60个镜头中，有20个镜头（占比33.3%）涉及两个及以上具名角色（包括宠物狗洛卡）同框互动，如陆远与林晓对话、陆远与中介经理握手、陆远与老周讨论图纸等。此外，共有57个镜头（占比95%）包含具名角色，需要进行身份锁定。"
+            ],
+            "reasoning": "本短剧存在大量多角色同框互动镜头，且几乎所有镜头都需要进行角色身份锁定。这不仅增加了批量生成时因PuLID延迟导致超时/排队的风险，也使得多角色同框互动镜头难以一次性生成，需要大量拆分或后期合成，合成质量风险高。"
+          },
+          {
+            "dimensionId": "cameraMotionFeasibility",
+            "score": 10,
+            "evidence": [
+              "所有60个镜头中的运镜描述均为固定镜头、简单平移、平稳跟踪或航拍平移，未出现长距离跟踪、复杂机位切换、旋转环绕或多段变速运镜等高难度运镜要求。"
+            ],
+            "reasoning": "本短剧的运镜设计非常简洁，全部落在8秒视频片段生成能力圈内的简单运动范畴，预计可行性高。"
+          },
+          {
+            "dimensionId": "postProductionDependency",
+            "score": 5,
+            "evidence": [
+              "60个镜头中，有7个镜头（占比11.6%）明确要求画面内出现UI/图形动效或需精确呈现的屏幕内容，如手机银行到账信息、笔记本电脑网贷界面、平板电脑采购路线等。"
+            ],
+            "reasoning": "本短剧有少量镜头依赖生成链路之外的后期图形层制作，这些工作量可控，且已明确标注为后期项，不会对生成链路造成不可逾越的障碍。"
+          }
+        ],
+        "overallScore": 5.5,
+        "improvements": [
+          {
+            "priority": "high",
+            "target": "镜头6, 11, 21, 23, 24, 25, 30, 31, 32, 34, 36, 39, 40, 41, 42, 47, 49, 50, 51, 54",
+            "issue": "大量镜头涉及多角色同框互动，生成链路无法一次性产出，需拆分或后期合成，且角色一致性风险高。",
+            "suggestion": "建议将所有多角色同框互动镜头改写为正反打或单人特写交替，以降低生成难度。对于无法拆分的镜头，明确标注为后期合成项。",
+            "relatedPatternId": "identityConsistencyPressure/multi_character_interaction"
+          },
+          {
+            "priority": "high",
+            "target": "镜头13, 19, 22, 26, 27, 28, 32, 33, 37, 47, 49, 52, 53, 58, 59",
+            "issue": "多个镜头包含需要清晰可辨认文字的元素（如手机屏幕、招牌、合同、图纸、钞票、警戒线），生成时文字模糊、笔画错乱风险高。",
+            "suggestion": "对于所有需要清晰文字的镜头，建议在生成时虚化文字区域，并在后期通过字幕层或图形叠加的方式添加准确文字。或调整构图/运镜角度，避免文字正面入镜。",
+            "relatedPatternId": "stillFrameGenerability/text_in_frame"
+          },
+          {
+            "priority": "medium",
+            "target": "全片（57个镜头涉及具名角色）",
+            "issue": "几乎所有镜头都需要进行角色身份锁定，批量生成时存在PuLID延迟高、超时或排队风险。",
+            "suggestion": "建议将本集分批提交生成，并为身份锁定镜头预留更长的生成窗口，以应对潜在的延迟问题。",
+            "relatedPatternId": "identityConsistencyPressure/pulid_latency"
+          },
+          {
+            "priority": "medium",
+            "target": "镜头13, 26, 27, 28, 32, 33, 59",
+            "issue": "多个镜头需要精确的屏幕内容或画面内文字（如手机银行信息、电脑网贷界面、平板采购路线），生成链路无法直接产出。",
+            "suggestion": "明确将这些镜头标记为后期制作项，由后期团队负责精确的图形层叠加。",
+            "relatedPatternId": "postProductionDependency/graphics_overlay_dependency"
+          }
+        ],
+        "summary": "整体可生产性中等偏下。本短剧在运镜方面表现优秀，全部为简单运动，可生产性高。然而，在角色一致性方面存在显著挑战，多达33.3%的镜头涉及多角色同框互动，且95%的镜头需要身份锁定，这将导致生成难度和后期合成工作量剧增，并带来批量生成延迟风险。此外，25%的镜头包含需要清晰文字的元素，以及11.6%的镜头依赖后期图形层，这些也增加了静帧生成和后期制作的复杂性。最需要处理的风险是多角色同框互动和高密度的身份锁定，其次是画面内文字的清晰呈现。"
+      }
+    },
+    {
+      "event": "run_summary",
+      "videoId": "1783073819790",
+      "reportId": "90cb4c24-39d6-4270-8797-b8a31025abe5",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.0.0",
+      "overallScore": 5,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "shotRiskCount": 47,
+      "riskBreakdown": {
+        "text_in_frame": 14,
+        "graphics_overlay_dependency": 10,
+        "complex_camera_transition": 1,
+        "multi_character_interaction": 21,
+        "long_tracking_shot": 1
+      },
+      "usage": {
+        "promptTokenCount": 8781,
+        "candidatesTokenCount": 7556,
+        "totalTokenCount": 30964,
+        "thoughtsTokens": 14627,
+        "billedOutputTokens": 22183
+      },
+      "costUSD": {
+        "input": 0.0026,
+        "output": 0.0555,
+        "total": 0.0581
+      },
+      "durationMs": 86673,
+      "report": {
+        "shotRisks": [
+          {
+            "shotRef": "镜头3 00:05 - 00:15",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "medium",
+            "evidence": [
+              "桌面左侧是密密麻麻的文件"
+            ],
+            "recommendation": "此镜头包含背景文件，如果文件内容无需清晰可辨，建议虚化处理；如果需要，则调整构图/运镜角度避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头5 00:23 - 00:30",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "medium",
+            "evidence": [
+              "堆满文件的桌面"
+            ],
+            "recommendation": "此镜头包含背景文件，如果文件内容无需清晰可辨，建议虚化处理；如果需要，则调整构图/运镜角度避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头8 00:39 - 00:41",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "电脑屏幕上弹出窗口，显示“想明白生命的意义吗？想真正的活着吗？”，屏幕背景是数据表格。"
+            ],
+            "recommendation": "此镜头需要清晰可辨认的屏幕文字和数据表格，生成时难以保证文字清晰可辨，建议后期贴字幕层或图形层，并虚化处理背景数据表格。"
+          },
+          {
+            "shotRef": "镜头8 00:39 - 00:41",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "电脑屏幕上弹出窗口，显示“想明白生命的意义吗？想真正的活着吗？”，屏幕背景是数据表格。"
+            ],
+            "recommendation": "此镜头包含UI弹窗和屏幕内容，生成链路不产出这些元素，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头11 00:51 - 00:52",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "medium",
+            "evidence": [
+              "堆满文件的房间里"
+            ],
+            "recommendation": "此镜头包含背景文件，如果文件内容无需清晰可辨，建议虚化处理；如果需要，则调整构图/运镜角度避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头13 00:53 - 01:08",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "电影标题“无限恐怖 第一幕 生化危机 壹”及制作人员字幕，背景是红色网格和Resident Evil标志"
+            ],
+            "recommendation": "此镜头包含清晰标题和字幕，生成时难以保证文字清晰可辨，建议明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头13 00:53 - 01:08",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "电影标题“无限恐怖 第一幕 生化危机 壹”及制作人员字幕，背景是红色网格和Resident Evil标志"
+            ],
+            "recommendation": "此镜头包含标题、字幕、标志和背景网格等图形元素，生成链路不产出，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头14 01:08 - 01:13",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "全息地图上，光束定位到一人，显示\"NAME: ZHANG JIE, ID: S-09721, STATUS: GUIDE\""
+            ],
+            "recommendation": "此镜头包含清晰的屏幕文字和UI元素，生成时难以保证文字清晰可辨，建议明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头14 01:08 - 01:13",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "全息地图上，光束定位到一人，显示\"NAME: ZHANG JIE, ID: S-09721, STATUS: GUIDE\""
+            ],
+            "recommendation": "此镜头包含全息地图、文字和UI元素，生成链路不产出，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头15 01:13 - 01:16",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "地图再次定位，显示\"NAME: ZHENG ZHA, ID: C-11384, STATUS: NEWBIE\""
+            ],
+            "recommendation": "此镜头包含清晰的屏幕文字和UI元素，生成时难以保证文字清晰可辨，建议明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头15 01:13 - 01:16",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "地图再次定位，显示\"NAME: ZHENG ZHA, ID: C-11384, STATUS: NEWBIE\""
+            ],
+            "recommendation": "此镜头包含全息地图、文字和UI元素，生成链路不产出，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头16 01:16 - 01:20",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "地图定位，显示\"NAME: ZHAN LAN, ID: C-11385, STATUS: NEWBIE / WRITER\""
+            ],
+            "recommendation": "此镜头包含清晰的屏幕文字和UI元素，生成时难以保证文字清晰可辨，建议明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头16 01:16 - 01:20",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "地图定位，显示\"NAME: ZHAN LAN, ID: C-11385, STATUS: NEWBIE / WRITER\""
+            ],
+            "recommendation": "此镜头包含全息地图、文字和UI元素，生成链路不产出，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头17 01:20 - 01:25",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "地图定位，显示\"NAME: LU REN JIA, ID: LR-09721, STATUS: GUIDE\""
+            ],
+            "recommendation": "此镜头包含清晰的屏幕文字和UI元素，生成时难以保证文字清晰可辨，建议明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头17 01:20 - 01:25",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "地图定位，显示\"NAME: LU REN JIA, ID: LR-09721, STATUS: GUIDE\""
+            ],
+            "recommendation": "此镜头包含全息地图、文字和UI元素，生成链路不产出，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头18 01:25 - 01:29",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "地图定位，显示\"NAME: LU REN YI, ID: LR-10384, STATUS: NEWBIE\""
+            ],
+            "recommendation": "此镜头包含清晰的屏幕文字和UI元素，生成时难以保证文字清晰可辨，建议明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头18 01:25 - 01:29",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "地图定位，显示\"NAME: LU REN YI, ID: LR-10384, STATUS: NEWBIE\""
+            ],
+            "recommendation": "此镜头包含全息地图、文字和UI元素，生成链路不产出，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头19 01:29 - 01:34",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "地图定位，显示\"NAME: LU REN BING, ID: C-11385, STATUS: NEWBIE / WRITER\""
+            ],
+            "recommendation": "此镜头包含清晰的屏幕文字和UI元素，生成时难以保证文字清晰可辨，建议明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头19 01:29 - 01:34",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "地图定位，显示\"NAME: LU REN BING, ID: C-11385, STATUS: NEWBIE / WRITER\""
+            ],
+            "recommendation": "此镜头包含全息地图、文字和UI元素，生成链路不产出，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头20 01:34 - 01:40",
+            "dimensionId": "cameraMotionFeasibility",
+            "weaknessId": "complex_camera_transition",
+            "severity": "medium",
+            "evidence": [
+              "背景快速移动，表现出空间转换后的混乱感。"
+            ],
+            "recommendation": "复杂机位切换或多段变速运镜在单一8秒片段内稳定性存在挑战，建议简化为单一运动矢量或拆分为多个短镜头。"
+          },
+          {
+            "shotRef": "镜头21 01:40 - 01:44",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰（戴战术背心）对着郑吒说话"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头22 01:44 - 01:46",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两人在金属走廊中对峙"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头26 02:00 - 02:07",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰吸烟，向郑吒解释这些问题答案在电脑上。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头29 02:19 - 02:29",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "镜头移向更多新人，他们都刚刚醒来，显得惊慌失措。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议聚焦于一两个主要角色，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头31 02:44 - 02:54",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "胖子反驳说“走谁死呢？这什么恐怖片也不知道是真是假。我猜，只要我们完成这个游戏，意识体就会回到身体里重新复活。”"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头32 02:54 - 03:08",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰拔出沙漠之鹰，熟练地上膛，冷酷地告诉胖子，他们会感受到痛苦，会受伤，会死，并且不会回到身体里。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头33 03:08 - 03:14",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "胖子质疑张杰“你怎么知道那些挂了的人不是已经回到身体里了？说不定还是他们自己想挂？”"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头34 03:14 - 03:23",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰突然把枪塞进胖子嘴里，眼神凶狠，说“那你想试试吗？你这个渣滓”。胖子吓得浑身发抖。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，且包含肢体互动，建议明确标注为后期合成项，或改写为暗示性镜头。"
+          },
+          {
+            "shotRef": "镜头35 03:23 - 03:28",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "老太太赶紧上前，惊恐地恳求“别打了，别打了！”。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议明确标注为后期合成项，或改写为单人特写。"
+          },
+          {
+            "shotRef": "镜头36 03:28 - 03:44",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰把枪从胖子嘴里拿开，残酷地解释“在恐怖片中没了就是真的没了”"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头38 03:50 - 04:05",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰否认他们是意识体进入电脑，并嘲讽人类科技无法做到这一点。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头41 04:13 - 04:15",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "郑吒转向詹岚，眼神困惑。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头42 04:15 - 04:29",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰微笑着说“没错，确实有回去的希望”，解释每活过一次恐怖片可以获得1000奖励点"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头43 04:29 - 04:33",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "老头路人乙不屑地反问“又不是疯了，谁会希望回恐怖片待着？”。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头44 04:33 - 04:43",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "詹岚解释张杰的意思，恐怖片中除了故事发生地，其余地方都是正常的。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头45 04:43 - 04:59",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰肯定詹岚的理解，并进一步解释奖励点可以兑换许多东西"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头49 05:29 - 05:40",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰再次点燃香烟，解释回家的代价是5万奖励点"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头50 05:40 - 05:46",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰得意地说，像他这样给新人解释规则也会有100点奖励。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头51 05:46 - 05:50",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "medium",
+            "evidence": [
+              "张杰抬起手腕，展示戴在手上的手表，暗示它很重要。"
+            ],
+            "recommendation": "如果手表上的文字需要清晰可辨，建议后期贴字幕层；否则虚化处理或调整构图/运镜角度避免文字正面入镜。"
+          },
+          {
+            "shotRef": "镜头52 05:50 - 05:55",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "郑吒、老头和老太太低头看自己的手表"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头52 05:50 - 05:55",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "手表上显示“马修艾迪生”。"
+            ],
+            "recommendation": "此镜头包含清晰的屏幕文字，生成时难以保证文字清晰可辨，建议后期贴字幕层。"
+          },
+          {
+            "shotRef": "镜头52 05:50 - 05:55",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "手表上显示“马修艾迪生”。"
+            ],
+            "recommendation": "此镜头包含屏幕内容（手表显示），生成链路不产出，需明确标注为后期制作的图形层。"
+          },
+          {
+            "shotRef": "镜头53 05:55 - 06:07",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张杰解释电影属于特定地区恐怖片"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议改写为正反打/单人特写交替，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头54 06:07 - 06:22",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一队全副武装的士兵走入，领队黑人队长说“看来你们都醒了，很好。准备一下，车快到站了。”。"
+            ],
+            "recommendation": "多角色同框互动镜头无法一次生成，建议聚焦于队长或少数关键角色，或明确标注为后期合成项。"
+          },
+          {
+            "shotRef": "镜头59 06:39 - 06:42",
+            "dimensionId": "cameraMotionFeasibility",
+            "weaknessId": "long_tracking_shot",
+            "severity": "high",
+            "evidence": [
+              "张杰转身走向敞开的门，进入一个充满铁桶和管道的房间。"
+            ],
+            "recommendation": "长距离跟踪镜头在8秒片段内保持主体与场景稳定性存在挑战，建议拆分为多个短镜头，或改为固定机位 + 主体运动。"
+          },
+          {
+            "shotRef": "镜头61 06:44 - 06:55",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "屏幕显示“未完待续”。"
+            ],
+            "recommendation": "此镜头包含清晰的屏幕文字，生成时难以保证文字清晰可辨，建议后期贴字幕层。"
+          },
+          {
+            "shotRef": "镜头61 06:44 - 06:55",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "屏幕显示“未完待续”。"
+            ],
+            "recommendation": "此镜头包含屏幕文字，生成链路不产出，需明确标注为后期制作的图形层。"
+          }
+        ],
+        "scores": [
+          {
+            "dimensionId": "stillFrameGenerability",
+            "score": 5,
+            "evidence": [
+              "61个镜头中，有14个镜头（22.9%）包含需要清晰文字或背景文字的元素，其中10个镜头（如镜头8、13-19、52、61）需要清晰可辨认的文字，属于高风险。"
+            ],
+            "reasoning": "影片中部分镜头含有高风险的文字元素，但大部分可通过后期贴字或调整构图规避，符合锚点5的描述。"
+          },
+          {
+            "dimensionId": "identityConsistencyPressure",
+            "score": 2,
+            "evidence": [
+              "61个镜头中，有21个镜头（34.4%）包含两个及以上具名角色同框互动，属于高风险。此外，有42个镜头（68.9%）需要角色身份锁定。"
+            ],
+            "reasoning": "影片中多角色高频同框互动镜头占比极高，且身份锁定镜头密度大，批量生成延迟风险显著，符合锚点2的描述。"
+          },
+          {
+            "dimensionId": "cameraMotionFeasibility",
+            "score": 8,
+            "evidence": [
+              "61个镜头中，仅有1个镜头（镜头59，1.6%）为长距离跟踪镜头，1个镜头（镜头20，1.6%）包含复杂机位切换。"
+            ],
+            "reasoning": "绝大多数镜头以固定机位和单一方向运动为主，零星的复杂运镜已给出拆分建议，符合锚点8的描述。"
+          },
+          {
+            "dimensionId": "postProductionDependency",
+            "score": 5,
+            "evidence": [
+              "61个镜头中，有10个镜头（16.4%）必须依赖生成链路之外的后期图形层（如UI弹窗、标题、全息地图、手表显示）才成立。"
+            ],
+            "reasoning": "影片中若干镜头需要后期贴字或图形层，工作量可控且已明确标注，符合锚点5的描述。"
+          }
+        ],
+        "overallScore": 5,
+        "improvements": [
+          {
+            "priority": "high",
+            "target": "镜头21, 22, 26, 29, 31, 32, 33, 34, 35, 36, 38, 41, 42, 43, 44, 45, 49, 50, 52, 53, 54",
+            "issue": "大量镜头包含两个及以上具名角色同框互动，无法一次生成，需拆分或后期合成，合成质量风险高。",
+            "suggestion": "优先将对话类镜头改写为正反打或单人特写交替。对于肢体互动或多人群像镜头（如镜头34, 35, 52, 54），明确标注为后期合成项，并预留充足的合成制作时间。",
+            "relatedPatternId": "identityConsistencyPressure:multi_character_interaction"
+          },
+          {
+            "priority": "high",
+            "target": "镜头8, 13, 14, 15, 16, 17, 18, 19, 52, 61",
+            "issue": "多个镜头需要清晰可辨认的文字（电脑屏幕、标题、全息地图、手表显示），生成时经常出现文字模糊、笔画错乱。",
+            "suggestion": "这些镜头应明确标注为后期贴字幕层或图形层，以确保文字内容的准确性和清晰度。",
+            "relatedPatternId": "stillFrameGenerability:text_in_frame"
+          },
+          {
+            "priority": "medium",
+            "target": "镜头8, 13, 14, 15, 16, 17, 18, 19, 52, 61",
+            "issue": "多个镜头依赖图形层动效（UI弹窗、特效字、界面元素、屏幕内容），生成链路不产出。",
+            "suggestion": "将所有涉及UI、标题、全息地图、手表显示等图形元素的镜头明确标注为后期制作项，并提前规划后期制作流程。",
+            "relatedPatternId": "postProductionDependency:graphics_overlay_dependency"
+          },
+          {
+            "priority": "medium",
+            "target": "全片",
+            "issue": "影片中68.9%的镜头需要角色身份锁定，高密度身份锁定镜头的批量生成有显著超时/排队风险。",
+            "suggestion": "建议将需要身份锁定的镜头分批提交生成，并为这些镜头预留更长的生成窗口，以应对可能的延迟。",
+            "relatedPatternId": "identityConsistencyPressure:pulid_latency"
+          },
+          {
+            "priority": "medium",
+            "target": "镜头20, 59",
+            "issue": "存在长距离跟踪镜头和复杂机位切换，在8秒视频片段内保持稳定性和实现难度较高。",
+            "suggestion": "镜头20（背景快速移动）建议简化运动矢量或拆分为多个短镜头。镜头59（跟踪镜头）建议拆分为多个短镜头或改为固定机位+主体运动。",
+            "relatedPatternId": "cameraMotionFeasibility:long_tracking_shot, cameraMotionFeasibility:complex_camera_transition"
+          }
+        ],
+        "summary": "这部短剧的可生产性面临中等挑战，整体评分为5.0。最大的风险点在于角色一致性压力，影片中高达34.4%的镜头包含多角色同框互动，且68.9%的镜头需要身份锁定，这将导致大量的后期合成工作和生成延迟风险。其次，静帧可生成性和后期依赖度也存在显著风险，有22.9%的镜头包含需要清晰文字或UI元素的画面，这些内容无法通过生成链路直接产出，必须依赖后期图形层制作。运镜方面风险较低，仅有少量复杂运镜镜头需要简化或拆分。为提高可生产性，最需要处理的风险是多角色同框互动镜头的改写或明确后期合成方案，以及所有文字/UI元素的后期制作规划。"
+      }
+    },
+    {
+      "event": "run_summary",
+      "videoId": "1783192167990",
+      "reportId": "467cc610-2519-418f-bd99-2d22af6ea308",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.0.0",
+      "overallScore": 6.2,
+      "scores": {
+        "stillFrameGenerability": 7,
+        "identityConsistencyPressure": 4,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "shotRiskCount": 50,
+      "riskBreakdown": {
+        "text_in_frame": 8,
+        "graphics_overlay_dependency": 11,
+        "multi_character_interaction": 28,
+        "complex_camera_transition": 3
+      },
+      "usage": {
+        "promptTokenCount": 10150,
+        "candidatesTokenCount": 8055,
+        "totalTokenCount": 34979,
+        "thoughtsTokens": 16774,
+        "billedOutputTokens": 24829
+      },
+      "costUSD": {
+        "input": 0.003,
+        "output": 0.0621,
+        "total": 0.0651
+      },
+      "durationMs": 97928,
+      "report": {
+        "shotRisks": [
+          {
+            "shotRef": "镜头1 00:00-00:05",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "21st 氧气瓶影业的片头动画，金色的立体文字在深蓝色星空背景下"
+            ],
+            "recommendation": "将片头动画中的文字作为后期图形层处理，或调整构图避免文字正面入镜，以确保文字清晰可辨。"
+          },
+          {
+            "shotRef": "镜头1 00:00-00:05",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "21st 氧气瓶影业的片头动画，金色的立体文字在深蓝色星空背景下，有聚光灯和流星效果"
+            ],
+            "recommendation": "明确标注为后期制作的图形层动画，并列入后期制作清单，以实现片头动画的视觉效果。"
+          },
+          {
+            "shotRef": "镜头2 00:05-00:06",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "黑色背景，白色文字显示“原著: zhttty”"
+            ],
+            "recommendation": "将文字作为后期字幕层处理，确保清晰可辨，避免AI生成文字模糊。"
+          },
+          {
+            "shotRef": "镜头2 00:05-00:06",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "黑色背景，白色文字显示“原著: zhttty”"
+            ],
+            "recommendation": "明确标注为后期制作的文字图形层。"
+          },
+          {
+            "shotRef": "镜头3 00:06-00:13",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "黑色背景，白色文字显示版权声明及禁止商业用途的警示"
+            ],
+            "recommendation": "将文字作为后期字幕层处理，确保清晰可辨，避免AI生成文字模糊。"
+          },
+          {
+            "shotRef": "镜头3 00:06-00:13",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "黑色背景，白色文字显示版权声明及禁止商业用途的警示"
+            ],
+            "recommendation": "明确标注为后期制作的文字图形层。"
+          },
+          {
+            "shotRef": "镜头4 00:13-00:20",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "标题“无限恐怖 第二幕・醒来(下)”显示在一个昏暗的地下隧道中"
+            ],
+            "recommendation": "将标题文字作为后期字幕层处理，或虚化背景文字，确保可读性，避免AI生成文字模糊。"
+          },
+          {
+            "shotRef": "镜头4 00:13-00:20",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "标题“无限恐怖 第二幕・醒来(下)”显示在一个昏暗的地下隧道中"
+            ],
+            "recommendation": "明确标注为后期制作的标题图形层。"
+          },
+          {
+            "shotRef": "镜头5 00:20-00:22",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "多名身穿黑色作战服的士兵手持武器，在昏暗的走廊中小心翼翼地前进"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头8 00:29-00:33",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一名长发编辫子的女性士兵和一名黑人男性士兵，身穿黑色作战服，手持步枪，警惕地瞄准前方，准备战斗"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头12 00:39-00:43",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "士兵和几名平民站在地下隧道中，几名士兵警惕地环顾四周"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头13 00:43-00:47",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "第一人称视角，显示战术头盔显示屏，扫描一名士兵的身份和武器信息，呈现科技感和数据分析"
+            ],
+            "recommendation": "明确标注为后期制作的UI/图形动效层，以实现战术头盔显示屏的科技感和数据分析效果。"
+          },
+          {
+            "shotRef": "镜头14 00:47-00:52",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "多个监控屏幕显示不同角度的场景，包括士兵们在楼梯上行进的画面，以及一个公司标志"
+            ],
+            "recommendation": "将公司标志中的文字作为后期贴图或虚化处理，避免生成模糊文字。"
+          },
+          {
+            "shotRef": "镜头14 00:47-00:52",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "多个监控屏幕显示不同角度的场景，包括士兵们在楼梯上行进的画面，以及一个公司标志"
+            ],
+            "recommendation": "明确标注为后期制作的屏幕内容和公司标志图形层。"
+          },
+          {
+            "shotRef": "镜头15 00:52-00:55",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "士兵们手持武器快速冲上楼梯，其中两人搀扶着一个穿着蓝色衣服的人"
+            ],
+            "recommendation": "考虑将多角色同框互动镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头16 00:55-00:57",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两名士兵在走廊里快速移动，女性士兵警惕地环顾四周"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头17 00:57-01:03",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "几名士兵手持武器，小心翼翼地靠近一扇带有“Umbrella Corp”标志的厚重金属门"
+            ],
+            "recommendation": "将“Umbrella Corp”标志中的文字作为后期贴图或虚化处理，避免生成模糊文字。"
+          },
+          {
+            "shotRef": "镜头17 00:57-01:03",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "几名士兵手持武器，小心翼翼地靠近一扇带有“Umbrella Corp”标志的厚重金属门"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头17 00:57-01:03",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "几名士兵手持武器，小心翼翼地靠近一扇带有“Umbrella Corp”标志的厚重金属门"
+            ],
+            "recommendation": "明确标注为后期制作的门上标志图形层。"
+          },
+          {
+            "shotRef": "镜头18 01:03-01:05",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一群士兵和几名平民聚集在一个房间里"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头19 01:05-01:09",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "穿着红色吊带裙的金发女子，眼神坚定地质问黑人队长"
+            ],
+            "recommendation": "将此对话镜头改写为金发女子和黑人队长的正反打镜头，避免多角色同框互动，以提高生成质量。"
+          },
+          {
+            "shotRef": "镜头26 01:36-02:23",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "笔记本屏幕上显示“Raccoon City”地图和蜂巢（The Hive）的3D结构图，解释了蜂巢是隐藏在地下的绝密研究机构，由Umbrella公司拥有和监督，内部有500名科学家研究机密"
+            ],
+            "recommendation": "将屏幕上的文字和信息图作为后期图形层处理，确保文字清晰可读和信息图的准确性，避免AI生成文字模糊或信息错乱。"
+          },
+          {
+            "shotRef": "镜头26 01:36-02:23",
+            "dimensionId": "cameraMotionFeasibility",
+            "weaknessId": "complex_camera_transition",
+            "severity": "medium",
+            "evidence": [
+              "虚拟镜头推拉"
+            ],
+            "recommendation": "简化虚拟镜头推拉的复杂性，或拆分为多个简单运动的镜头，以提高生成稳定性。"
+          },
+          {
+            "shotRef": "镜头26 01:36-02:23",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "笔记本屏幕上显示“Raccoon City”地图和蜂巢（The Hive）的3D结构图，解释了蜂巢是隐藏在地下的绝密研究机构，由Umbrella公司拥有和监督，内部有500名科学家研究机密"
+            ],
+            "recommendation": "明确标注为后期制作的屏幕内容和信息图图形层。"
+          },
+          {
+            "shotRef": "镜头27 02:23-02:30",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "蓝色激光网在走廊中激活，伴随着火花四溅"
+            ],
+            "recommendation": "明确标注为后期制作的特效层，包括激光网和火花，以确保视觉效果的精确性。"
+          },
+          {
+            "shotRef": "镜头29 02:32-02:35",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "金发女子再次质问黑人队长"
+            ],
+            "recommendation": "将此对话镜头改写为金发女子和黑人队长的正反打镜头，避免多角色同框互动，以提高生成质量。"
+          },
+          {
+            "shotRef": "镜头31 02:39-02:44",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "几名平民，包括穿动漫T恤的男性和老年女性，面露困惑和不安，看着黑人队长"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头34 03:00-03:02",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "三名士兵手持武器，小心翼翼地靠近一扇敞开的黑色大门"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头36 03:06-03:08",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两名士兵手持武器，小心地进入黑暗的房间"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头37 03:08-03:26",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一系列快速剪辑的镜头，展示了士兵们在黑暗中，手持武器，侧脸剪影"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头38 03:26-03:28",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一群士兵和几名平民站在光线较亮的走廊中"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头39 03:28-03:32",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一行人，包括士兵和女性，背对着镜头，走进一个由蓝色灯光照亮的玻璃走廊"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头40 03:32-03:34",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两名士兵合力推开一扇厚重的金属门"
+            ],
+            "recommendation": "考虑将多角色同框互动镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头41 03:34-03:38",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两名士兵趴在洞口，向下张望"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头42 03:38-03:45",
+            "dimensionId": "cameraMotionFeasibility",
+            "weaknessId": "complex_camera_transition",
+            "severity": "medium",
+            "evidence": [
+              "主观视角, 垂直下落"
+            ],
+            "recommendation": "简化垂直下落的运镜，或拆分为固定机位与主体运动，以提高生成稳定性。"
+          },
+          {
+            "shotRef": "镜头43 03:45-03:49",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两名士兵面色沉重，其中一人说“看来得走楼梯了”"
+            ],
+            "recommendation": "将此对话镜头改写为正反打镜头，避免多角色同框互动，以提高生成质量。"
+          },
+          {
+            "shotRef": "镜头44 03:49-03:52",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "士兵们和几名平民，包括一位女性，沿着金属楼梯快速奔跑"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头45 03:52-03:55",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一名士兵半蹲着，协助身穿动漫T恤的胖子男性下楼梯"
+            ],
+            "recommendation": "考虑将多角色同框互动镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头52 04:12-04:18",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "女性角色和两名男性，包括一名平民和一名身穿灰色制服的年长男性，在狭窄的蓝色走廊中小心翼翼地前进"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头53 04:18-04:21",
+            "dimensionId": "cameraMotionFeasibility",
+            "weaknessId": "complex_camera_transition",
+            "severity": "medium",
+            "evidence": [
+              "一名士兵背对镜头行走，然后缓慢转身"
+            ],
+            "recommendation": "简化缓慢旋转的运镜，或拆分为两个镜头（背影行走和正面特写），以提高生成稳定性。"
+          },
+          {
+            "shotRef": "镜头57 04:46-04:51",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两名士兵转身，表情严肃地离开，走向走廊深处"
+            ],
+            "recommendation": "考虑将多角色同框镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头58 04:51-04:55",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "一名士兵疑惑地问“这怎么回事？”，黑人队长解释大约5小时前，火焰女皇操纵封闭了整个蜂房"
+            ],
+            "recommendation": "将此对话镜头改写为正反打镜头，避免多角色同框互动，以提高生成质量。"
+          },
+          {
+            "shotRef": "镜头59 04:55-04:59",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "黑人队长继续解释，火焰女皇接着使用内部防御系统开始杀人，另一名士兵面露震惊"
+            ],
+            "recommendation": "将此对话镜头改写为正反打镜头，避免多角色同框互动，以提高生成质量。"
+          },
+          {
+            "shotRef": "镜头60 04:59-05:07",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "黑人队长描述了防御系统释放毒气、切断电梯、关闭研究间等致命操作，并强调它杀光了实验区域内的所有人，另一名士兵听后面露恐惧"
+            ],
+            "recommendation": "将此对话镜头改写为正反打镜头，避免多角色同框互动，以提高生成质量。"
+          },
+          {
+            "shotRef": "镜头61 05:07-05:12",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "男性士兵面露疑惑地问“他为什么这样还不清楚？”，黑人队长回答不清楚，被外界干扰是一种可能"
+            ],
+            "recommendation": "将此对话镜头改写为正反打镜头，避免多角色同框互动，以提高生成质量。"
+          },
+          {
+            "shotRef": "镜头64 05:22-05:28",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "张兰微笑着摸了摸男子的肩膀，提议“我们还是互相介绍一下怎么样？毕竟马上就要开始相依为命了。”"
+            ],
+            "recommendation": "将此互动镜头改写为正反打或单人特写，避免多角色同框互动；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头72 06:35-06:39",
+            "dimensionId": "stillFrameGenerability",
+            "weaknessId": "text_in_frame",
+            "severity": "high",
+            "evidence": [
+              "黑色背景，白色文字显示“下集预告”"
+            ],
+            "recommendation": "将文字作为后期字幕层处理，确保清晰可辨，避免AI生成文字模糊。"
+          },
+          {
+            "shotRef": "镜头72 06:35-06:39",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "黑色背景，白色文字显示“下集预告”"
+            ],
+            "recommendation": "明确标注为后期制作的文字图形层。"
+          },
+          {
+            "shotRef": "镜头73 06:39-06:42",
+            "dimensionId": "identityConsistencyPressure",
+            "weaknessId": "multi_character_interaction",
+            "severity": "high",
+            "evidence": [
+              "两名士兵在未来感十足的走廊中，奋力顶住一扇即将关闭的大门"
+            ],
+            "recommendation": "考虑将多角色同框互动镜头拆分为单人特写或正反打，以降低生成难度和角色一致性风险；确需同框则明确标注为合成项。"
+          },
+          {
+            "shotRef": "镜头74 06:42-06:45",
+            "dimensionId": "postProductionDependency",
+            "weaknessId": "graphics_overlay_dependency",
+            "severity": "medium",
+            "evidence": [
+              "蓝色激光网迅速从四面八方逼近，形成一个封闭的立方体"
+            ],
+            "recommendation": "明确标注为后期制作的特效层，包括激光网，以确保视觉效果的精确性。"
+          }
+        ],
+        "scores": [
+          {
+            "dimensionId": "stillFrameGenerability",
+            "score": 7,
+            "evidence": [
+              "74个镜头中，有8个镜头（约10.8%）包含清晰可辨认文字元素（如片头文字、版权声明、标题、公司标志、屏幕信息等），这些均属于静帧生成已知弱项 'text_in_frame'。"
+            ],
+            "reasoning": "虽然有部分镜头包含文字元素，但这些文字多为片头、字幕或屏幕内容，可以通过后期贴字或图形层处理来规避生成风险，且已给出明确的替代建议。绝大多数画面仍属于预设能力圈内的常规生成范畴。"
+          },
+          {
+            "dimensionId": "identityConsistencyPressure",
+            "score": 4,
+            "evidence": [
+              "74个镜头中，有28个镜头（约37.8%）涉及两个及以上具名角色同框互动或同框构图，命中 'multi_character_interaction' 弱项。此外，剧本中包含8个主要角色，高密度角色出现将增加 'pulid_latency' 风险。"
+            ],
+            "reasoning": "多角色同框互动镜头占比较高，对角色一致性构成显著挑战，且批量生成时存在较高的身份锁定延迟风险。虽然部分对话镜头可通过正反打规避，但仍有大量同框互动和群像镜头需要额外处理或后期合成。"
+          },
+          {
+            "dimensionId": "cameraMotionFeasibility",
+            "score": 8,
+            "evidence": [
+              "74个镜头中，有3个镜头（约4.1%）包含复杂运镜（如虚拟镜头推拉、垂直下落、缓慢旋转），命中 'complex_camera_transition' 弱项。未发现长距离跟踪镜头。"
+            ],
+            "reasoning": "绝大多数镜头为固定机位或简单平移、手持跟拍，运镜难度较低。仅有少量复杂运镜，且已给出拆分或简化的建议，整体运镜可行性较高。"
+          },
+          {
+            "dimensionId": "postProductionDependency",
+            "score": 5,
+            "evidence": [
+              "74个镜头中，有11个镜头（约14.9%）依赖后期图形层或特效（如片头动画、文字显示、屏幕UI、公司标志、激光网、火花），命中 'graphics_overlay_dependency' 弱项。"
+            ],
+            "reasoning": "影片开头和关键信息展示部分对后期图形层依赖度较高，但这些元素均可通过后期制作实现，且工作量可控。其余大部分镜头为纯画面叙事，后期依赖度较低。"
+          }
+        ],
+        "overallScore": 6.2,
+        "improvements": [
+          {
+            "priority": "high",
+            "target": "镜头5, 镜头8, 镜头12, 镜头15, 镜头16, 镜头17, 镜头18, 镜头19, 镜头29, 镜头31, 镜头34, 镜头36, 镜头37, 镜头38, 镜头39, 镜头40, 镜头41, 镜头43, 镜头44, 镜头45, 镜头52, 镜头57, 镜头58, 镜头59, 镜头60, 镜头61, 镜头64, 镜头73",
+            "issue": "大量镜头（约37.8%）包含多角色同框互动或群像，生成时角色一致性难以保证，且无法一次性生成，需拆分或后期合成。",
+            "suggestion": "优先将对话镜头（如镜头19, 29, 43, 58, 59, 60, 61）改写为正反打。对于其他同框互动或群像镜头，明确标注为后期合成项，并提供详细的角色姿态和位置参考图。",
+            "relatedPatternId": "identityConsistencyPressure.multi_character_interaction"
+          },
+          {
+            "priority": "high",
+            "target": "镜头1, 镜头2, 镜头3, 镜头4, 镜头14, 镜头17, 镜头26, 镜头72",
+            "issue": "多个镜头包含清晰可辨认的文字元素（如片头、标题、标志、屏幕信息），AI生成时文字易模糊或错乱。",
+            "suggestion": "将所有文字元素作为后期图形层或字幕层处理，避免在生成阶段依赖AI生成文字。对于标志等，可考虑虚化处理或调整构图。",
+            "relatedPatternId": "stillFrameGenerability.text_in_frame"
+          },
+          {
+            "priority": "medium",
+            "target": "镜头1, 镜头2, 镜头3, 镜头4, 镜头13, 镜头14, 镜头17, 镜头26, 镜头27, 镜头72, 镜头74",
+            "issue": "多个镜头（约14.9%）依赖UI弹窗、特效字、屏幕内容、激光网等图形层动效，这些元素无法通过生成链路产出，必须后期制作。",
+            "suggestion": "明确标注所有需要后期图形层和特效的镜头，并将其纳入后期制作清单，确保有足够的后期制作资源和时间。",
+            "relatedPatternId": "postProductionDependency.graphics_overlay_dependency"
+          },
+          {
+            "priority": "medium",
+            "target": "镜头26, 镜头42, 镜头53",
+            "issue": "少数镜头（约4.1%）包含复杂机位切换、虚拟推拉或旋转运镜，可能影响8秒视频片段的稳定性。",
+            "suggestion": "简化复杂运镜，如将虚拟推拉拆分为多个简单镜头，或将旋转运镜改为固定机位加主体运动，以提高生成成功率。",
+            "relatedPatternId": "cameraMotionFeasibility.complex_camera_transition"
+          },
+          {
+            "priority": "medium",
+            "target": "全片",
+            "issue": "剧本中角色数量较多（8个主要角色）且高频出现，可能导致PuLID身份锁定预设生成延迟高，增加批量生成超时风险。",
+            "suggestion": "针对高角色密度的集数，建议分批提交生成任务，并为身份锁定镜头预留更长的生成窗口。",
+            "relatedPatternId": "identityConsistencyPressure.pulid_latency"
+          }
+        ],
+        "summary": "本短剧的可生产性评估结果显示，整体可生产性处于中等水平。主要风险集中在角色一致性压力和后期依赖度。有大量镜头（约37.8%）涉及多角色同框互动，这将极大地增加角色身份锁定和一致性生成的难度，需要大量拆分或后期合成工作。此外，影片开头、信息展示和特效镜头对后期图形层和特效的依赖度较高（约14.9%），需要明确的后期制作计划。静帧生成方面，虽然有部分文字元素（约10.8%），但多可通过后期贴字规避。运镜方面，绝大多数镜头运镜简单，仅有少量复杂运镜需要简化。为提高可生产性，最需要处理的风险是多角色同框互动镜头，建议优先改写为正反打或明确标注为后期合成项，并提前规划所有后期图形和特效的制作。"
+      }
+    }
+  ]
+}
