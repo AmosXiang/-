@@ -1,0 +1,309 @@
+{
+  "timestamp": "2026-07-06T19:09:10.133Z",
+  "model": "gemini-2.5-flash",
+  "arms": [
+    {
+      "id": "A_default"
+    },
+    {
+      "id": "B_budget0",
+      "thinkingConfig": {
+        "thinkingBudget": 0
+      }
+    }
+  ],
+  "kbVersion": "replicability@1.1.0",
+  "pricingUSDPerMillionTokens": {
+    "input": 0.3,
+    "output": 2.5
+  },
+  "runs": [
+    {
+      "event": "run_summary",
+      "arm": "A_default",
+      "videoId": "1782541753229",
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "identityEvidence": [
+        "60个镜头中21个命中multi_character_interaction弱项，占比35%。"
+      ],
+      "shotRiskCountTotal": 40,
+      "scoreRelevantRiskCount": 40,
+      "riskBreakdown": {
+        "multi_character_interaction": 21,
+        "text_in_frame": 8,
+        "graphics_overlay_dependency": 8,
+        "long_tracking_shot": 3
+      },
+      "weaknessTypesFound": [
+        "graphics_overlay_dependency",
+        "long_tracking_shot",
+        "multi_character_interaction",
+        "text_in_frame"
+      ],
+      "complianceIssues": [],
+      "usage": {
+        "promptTokens": 8735,
+        "candidateTokens": 7573,
+        "totalTokens": 28743,
+        "thinkingTokens": 12435,
+        "billedOutput": 20008
+      },
+      "costUSD": 0.052641,
+      "durationMs": 75327
+    },
+    {
+      "event": "run_summary",
+      "arm": "A_default",
+      "videoId": "1783073819790",
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 8,
+        "cameraMotionFeasibility": 10,
+        "postProductionDependency": 5
+      },
+      "identityEvidence": [
+        "61个镜头中6个命中multi_character_interaction,占比9.83%"
+      ],
+      "shotRiskCountTotal": 26,
+      "scoreRelevantRiskCount": 26,
+      "riskBreakdown": {
+        "text_in_frame": 10,
+        "graphics_overlay_dependency": 10,
+        "multi_character_interaction": 6
+      },
+      "weaknessTypesFound": [
+        "graphics_overlay_dependency",
+        "multi_character_interaction",
+        "text_in_frame"
+      ],
+      "complianceIssues": [],
+      "usage": {
+        "promptTokens": 8910,
+        "candidateTokens": 4953,
+        "totalTokens": 23622,
+        "thinkingTokens": 9759,
+        "billedOutput": 14712
+      },
+      "costUSD": 0.039453,
+      "durationMs": 57235
+    },
+    {
+      "event": "run_summary",
+      "arm": "A_default",
+      "videoId": "1783192167990",
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "identityEvidence": [
+        "74个镜头中10个命中multi_character_interaction弱项，占比13.51%。"
+      ],
+      "shotRiskCountTotal": 33,
+      "scoreRelevantRiskCount": 32,
+      "riskBreakdown": {
+        "text_in_frame": 8,
+        "multi_character_interaction": 10,
+        "pulid_latency": 1,
+        "complex_camera_transition": 5,
+        "graphics_overlay_dependency": 9
+      },
+      "weaknessTypesFound": [
+        "complex_camera_transition",
+        "graphics_overlay_dependency",
+        "multi_character_interaction",
+        "pulid_latency",
+        "text_in_frame"
+      ],
+      "complianceIssues": [],
+      "usage": {
+        "promptTokens": 10279,
+        "candidateTokens": 8254,
+        "totalTokens": 28146,
+        "thinkingTokens": 9613,
+        "billedOutput": 17867
+      },
+      "costUSD": 0.047751,
+      "durationMs": 67225
+    },
+    {
+      "event": "run_summary",
+      "arm": "B_budget0",
+      "videoId": "1782541753229",
+      "scores": {
+        "stillFrameGenerability": 8,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 5,
+        "postProductionDependency": 8
+      },
+      "identityEvidence": [
+        "60 个镜头中 3 个命中 multi_character_interaction,占比 5% (不含 pulid_latency)"
+      ],
+      "shotRiskCountTotal": 7,
+      "scoreRelevantRiskCount": 7,
+      "riskBreakdown": {
+        "text_in_frame": 4,
+        "long_tracking_shot": 2,
+        "graphics_overlay_dependency": 1
+      },
+      "weaknessTypesFound": [
+        "graphics_overlay_dependency",
+        "long_tracking_shot",
+        "text_in_frame"
+      ],
+      "complianceIssues": [],
+      "usage": {
+        "promptTokens": 8735,
+        "candidateTokens": 1771,
+        "totalTokens": 10506,
+        "thinkingTokens": 0,
+        "billedOutput": 1771
+      },
+      "costUSD": 0.007048,
+      "durationMs": 8315
+    },
+    {
+      "event": "run_summary",
+      "arm": "B_budget0",
+      "videoId": "1783073819790",
+      "scores": {
+        "stillFrameGenerability": 2,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 5,
+        "postProductionDependency": 2
+      },
+      "identityEvidence": [
+        "61 个镜头中 5 个命中 multi_character_interaction,占比 8.2%。"
+      ],
+      "shotRiskCountTotal": 23,
+      "scoreRelevantRiskCount": 23,
+      "riskBreakdown": {
+        "text_in_frame": 7,
+        "graphics_overlay_dependency": 8,
+        "multi_character_interaction": 5,
+        "complex_camera_transition": 2,
+        "long_tracking_shot": 1
+      },
+      "weaknessTypesFound": [
+        "complex_camera_transition",
+        "graphics_overlay_dependency",
+        "long_tracking_shot",
+        "multi_character_interaction",
+        "text_in_frame"
+      ],
+      "complianceIssues": [],
+      "usage": {
+        "promptTokens": 8910,
+        "candidateTokens": 4879,
+        "totalTokens": 13789,
+        "thinkingTokens": 0,
+        "billedOutput": 4879
+      },
+      "costUSD": 0.014871,
+      "durationMs": 19604
+    },
+    {
+      "event": "run_summary",
+      "arm": "B_budget0",
+      "videoId": "1783192167990",
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 5,
+        "postProductionDependency": 8
+      },
+      "identityEvidence": [
+        "74 个镜头中 17 个命中 multi_character_interaction,占比 22.97%"
+      ],
+      "shotRiskCountTotal": 43,
+      "scoreRelevantRiskCount": 43,
+      "riskBreakdown": {
+        "text_in_frame": 9,
+        "long_tracking_shot": 3,
+        "complex_camera_transition": 7,
+        "graphics_overlay_dependency": 5,
+        "multi_character_interaction": 19
+      },
+      "weaknessTypesFound": [
+        "complex_camera_transition",
+        "graphics_overlay_dependency",
+        "long_tracking_shot",
+        "multi_character_interaction",
+        "text_in_frame"
+      ],
+      "complianceIssues": [],
+      "usage": {
+        "promptTokens": 10279,
+        "candidateTokens": 11189,
+        "totalTokens": 21468,
+        "thinkingTokens": 0,
+        "billedOutput": 11189
+      },
+      "costUSD": 0.031056,
+      "durationMs": 41744
+    }
+  ],
+  "comparisons": [
+    {
+      "videoId": "1782541753229",
+      "typesMissedByB": [
+        "multi_character_interaction"
+      ],
+      "countDeltaPct": 82.5,
+      "bandShifts": [
+        "stillFrameGenerability:5→8",
+        "identityConsistencyPressure:2→5",
+        "cameraMotionFeasibility:8→5",
+        "postProductionDependency:5→8"
+      ],
+      "costA": 0.052641,
+      "costB": 0.007048,
+      "complianceIssuesB": []
+    },
+    {
+      "videoId": "1783073819790",
+      "typesMissedByB": [],
+      "countDeltaPct": 11.5,
+      "bandShifts": [
+        "stillFrameGenerability:5→2",
+        "identityConsistencyPressure:8→2",
+        "cameraMotionFeasibility:10→5",
+        "postProductionDependency:5→2"
+      ],
+      "costA": 0.039453,
+      "costB": 0.014871,
+      "complianceIssuesB": []
+    },
+    {
+      "videoId": "1783192167990",
+      "typesMissedByB": [],
+      "countDeltaPct": 34.4,
+      "bandShifts": [
+        "identityConsistencyPressure:5→2",
+        "cameraMotionFeasibility:8→5",
+        "postProductionDependency:5→8"
+      ],
+      "costA": 0.047751,
+      "costB": 0.031056,
+      "complianceIssuesB": []
+    }
+  ],
+  "verdict": {
+    "event": "verdict",
+    "materialityCriteria": {
+      "c1_typeMissing": true,
+      "c2_countDeltaOver25pct": true,
+      "c3_bandShiftsAtLeast2of12": true,
+      "c4_complianceFailureInB": false
+    },
+    "materialDifference": true,
+    "totalCostA": 0.139845,
+    "totalCostB": 0.052975
+  }
+}
