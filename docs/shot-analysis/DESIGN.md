@@ -74,6 +74,24 @@ server.ts 内部的原始副本保持不动 —— 让既有端点改为 import 
 写入使用 better-sqlite3 同步 `prepare().run()`,与 `comfyui_tasks` 的写法一致
 (单进程 + 同步驱动,无新增并发写风险)。
 
+## 第二分析维度:本链路可生产性(replicability,2026-07-06 增补)
+
+参考自公开方法论描述(小红书博主拉片方法论的截图转述;**非代码项目,未阅读任何源码**),
+自行设计实现。评估决策记录见 REPLICABILITY-EVALUATION.md,弱项证据档案见
+COMFYUI-WEAKNESS-FINDINGS.md。
+
+与叙事质量分析正交:叙事分析回答"内容好不好",可生产性分析回答
+"这套分镜我们的 ComfyUI + 8 秒视频片段链路能不能做出来、哪里会翻车"。
+知识库 `replicability-rubric.json` 含 4 个锚定维度(静帧可生成性 0.35 /
+角色一致性压力 0.25 / 运镜可行性 0.25 / 后期依赖度 0.15),每个弱项逐条标注
+证据来源(production-data / user-experience / architecture / public-doc-assumption / design)。
+运镜维度整体标注 `calibrationStatus: unverified`——无本地实测数据,
+报告中禁止出现虚构的成功率/失败率数字,待 Seedance/Veo POC 后校准。
+"复杂手部动作"被显式声明为非弱项(explicitNonWeaknesses),防止模型凭通用先验扣分。
+
+输入仅支持 analysis_json 模式(分镜 JSON 纯文本进出,零新增视频调用,
+每集约 $0.02-0.05);video 输入对该分析类型返回明确 422,不静默降级。
+
 ## 失败语义(无静默 fallback)
 
 - `GEMINI_API_KEY` 未配置 → HTTP 500 + `GEMINI_NOT_CONFIGURED`,不产出报告;

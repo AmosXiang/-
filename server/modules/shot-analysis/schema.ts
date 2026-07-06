@@ -50,6 +50,27 @@ export type ShotAnalysisReport = {
   summary: string;
 };
 
+// --- 本链路可生产性(replicability)分析 ---
+// 对应 knowledge/replicability-rubric.json。回答"这套分镜我们的链路能不能做出来",
+// 与叙事质量分析(上方)正交。weaknessId/dimensionId 为封闭 id 域,服务端校验。
+
+export type ShotRisk = {
+  shotRef: string;
+  dimensionId: string;
+  weaknessId: string;
+  severity: 'high' | 'medium' | 'low';
+  evidence: string[];
+  recommendation: string;
+};
+
+export type ReplicabilityReport = {
+  shotRisks: ShotRisk[];
+  scores: DimensionScore[];
+  overallScore: number;
+  improvements: Improvement[];
+  summary: string;
+};
+
 export type ShotAnalysisReportRow = {
   id: string;
   videoId: string | null;
@@ -155,4 +176,56 @@ export const shotAnalysisResponseSchema = {
     summary: { type: 'STRING', description: '一段中文总评' },
   },
   required: ['hookAnalysis', 'structureAnalysis', 'scores', 'overallScore', 'improvements', 'summary'],
+} as const;
+
+// 可生产性报告的 Gemini 结构化输出 schema。与 ReplicabilityReport 一一对应。
+export const replicabilityResponseSchema = {
+  type: 'OBJECT',
+  properties: {
+    shotRisks: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          shotRef: { type: 'STRING', description: '指向具体镜头,如 "镜头12 01:23-01:31"' },
+          dimensionId: { type: 'STRING', description: '必须是 replicability-rubric 中的 dimension id' },
+          weaknessId: { type: 'STRING', description: '必须是该维度 knownWeaknesses 中的 weakness id' },
+          severity: { type: 'STRING', description: 'high | medium | low' },
+          evidence: { type: 'ARRAY', items: { type: 'STRING' }, description: '引用分镜描述原文片段作为证据' },
+          recommendation: { type: 'STRING', description: '按知识库该弱项的 recommendation 给出针对本镜头的具体建议' },
+        },
+        required: ['shotRef', 'dimensionId', 'weaknessId', 'severity', 'evidence', 'recommendation'],
+      },
+    },
+    scores: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          dimensionId: { type: 'STRING', description: '必须是 replicability-rubric 中的 dimension id' },
+          score: { type: 'NUMBER', description: '0-10,必须依据该维度 anchors 定标,高分=易生产' },
+          evidence: { type: 'ARRAY', items: { type: 'STRING' }, description: '必须先列证据(镜头引用/占比统计)再给分' },
+          reasoning: { type: 'STRING' },
+        },
+        required: ['dimensionId', 'score', 'evidence', 'reasoning'],
+      },
+    },
+    overallScore: { type: 'NUMBER', description: '按 rubric 权重的加权平均,0-10(服务端会重算)' },
+    improvements: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          priority: { type: 'STRING', description: 'high | medium | low' },
+          target: { type: 'STRING', description: '指向具体镜头或镜头范围' },
+          issue: { type: 'STRING' },
+          suggestion: { type: 'STRING' },
+          relatedPatternId: { type: 'STRING', description: '关联的 dimension/weakness id,便于追溯' },
+        },
+        required: ['priority', 'target', 'issue', 'suggestion', 'relatedPatternId'],
+      },
+    },
+    summary: { type: 'STRING', description: '一段中文总评:整体可生产性结论与最需要处理的风险' },
+  },
+  required: ['shotRisks', 'scores', 'overallScore', 'improvements', 'summary'],
 } as const;
