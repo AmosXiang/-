@@ -72,7 +72,7 @@ ${JSON.stringify(kb.replicabilityDimensions, null, 1)}
    合法 weaknessId:${[...kb.replicabilityWeaknessIds].join(', ')}
 2. shotRisks:逐镜头对照每个弱项的 detectionRule 检查,命中才输出,证据必须引用分镜描述原文片段与镜头时间戳。
    没有命中任何弱项的镜头不要输出。recommendation 必须基于该弱项知识库中的 recommendation 并针对具体镜头细化。
-3. 评分必须对照各维度 anchors(2/5/8/10)定标,先列证据(含占比统计,如"74 镜头中 6 个含文字元素")再给分。高分 = 易生产。
+3. 评分必须严格执行知识库 scoringRule 的四步流程:先按该维度 metric 统计分子/分母并写入 evidence(格式:"74 个镜头中 6 个命中 text_in_frame,占比 8.1%"),再按占比落入 anchors 数值区间取对应锚点分。分数只允许 2/5/8/10 四个取值;边界值归入较低分档;禁止区间映射之外的加减分。高分 = 易生产。
 4. explicitNonWeaknesses 中声明的内容(如复杂手部动作)不是弱项,禁止据此标记风险或扣分。
 5. 标注了 calibrationStatus: unverified 的维度(运镜可行性)只能给出定性判断与拆分建议,禁止在任何文字中出现具体成功率/失败率数字。
 6. scores 必须覆盖知识库全部 ${kb.replicabilityDimensions.length} 个维度。

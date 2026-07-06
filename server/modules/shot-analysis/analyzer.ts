@@ -104,7 +104,7 @@ function validateReplicabilityReport(raw: any, kb: KnowledgeBase): Replicability
   const covered = new Set<string>();
   for (const item of scores) {
     if (!kb.replicabilityDimensionIds.has(item.dimensionId)) throw invalidResponse(`Unknown replicability dimensionId: ${item.dimensionId}`);
-    if (typeof item.score !== 'number' || item.score < 0 || item.score > 10) throw invalidResponse(`Score out of range for ${item.dimensionId}: ${item.score}`);
+    if (typeof item.score !== 'number' || ![2, 5, 8, 10].includes(item.score)) throw invalidResponse(`Invalid anchor score for ${item.dimensionId}: ${item.score}; expected one of 2, 5, 8, 10`);
     if (!Array.isArray(item.evidence) || !item.evidence.length) throw invalidResponse(`Dimension ${item.dimensionId} has no evidence`);
     covered.add(item.dimensionId);
   }

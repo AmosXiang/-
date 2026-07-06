@@ -1,0 +1,360 @@
+{
+  "timestamp": "2026-07-06T18:21:05.748Z",
+  "pricingUSDPerMillionTokens": {
+    "input": 0.3,
+    "output": 2.5
+  },
+  "videoIds": [
+    "1782541753229",
+    "1783073819790",
+    "1783192167990"
+  ],
+  "dimensions": [
+    "stillFrameGenerability",
+    "identityConsistencyPressure",
+    "cameraMotionFeasibility",
+    "postProductionDependency"
+  ],
+  "runs": [
+    {
+      "event": "run_summary",
+      "round": 1,
+      "videoId": "1782541753229",
+      "reportId": "1cf9905b-b766-4e10-90c7-a2ed34424c0c",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.1.0",
+      "overallScore": 6.05,
+      "scores": {
+        "stillFrameGenerability": 8,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 5,
+        "postProductionDependency": 5
+      },
+      "evidence": {
+        "stillFrameGenerability": [
+          "60 个镜头中 6 个命中 text_in_frame,占比 10.0%"
+        ],
+        "identityConsistencyPressure": [
+          "60 个镜头中 15 个命中 multi_character_interaction,占比 25.0%"
+        ],
+        "cameraMotionFeasibility": [
+          "60 个镜头中 8 个命中 long_tracking_shot,占比 13.33%"
+        ],
+        "postProductionDependency": [
+          "60 个镜头中 7 个命中 graphics_overlay_dependency,占比 11.67%"
+        ]
+      },
+      "shotRiskCount": 34,
+      "riskBreakdown": {
+        "multi_character_interaction": 15,
+        "text_in_frame": 6,
+        "graphics_overlay_dependency": 7,
+        "long_tracking_shot": 6
+      },
+      "usage": {
+        "promptTokenCount": 8735,
+        "candidatesTokenCount": 5991,
+        "totalTokenCount": 22110,
+        "thinkingTokens": 7384,
+        "billedOutputTokens": 13375
+      },
+      "costUSD": {
+        "input": 0.002621,
+        "output": 0.033438,
+        "total": 0.036058
+      },
+      "durationMs": 54194
+    },
+    {
+      "event": "run_summary",
+      "round": 1,
+      "videoId": "1783073819790",
+      "reportId": "8f544bf6-8d9f-49cd-ae97-d9f24e1e1ab4",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.1.0",
+      "overallScore": 5.75,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "evidence": {
+        "stillFrameGenerability": [
+          "61 个镜头中 11 个命中 text_in_frame,占比 18.03%"
+        ],
+        "identityConsistencyPressure": [
+          "61 个镜头中 13 个命中 multi_character_interaction,占比 21.31%"
+        ],
+        "cameraMotionFeasibility": [
+          "61 个镜头中 2 个命中运镜弱项,占比 3.27%"
+        ],
+        "postProductionDependency": [
+          "61 个镜头中 8 个命中 graphics_overlay_dependency,占比 13.11%"
+        ]
+      },
+      "shotRiskCount": 77,
+      "riskBreakdown": {
+        "text_in_frame": 11,
+        "graphics_overlay_dependency": 8,
+        "pulid_latency": 43,
+        "complex_camera_transition": 1,
+        "multi_character_interaction": 13,
+        "long_tracking_shot": 1
+      },
+      "usage": {
+        "promptTokenCount": 8910,
+        "candidatesTokenCount": 10405,
+        "totalTokenCount": 32502,
+        "thinkingTokens": 13187,
+        "billedOutputTokens": 23592
+      },
+      "costUSD": {
+        "input": 0.002673,
+        "output": 0.05898,
+        "total": 0.061653
+      },
+      "durationMs": 91839
+    },
+    {
+      "event": "run_summary",
+      "round": 1,
+      "videoId": "1783192167990",
+      "reportId": "6569d12c-e89c-46d2-89ad-3ce44aa29846",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.1.0",
+      "overallScore": 6.25,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 10,
+        "postProductionDependency": 5
+      },
+      "evidence": {
+        "stillFrameGenerability": [
+          "74 个镜头中 9 个命中 text_in_frame,占比 12.16%"
+        ],
+        "identityConsistencyPressure": [
+          "74 个镜头中 12 个命中 multi_character_interaction,占比 16.22%"
+        ],
+        "cameraMotionFeasibility": [
+          "74 个镜头中 0 个命中运镜弱项,占比 0%"
+        ],
+        "postProductionDependency": [
+          "74 个镜头中 8 个命中 graphics_overlay_dependency,占比 10.81%"
+        ]
+      },
+      "shotRiskCount": 90,
+      "riskBreakdown": {
+        "text_in_frame": 9,
+        "graphics_overlay_dependency": 8,
+        "pulid_latency": 61,
+        "multi_character_interaction": 12
+      },
+      "usage": {
+        "promptTokenCount": 10279,
+        "candidatesTokenCount": 13594,
+        "totalTokenCount": 38391,
+        "thinkingTokens": 14518,
+        "billedOutputTokens": 28112
+      },
+      "costUSD": {
+        "input": 0.003084,
+        "output": 0.07028,
+        "total": 0.073364
+      },
+      "durationMs": 108052
+    },
+    {
+      "event": "run_summary",
+      "round": 2,
+      "videoId": "1782541753229",
+      "reportId": "bebb0b4f-e20e-4f8c-ad3e-ee353e11149e",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.1.0",
+      "overallScore": 5.75,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "evidence": {
+        "stillFrameGenerability": [
+          "60个镜头中8个命中text_in_frame弱项，占比13.33%。"
+        ],
+        "identityConsistencyPressure": [
+          "60个镜头中14个命中multi_character_interaction弱项，占比23.33%。"
+        ],
+        "cameraMotionFeasibility": [
+          "60个镜头中6个命中long_tracking_shot弱项，占比10%。"
+        ],
+        "postProductionDependency": [
+          "60个镜头中8个命中graphics_overlay_dependency弱项，占比13.33%。"
+        ]
+      },
+      "shotRiskCount": 36,
+      "riskBreakdown": {
+        "text_in_frame": 8,
+        "graphics_overlay_dependency": 8,
+        "multi_character_interaction": 14,
+        "long_tracking_shot": 6
+      },
+      "usage": {
+        "promptTokenCount": 8735,
+        "candidatesTokenCount": 6958,
+        "totalTokenCount": 26277,
+        "thinkingTokens": 10584,
+        "billedOutputTokens": 17542
+      },
+      "costUSD": {
+        "input": 0.002621,
+        "output": 0.043855,
+        "total": 0.046475
+      },
+      "durationMs": 69715
+    },
+    {
+      "event": "run_summary",
+      "round": 2,
+      "videoId": "1783073819790",
+      "reportId": "b9178b8b-3b3c-4f18-9698-319a7471211e",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.1.0",
+      "overallScore": 5,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "evidence": {
+        "stillFrameGenerability": [
+          "61 个镜头中 10 个命中 text_in_frame,占比 16.39%"
+        ],
+        "identityConsistencyPressure": [
+          "61 个镜头中 20 个命中 multi_character_interaction,占比 32.79%"
+        ],
+        "cameraMotionFeasibility": [
+          "61 个镜头中 1 个命中 long_tracking_shot,占比 1.64%"
+        ],
+        "postProductionDependency": [
+          "61 个镜头中 9 个命中 graphics_overlay_dependency,占比 14.75%"
+        ]
+      },
+      "shotRiskCount": 40,
+      "riskBreakdown": {
+        "text_in_frame": 10,
+        "graphics_overlay_dependency": 9,
+        "multi_character_interaction": 20,
+        "long_tracking_shot": 1
+      },
+      "usage": {
+        "promptTokenCount": 8910,
+        "candidatesTokenCount": 7080,
+        "totalTokenCount": 26192,
+        "thinkingTokens": 10202,
+        "billedOutputTokens": 17282
+      },
+      "costUSD": {
+        "input": 0.002673,
+        "output": 0.043205,
+        "total": 0.045878
+      },
+      "durationMs": 65761
+    },
+    {
+      "event": "run_summary",
+      "round": 2,
+      "videoId": "1783192167990",
+      "reportId": "da7e8acd-e062-4b17-b055-9bb276e235ab",
+      "analysisType": "replicability",
+      "kbVersion": "replicability@1.1.0",
+      "overallScore": 6.5,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 8,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "evidence": {
+        "stillFrameGenerability": [
+          "74 个镜头中 8 个命中 text_in_frame,占比 10.81%"
+        ],
+        "identityConsistencyPressure": [
+          "74 个镜头中 3 个命中 multi_character_interaction,占比 4.05%"
+        ],
+        "cameraMotionFeasibility": [
+          "74 个镜头中 1 个命中 complex_camera_transition,占比 1.35%"
+        ],
+        "postProductionDependency": [
+          "74 个镜头中 9 个命中 graphics_overlay_dependency,占比 12.16%"
+        ]
+      },
+      "shotRiskCount": 45,
+      "riskBreakdown": {
+        "text_in_frame": 8,
+        "graphics_overlay_dependency": 9,
+        "pulid_latency": 24,
+        "multi_character_interaction": 3,
+        "complex_camera_transition": 1
+      },
+      "usage": {
+        "promptTokenCount": 10279,
+        "candidatesTokenCount": 7591,
+        "totalTokenCount": 28189,
+        "thinkingTokens": 10319,
+        "billedOutputTokens": 17910
+      },
+      "costUSD": {
+        "input": 0.003084,
+        "output": 0.044775,
+        "total": 0.047859
+      },
+      "durationMs": 192077
+    }
+  ],
+  "comparisons": [
+    {
+      "videoId": "1782541753229",
+      "scores": {
+        "stillFrameGenerability": "8→5",
+        "identityConsistencyPressure": "5→5",
+        "cameraMotionFeasibility": "5→8",
+        "postProductionDependency": "5→5"
+      },
+      "identityStable": true
+    },
+    {
+      "videoId": "1783073819790",
+      "scores": {
+        "stillFrameGenerability": "5→5",
+        "identityConsistencyPressure": "5→2",
+        "cameraMotionFeasibility": "8→8",
+        "postProductionDependency": "5→5"
+      },
+      "identityStable": false
+    },
+    {
+      "videoId": "1783192167990",
+      "scores": {
+        "stillFrameGenerability": "5→5",
+        "identityConsistencyPressure": "5→8",
+        "cameraMotionFeasibility": "10→8",
+        "postProductionDependency": "5→5"
+      },
+      "identityStable": false
+    }
+  ],
+  "checks": {
+    "identityStableForEveryVideo": false,
+    "all24ScoresAllowed": true,
+    "everyDimensionHasRatioEvidence": true,
+    "allKbVersionsV110": true
+  },
+  "totals": {
+    "promptTokens": 55848,
+    "billedOutputTokens": 117813,
+    "costUSD": 0.311287
+  }
+}
