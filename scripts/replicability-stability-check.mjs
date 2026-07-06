@@ -89,8 +89,8 @@ const checks = {
   identityStableForEveryVideo: comparisons.every(item => item.identityStable),
   all24ScoresAllowed: runs.length === 6 && runs.every(run => DIMENSIONS.every(id => ALLOWED_SCORES.has(run.scores[id]))),
   everyDimensionHasRatioEvidence: runs.every(run => DIMENSIONS.every(id =>
-    run.evidence[id].some(text => /\d+\s*个?镜头中\s*\d+|\d+\s*\/\s*\d+/.test(text) && /占比\s*\d+(?:\.\d+)?%/.test(text)))),
-  allKbVersionsV110: runs.every(run => run.kbVersion === 'replicability@1.1.0'),
+    run.evidence[id].some(text => /\d+\s*个?镜头中\s*(?:有\s*)?\d+|\d+\s*[/／]\s*\d+/.test(text) && /占比\s*\d+(?:\.\d+)?\s*[%％]/.test(text)))),
+  allKbVersionsV110: runs.every(run => run.kbVersion === 'replicability@1.1.1'),
 };
 const totals = {
   promptTokens: runs.reduce((sum, run) => sum + run.usage.promptTokenCount, 0),

@@ -146,3 +146,74 @@ dist/assets/index-BrsfsZXu.js   552.91 kB │ gzip: 162.46 kB
 ```
 
 lint 与 build 均 exit code 0;chunk size 为既有非阻断 warning。
+
+---
+
+## v1.1.1 措辞修正验证
+
+验证日期:2026-07-06。变更内容:三处措辞/健壮性修正(rubric boundary-rule wording、
+prompt 悬空 scoringRule 引用、stability-check 证据正则加固)。
+
+### 修改摘要
+
+1. **replicability-rubric.json** version `1.1.0` → `1.1.1`;scoringRule 步骤 3
+   "较低分档(保守)" 改为 "区间边界严格按锚点中的 ≤/< 记号判定(例:占比恰为 25%
+   时,落入 '10% < 占比 ≤ 25%' 的 5 分档,而非 2 分档)"。
+2. **prompt.ts** `buildReplicabilityPrompt` 规则第 3 条:去除悬空引用 "知识库 scoringRule
+   的" → "以下";"边界值归入较低分档" → "区间边界严格按 ≤/< 记号判定"。
+3. **replicability-stability-check.mjs** 证据正则:占比正则容忍百分号前空格与全角 ％;
+   计数正则容忍 "中有 N 个" 与全角 ／。kbVersion 断言同步更新至 `1.1.1`。
+
+### lint & build
+
+```text
+> react-example@0.0.0 lint
+> tsc --noEmit
+(exit code 0)
+
+> react-example@0.0.0 build
+> vite build --configLoader runner
+vite v6.4.3 building for production...
+✓ 2075 modules transformed.
+✓ built in 4.34s
+(exit code 0)
+```
+
+### 真实调用验证(videoId 1782541753229)
+
+请求:
+
+```text
+POST http://localhost:3001/api/shot-analysis/analyze
+body: {"videoId":"1782541753229","analysisType":"replicability"}
+requestId: 189bc3a5-f9bd-4d56-a4b8-6debe6212191
+```
+
+服务端日志确认 `kbVersion: "replicability@1.1.1"`,首次尝试成功(attempt 1)。
+
+响应摘要:
+
+| 维度 | dimensionId | 分数 | 统计证据 | 锚点区间 |
+|------|------------|------|---------|---------|
+| 静帧可生成性 | stillFrameGenerability | **5** | 60 个镜头中 13 个命中 text_in_frame,占比 21.67% | 10% < 占比 ≤ 30% → 5 |
+| 角色一致性压力 | identityConsistencyPressure | **5** | 60 个镜头中 11 个命中 multi_character_interaction,占比 18.33% | 10% < 占比 ≤ 25% → 5 |
+| 运镜可行性 | cameraMotionFeasibility | **8** | 60 个镜头中 5 个命中 long_tracking_shot,占比 8.33% | 0% < 占比 ≤ 10% → 8 |
+| 后期依赖度 | postProductionDependency | **5** | 60 个镜头中 7 个命中 graphics_overlay_dependency,占比 11.67% | 10% < 占比 ≤ 30% → 5 |
+
+- **overallScore**: 5.75(服务端加权重算)
+- **四维度分数均 ∈ {2, 5, 8, 10}**: ✅
+- **每个维度 evidence 含分子/分母占比统计**: ✅
+- **identity 维度占比 18.33% 落入 "10% < 占比 ≤ 25%" 给 5 分(符合 ≤ 记号)**: ✅
+- **无边界精确命中案例**: 本次占比均不在精确边界上,未触发边界判定逻辑
+
+usage / cost:
+
+```json
+{
+  "promptTokenCount": 8734,
+  "candidatesTokenCount": 11476,
+  "totalTokenCount": 34573,
+  "durationMs": 98400,
+  "attempts": 1
+}
+```
