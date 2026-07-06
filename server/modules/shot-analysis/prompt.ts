@@ -58,6 +58,36 @@ ${JSON.stringify(input.narrative || {}, null, 1)}
 ${JSON.stringify(input.shots, null, 1)}`;
 }
 
+export function buildReplicabilityPrompt(kb: KnowledgeBase, input: AnalysisJsonInput): string {
+  return `你是本项目 AI 短剧生产链路(ComfyUI 静帧生成 + 8 秒视频片段生成 + 后期合成)的可生产性评估专家。
+下面提供:(1) 可生产性评估知识库;(2) 一部短剧的结构化分镜数据。
+请评估这套分镜在本链路上的可生产性,严格按照提供的 JSON Schema 输出报告。
+
+【知识库:可生产性评分维度(replicabilityRubric)】
+${JSON.stringify(kb.replicabilityDimensions, null, 1)}
+
+【评估规则(必须严格遵守)】
+1. dimensionId 只能取自知识库中列出的维度 id,weaknessId 只能取自对应维度 knownWeaknesses 中的 id。禁止发明新 id。
+   合法 dimensionId:${[...kb.replicabilityDimensionIds].join(', ')}
+   合法 weaknessId:${[...kb.replicabilityWeaknessIds].join(', ')}
+2. shotRisks:逐镜头对照每个弱项的 detectionRule 检查,命中才输出,证据必须引用分镜描述原文片段与镜头时间戳。
+   没有命中任何弱项的镜头不要输出。recommendation 必须基于该弱项知识库中的 recommendation 并针对具体镜头细化。
+3. 评分必须对照各维度 anchors(2/5/8/10)定标,先列证据(含占比统计,如"74 镜头中 6 个含文字元素")再给分。高分 = 易生产。
+4. explicitNonWeaknesses 中声明的内容(如复杂手部动作)不是弱项,禁止据此标记风险或扣分。
+5. 标注了 calibrationStatus: unverified 的维度(运镜可行性)只能给出定性判断与拆分建议,禁止在任何文字中出现具体成功率/失败率数字。
+6. scores 必须覆盖知识库全部 ${kb.replicabilityDimensions.length} 个维度。
+7. improvements 按 priority 排序,target 指向具体镜头,relatedPatternId 填关联的 dimension/weakness id。
+8. 全部输出使用中文。
+
+【待评估短剧分镜】
+标题:${input.title}
+类型:${input.genre || '未标注'}
+人物:
+${JSON.stringify(input.characters, null, 1)}
+分镜列表(共 ${input.shots.length} 个镜头,timeSeconds 为该镜头起始秒数):
+${JSON.stringify(input.shots, null, 1)}`;
+}
+
 export function buildVideoPrompt(kb: KnowledgeBase): string {
   return `你是一位专业的中文竖屏短剧拉片分析师。请仔细观看附带的视频,基于下面的拉片知识库执行拉片分析,严格按照提供的 JSON Schema 输出报告。
 

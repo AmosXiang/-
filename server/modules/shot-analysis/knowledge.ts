@@ -35,6 +35,22 @@ export type RubricDimension = {
   evidenceRequired: boolean;
 };
 
+export type KnownWeakness = {
+  id: string;
+  riskLevel: 'high' | 'medium' | 'low';
+  evidenceBasis: string;
+  description: string;
+  detectionRule: string;
+  recommendation: string;
+};
+
+export type ReplicabilityDimension = RubricDimension & {
+  knownWeaknesses: KnownWeakness[];
+  explicitNonWeaknesses?: string[];
+  calibrationStatus?: string;
+  calibrationNote?: string;
+};
+
 export type KnowledgeBase = {
   version: string;
   hookPatterns: HookPattern[];
@@ -43,6 +59,10 @@ export type KnowledgeBase = {
   hookPatternIds: Set<string>;
   dramaPatternIds: Set<string>;
   dimensionIds: Set<string>;
+  replicabilityVersion: string;
+  replicabilityDimensions: ReplicabilityDimension[];
+  replicabilityDimensionIds: Set<string>;
+  replicabilityWeaknessIds: Set<string>;
 };
 
 function readKnowledgeFile(filename: string): any {
@@ -59,6 +79,7 @@ export function loadKnowledgeBase(): KnowledgeBase {
   const hooks = readKnowledgeFile('hook-patterns.json');
   const drama = readKnowledgeFile('drama-patterns.json');
   const rubric = readKnowledgeFile('scoring-rubric.json');
+  const replicability = readKnowledgeFile('replicability-rubric.json');
 
   if (!Array.isArray(hooks.patterns) || !hooks.patterns.length) throw new Error('hook-patterns.json: patterns must be a non-empty array');
   if (!Array.isArray(drama.patterns) || !drama.patterns.length) throw new Error('drama-patterns.json: patterns must be a non-empty array');
@@ -76,6 +97,20 @@ export function loadKnowledgeBase(): KnowledgeBase {
     if (!d.id || !d.anchors?.['2'] || !d.anchors?.['10']) throw new Error(`scoring-rubric.json: invalid dimension ${JSON.stringify(d.id)}`);
   }
 
+  if (!Array.isArray(replicability.dimensions) || !replicability.dimensions.length) throw new Error('replicability-rubric.json: dimensions must be a non-empty array');
+  const replicabilityWeight = replicability.dimensions.reduce((sum: number, d: any) => sum + Number(d.weight || 0), 0);
+  if (Math.abs(replicabilityWeight - 1) > 1e-6) throw new Error(`replicability-rubric.json: dimension weights must sum to 1, got ${replicabilityWeight}`);
+  const weaknessIds = new Set<string>();
+  for (const d of replicability.dimensions) {
+    if (!d.id || !d.anchors?.['2'] || !d.anchors?.['10']) throw new Error(`replicability-rubric.json: invalid dimension ${JSON.stringify(d.id)}`);
+    if (!Array.isArray(d.knownWeaknesses)) throw new Error(`replicability-rubric.json: dimension ${d.id} missing knownWeaknesses array`);
+    for (const w of d.knownWeaknesses) {
+      if (!w.id || !w.evidenceBasis || !w.detectionRule) throw new Error(`replicability-rubric.json: invalid weakness in ${d.id}: ${JSON.stringify(w.id)}`);
+      if (weaknessIds.has(w.id)) throw new Error(`replicability-rubric.json: duplicate weakness id ${w.id}`);
+      weaknessIds.add(w.id);
+    }
+  }
+
   cached = {
     version: `hook@${hooks.version}+drama@${drama.version}+rubric@${rubric.version}`,
     hookPatterns: hooks.patterns,
@@ -84,6 +119,10 @@ export function loadKnowledgeBase(): KnowledgeBase {
     hookPatternIds: new Set(hooks.patterns.map((p: any) => p.id)),
     dramaPatternIds: new Set(drama.patterns.map((p: any) => p.id)),
     dimensionIds: new Set(rubric.dimensions.map((d: any) => d.id)),
+    replicabilityVersion: `replicability@${replicability.version}`,
+    replicabilityDimensions: replicability.dimensions,
+    replicabilityDimensionIds: new Set(replicability.dimensions.map((d: any) => d.id)),
+    replicabilityWeaknessIds: weaknessIds,
   };
   return cached;
 }

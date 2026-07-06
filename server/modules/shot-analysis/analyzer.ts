@@ -14,10 +14,12 @@ import {
   withGeminiTimeout,
 } from '../../lib/gemini.ts';
 import { loadKnowledgeBase, type KnowledgeBase } from './knowledge.ts';
-import { buildAnalysisJsonPrompt, buildVideoPrompt, type AnalysisJsonInput } from './prompt.ts';
-import { shotAnalysisResponseSchema, type DimensionScore, type ShotAnalysisReport } from './schema.ts';
+import { buildAnalysisJsonPrompt, buildReplicabilityPrompt, buildVideoPrompt, type AnalysisJsonInput } from './prompt.ts';
+import { replicabilityResponseSchema, shotAnalysisResponseSchema, type DimensionScore, type ReplicabilityReport, type ShotAnalysisReport } from './schema.ts';
 
 export const SHOT_ANALYSIS_MODEL = 'gemini-2.5-flash';
+export const ANALYSIS_TYPES = ['narrative', 'replicability'] as const;
+export type AnalysisType = (typeof ANALYSIS_TYPES)[number];
 const MAX_ATTEMPTS = 2;
 const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 
@@ -25,13 +27,21 @@ export type ShotAnalysisInput =
   | { sourceType: 'analysis_json'; videoId: string; input: AnalysisJsonInput }
   | { sourceType: 'video'; filename: string; fullFilePath: string };
 
+export type GeminiUsage = {
+  promptTokenCount: number | null;
+  candidatesTokenCount: number | null;
+  totalTokenCount: number | null;
+};
+
 export type ShotAnalysisSuccess = {
-  report: ShotAnalysisReport;
+  report: ShotAnalysisReport | ReplicabilityReport;
+  analysisType: AnalysisType;
   kbVersion: string;
   model: string;
   requestId: string;
   attempts: number;
   durationMs: number;
+  usage: GeminiUsage;
 };
 
 function invalidResponse(detail: string): Error {
@@ -81,13 +91,57 @@ function validateReport(raw: any, kb: KnowledgeBase): ShotAnalysisReport {
   return raw as ShotAnalysisReport;
 }
 
-export async function runShotAnalysis(input: ShotAnalysisInput): Promise<ShotAnalysisSuccess> {
+// 可生产性报告校验:封闭 id 域(dimension/weakness)+ 全维度覆盖 + 证据必填 + 服务端重算总分。
+function validateReplicabilityReport(raw: any, kb: KnowledgeBase): ReplicabilityReport {
+  if (!raw || typeof raw !== 'object') throw invalidResponse('Report is not an object');
+  for (const risk of raw.shotRisks || []) {
+    if (!kb.replicabilityDimensionIds.has(risk.dimensionId)) throw invalidResponse(`Unknown replicability dimensionId in shotRisks: ${risk.dimensionId}`);
+    if (!kb.replicabilityWeaknessIds.has(risk.weaknessId)) throw invalidResponse(`Unknown weaknessId: ${risk.weaknessId}`);
+    if (!['high', 'medium', 'low'].includes(risk.severity)) throw invalidResponse(`Invalid shotRisk severity: ${risk.severity}`);
+    if (!Array.isArray(risk.evidence) || !risk.evidence.length) throw invalidResponse(`ShotRisk ${risk.weaknessId}@${risk.shotRef} has no evidence`);
+  }
+  const scores: DimensionScore[] = raw.scores || [];
+  const covered = new Set<string>();
+  for (const item of scores) {
+    if (!kb.replicabilityDimensionIds.has(item.dimensionId)) throw invalidResponse(`Unknown replicability dimensionId: ${item.dimensionId}`);
+    if (typeof item.score !== 'number' || item.score < 0 || item.score > 10) throw invalidResponse(`Score out of range for ${item.dimensionId}: ${item.score}`);
+    if (!Array.isArray(item.evidence) || !item.evidence.length) throw invalidResponse(`Dimension ${item.dimensionId} has no evidence`);
+    covered.add(item.dimensionId);
+  }
+  for (const id of kb.replicabilityDimensionIds) {
+    if (!covered.has(id)) throw invalidResponse(`Replicability dimension not scored: ${id}`);
+  }
+  for (const item of raw.improvements || []) {
+    if (!['high', 'medium', 'low'].includes(item.priority)) throw invalidResponse(`Invalid improvement priority: ${item.priority}`);
+  }
+  const weightById = new Map(kb.replicabilityDimensions.map(d => [d.id, d.weight]));
+  const computed = scores.reduce((sum, item) => sum + item.score * (weightById.get(item.dimensionId) || 0), 0);
+  const rounded = Math.round(computed * 100) / 100;
+  if (typeof raw.overallScore === 'number' && Math.abs(raw.overallScore - rounded) > 0.75) {
+    console.warn('[ShotAnalysis]', JSON.stringify({ event: 'overall_score_mismatch', analysisType: 'replicability', modelReported: raw.overallScore, computed: rounded }));
+  }
+  raw.overallScore = rounded;
+  return raw as ReplicabilityReport;
+}
+
+export async function runShotAnalysis(input: ShotAnalysisInput, analysisType: AnalysisType = 'narrative'): Promise<ShotAnalysisSuccess> {
   const kb = loadKnowledgeBase();
   const requestId = crypto.randomUUID();
   const startedAt = Date.now();
   const timeoutMs = input.sourceType === 'video'
     ? Number(process.env.SHOT_ANALYSIS_VIDEO_TIMEOUT_MS) || 300_000
     : Number(process.env.SHOT_ANALYSIS_TIMEOUT_MS) || 120_000;
+
+  // 可生产性分析只消费分镜 JSON(设计决策:零新增视频调用)。video 输入明确报错,不静默降级。
+  if (analysisType === 'replicability' && input.sourceType === 'video') {
+    throw Object.assign(
+      new Error('Replicability analysis only supports analysis_json input (use videoId of an analyzed library video). Raw video input is not supported for this analysis type.'),
+      { code: 'GEMINI_INVALID_RESPONSE', status: 422 },
+    );
+  }
+
+  const kbVersion = analysisType === 'replicability' ? kb.replicabilityVersion : kb.version;
+  const responseSchema = analysisType === 'replicability' ? replicabilityResponseSchema : shotAnalysisResponseSchema;
 
   const ai = createGeminiClient();
 
@@ -111,7 +165,7 @@ export async function runShotAnalysis(input: ShotAnalysisInput): Promise<ShotAna
       buildVideoPrompt(kb),
     ];
   } else {
-    contents = [{ text: buildAnalysisJsonPrompt(kb, input.input) }];
+    contents = [{ text: analysisType === 'replicability' ? buildReplicabilityPrompt(kb, input.input) : buildAnalysisJsonPrompt(kb, input.input) }];
   }
 
   try {
@@ -119,14 +173,14 @@ export async function runShotAnalysis(input: ShotAnalysisInput): Promise<ShotAna
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       const attemptStartedAt = Date.now();
       try {
-        console.log('[ShotAnalysis]', JSON.stringify({ requestId, event: 'attempt_start', attempt, model: SHOT_ANALYSIS_MODEL, sourceType: input.sourceType, kbVersion: kb.version, timeoutMs }));
+        console.log('[ShotAnalysis]', JSON.stringify({ requestId, event: 'attempt_start', attempt, model: SHOT_ANALYSIS_MODEL, analysisType, sourceType: input.sourceType, kbVersion, timeoutMs }));
         const response = await withGeminiTimeout(ai.models.generateContent({
           model: SHOT_ANALYSIS_MODEL,
           contents,
           config: {
             temperature: 0.1,
             responseMimeType: 'application/json',
-            responseSchema: shotAnalysisResponseSchema,
+            responseSchema,
           },
         }), timeoutMs);
         let parsed: any;
@@ -135,10 +189,16 @@ export async function runShotAnalysis(input: ShotAnalysisInput): Promise<ShotAna
         } catch (parseError) {
           throw Object.assign(parseError as Error, { code: 'GEMINI_INVALID_RESPONSE' });
         }
-        const report = validateReport(parsed, kb);
+        const report = analysisType === 'replicability' ? validateReplicabilityReport(parsed, kb) : validateReport(parsed, kb);
         const durationMs = Date.now() - startedAt;
-        console.log('[ShotAnalysis]', JSON.stringify({ requestId, event: 'success', attempt, attemptDurationMs: Date.now() - attemptStartedAt, totalDurationMs: durationMs, overallScore: report.overallScore }));
-        return { report, kbVersion: kb.version, model: SHOT_ANALYSIS_MODEL, requestId, attempts: attempt, durationMs };
+        // usageMetadata 落日志:真实 token 消耗,用于成本核对(commit C 验收依赖此字段)。
+        const usage: GeminiUsage = {
+          promptTokenCount: response.usageMetadata?.promptTokenCount ?? null,
+          candidatesTokenCount: response.usageMetadata?.candidatesTokenCount ?? null,
+          totalTokenCount: response.usageMetadata?.totalTokenCount ?? null,
+        };
+        console.log('[ShotAnalysis]', JSON.stringify({ requestId, event: 'success', attempt, analysisType, attemptDurationMs: Date.now() - attemptStartedAt, totalDurationMs: durationMs, overallScore: report.overallScore, usage }));
+        return { report, analysisType, kbVersion, model: SHOT_ANALYSIS_MODEL, requestId, attempts: attempt, durationMs, usage };
       } catch (error: any) {
         lastError = error;
         const classified = classifyGeminiError(error);

@@ -12,13 +12,13 @@ type DatabaseInstance = Database.Database;
 
 import { classifyGeminiError } from '../../lib/gemini.ts';
 import { applyShotAnalysisMigrations } from './migrate.ts';
-import { runShotAnalysis, SHOT_ANALYSIS_MODEL, type ShotAnalysisInput } from './analyzer.ts';
+import { ANALYSIS_TYPES, runShotAnalysis, SHOT_ANALYSIS_MODEL, type AnalysisType, type ShotAnalysisInput } from './analyzer.ts';
 import type { ShotAnalysisReportRow } from './schema.ts';
 
 function insertReportRow(db: DatabaseInstance, row: ShotAnalysisReportRow): void {
   db.prepare(`
-    INSERT INTO shot_analysis_reports (id, videoId, sourceType, sourceRef, kbVersion, model, requestId, status, reportJson, error, durationMs, createdAt)
-    VALUES (@id, @videoId, @sourceType, @sourceRef, @kbVersion, @model, @requestId, @status, @reportJson, @error, @durationMs, @createdAt)
+    INSERT INTO shot_analysis_reports (id, videoId, sourceType, analysisType, sourceRef, kbVersion, model, requestId, status, reportJson, error, durationMs, createdAt)
+    VALUES (@id, @videoId, @sourceType, @analysisType, @sourceRef, @kbVersion, @model, @requestId, @status, @reportJson, @error, @durationMs, @createdAt)
   `).run(row);
 }
 
@@ -32,6 +32,15 @@ function findStoredVideo(db: DatabaseInstance, videoId: string): any | null {
 async function handleAnalyze(db: DatabaseInstance, req: Request, res: Response): Promise<Response> {
   const { videoId, filename, filepath } = req.body || {};
   const startedAt = Date.now();
+
+  const analysisType = String(req.body?.analysisType || 'narrative') as AnalysisType;
+  if (!ANALYSIS_TYPES.includes(analysisType)) {
+    return res.status(400).json({ error: { code: 'INVALID_INPUT', message: `analysisType must be one of: ${ANALYSIS_TYPES.join(', ')}`, retryable: false } });
+  }
+  if (analysisType === 'replicability' && !videoId) {
+    // 可生产性分析只消费已入库的分镜 JSON;video 文件输入明确拒绝,不静默降级。
+    return res.status(422).json({ error: { code: 'INVALID_INPUT', message: 'Replicability analysis requires videoId of an analyzed library video (analysis_json input only).', retryable: false } });
+  }
 
   let analysisInput: ShotAnalysisInput;
   let sourceRef: string;
@@ -68,11 +77,12 @@ async function handleAnalyze(db: DatabaseInstance, req: Request, res: Response):
 
   const reportId = crypto.randomUUID();
   try {
-    const result = await runShotAnalysis(analysisInput);
+    const result = await runShotAnalysis(analysisInput, analysisType);
     insertReportRow(db, {
       id: reportId,
       videoId: boundVideoId,
       sourceType: analysisInput.sourceType,
+      analysisType,
       sourceRef,
       kbVersion: result.kbVersion,
       model: result.model,
@@ -87,19 +97,21 @@ async function handleAnalyze(db: DatabaseInstance, req: Request, res: Response):
       id: reportId,
       videoId: boundVideoId,
       sourceType: analysisInput.sourceType,
+      analysisType,
       sourceRef,
       kbVersion: result.kbVersion,
       report: result.report,
-      diagnostics: { requestId: result.requestId, model: result.model, attempts: result.attempts, durationMs: result.durationMs },
+      diagnostics: { requestId: result.requestId, model: result.model, attempts: result.attempts, durationMs: result.durationMs, usage: result.usage },
     });
   } catch (error: any) {
     const classified = classifyGeminiError(error);
     const requestId = String(error?.requestId || crypto.randomUUID());
-    console.error('[ShotAnalysis]', JSON.stringify({ requestId, event: 'analysis_failed', code: classified.code, sourceRef, detail: String(error?.message || error) }));
+    console.error('[ShotAnalysis]', JSON.stringify({ requestId, event: 'analysis_failed', code: classified.code, analysisType, sourceRef, detail: String(error?.message || error) }));
     insertReportRow(db, {
       id: reportId,
       videoId: boundVideoId,
       sourceType: analysisInput.sourceType,
+      analysisType,
       sourceRef,
       kbVersion: 'unknown',
       model: SHOT_ANALYSIS_MODEL,
@@ -130,13 +142,18 @@ export function registerShotAnalysisModule(app: Express, db: DatabaseInstance): 
 
   app.get('/api/shot-analysis/reports', (req, res) => {
     const videoId = req.query.videoId ? String(req.query.videoId) : null;
-    const rows = (videoId
-      ? db.prepare('SELECT * FROM shot_analysis_reports WHERE videoId = ? ORDER BY createdAt DESC').all(videoId)
-      : db.prepare('SELECT * FROM shot_analysis_reports ORDER BY createdAt DESC').all()) as ShotAnalysisReportRow[];
+    const analysisType = req.query.analysisType ? String(req.query.analysisType) : null;
+    const conditions: string[] = [];
+    const params: string[] = [];
+    if (videoId) { conditions.push('videoId = ?'); params.push(videoId); }
+    if (analysisType) { conditions.push('analysisType = ?'); params.push(analysisType); }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const rows = db.prepare(`SELECT * FROM shot_analysis_reports${where} ORDER BY createdAt DESC`).all(...params) as ShotAnalysisReportRow[];
     res.json(rows.map(row => ({
       id: row.id,
       videoId: row.videoId,
       sourceType: row.sourceType,
+      analysisType: row.analysisType,
       sourceRef: row.sourceRef,
       kbVersion: row.kbVersion,
       model: row.model,

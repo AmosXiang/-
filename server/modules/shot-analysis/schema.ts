@@ -75,6 +75,7 @@ export type ShotAnalysisReportRow = {
   id: string;
   videoId: string | null;
   sourceType: 'video' | 'analysis_json';
+  analysisType: 'narrative' | 'replicability';
   sourceRef: string;
   kbVersion: string;
   model: string;
