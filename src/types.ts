@@ -6,6 +6,7 @@ export interface Shot {
   composition: string;
   emotion: string;
   description: string;
+  optimizedPrompt?: string;
   imageUrl?: string;
   generatedImageUrl?: string;
   style?: string;
@@ -91,6 +92,8 @@ export interface GeneratedScriptRecord extends GeneratedScript {
   templateTitle: string;
   topic: string;
   createdAt: string;
+  sourceScriptId?: string | null;
+  artDirection?: { overlay: string; analysis?: unknown; updatedAt?: string };
 }
 
 

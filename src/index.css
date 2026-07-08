@@ -1,20 +1,54 @@
 @import "tailwindcss";
 
+/* ════════════════ DESIGN TOKENS (ui-redesign) ════════════════
+   Tailwind v4 主题重映射：全部现存 slate/blue utility 直接换上
+   新设计的 surface 阶梯与 indigo 品牌色，无需逐处改 JSX。 */
+@theme {
+  --font-sans: "Inter", "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
+    system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, "Courier New",
+    monospace;
+
+  /* slate → surface 阶梯 */
+  --color-slate-950: #0b0d14; /* surface-0 */
+  --color-slate-900: #11141e; /* surface-1 */
+  --color-slate-850: #181c2a; /* surface-2 */
+  --color-slate-800: #1f2438; /* surface-3 */
+  --color-slate-750: #272d47; /* surface-4 */
+  --color-slate-700: #303759; /* surface-5 */
+  --color-slate-600: #3e4670;
+  --color-slate-500: #5a6480; /* txt-tertiary */
+  --color-slate-400: #94a3b8; /* txt-secondary */
+  --color-slate-300: #b8c1da;
+  --color-slate-200: #dbe1f2;
+  --color-slate-100: #eef2ff; /* txt-primary */
+
+  /* blue → indigo 品牌色 */
+  --color-blue-300: #a5b4fc;
+  --color-blue-400: #818cf8;
+  --color-blue-500: #6366f1;
+  --color-blue-600: #4f46e5;
+  --color-blue-700: #4338ca;
+  --color-blue-800: #3730a3;
+  --color-blue-900: #312e81;
+  --color-blue-950: #1e1b4b;
+}
+
 @layer utilities {
   /* Scrollbar styles */
   .custom-scrollbar::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
+    width: 4px;
+    height: 4px;
   }
   .custom-scrollbar::-webkit-scrollbar-track {
-    background: rgba(15, 23, 42, 0.3);
+    background: transparent;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.2);
-    border-radius: 4px;
+    background: #272d47;
+    border-radius: 99px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(148, 163, 184, 0.4);
+    background: #303759;
   }
 }
 
@@ -25,38 +59,50 @@
 
   body {
     margin: 0;
-    background: #080c14;
+    background: #0b0d14;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
   }
 }
 
 @layer components {
   .admin-shell {
-    --panel: #0d1420;
-    --panel-raised: #111a28;
-    --line: #263244;
-    --line-soft: #1a2534;
-    --accent: #3b82f6;
+    --surface-0: #0b0d14;
+    --surface-1: #11141e;
+    --surface-2: #181c2a;
+    --surface-3: #1f2438;
+    --surface-4: #272d47;
+    --surface-5: #303759;
+    --border-subtle: rgba(255, 255, 255, 0.05);
+    --border-default: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --border-brand: rgba(99, 102, 241, 0.35);
+    --panel: var(--surface-1);
+    --panel-raised: var(--surface-2);
+    --line: var(--border-default);
+    --line-soft: var(--border-subtle);
+    --accent: #6366f1;
     height: 100dvh;
     min-height: 0;
     overflow: hidden;
-    background: #080c14;
+    background: var(--surface-0);
   }
 
   .admin-topbar {
-    flex: 0 0 56px;
-    min-height: 56px;
-    background: rgba(10, 16, 27, 0.96);
-    border-color: var(--line);
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025);
+    flex: 0 0 48px;
+    min-height: 48px;
+    background: rgba(17, 20, 30, 0.96);
+    border-color: var(--line-soft);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
   }
 
   .admin-layout {
     display: grid !important;
-    grid-template-columns: clamp(12rem, 18vw, 22rem) minmax(0, 1fr) clamp(18rem, 24vw, 28rem);
+    grid-template-columns: clamp(12.5rem, 15vw, 15rem) minmax(0, 1fr)
+      clamp(16rem, 19vw, 19rem);
     min-height: 0;
     overflow: hidden;
-    background: #080c14;
+    background: var(--surface-0);
   }
 
   .admin-navigation,
@@ -74,23 +120,184 @@
 
   .admin-navigation {
     grid-column: 1;
-    background: #0a101a;
+    background: var(--surface-1);
   }
 
   .admin-workspace {
     grid-column: 2;
-    background: #0b111c;
+    background: var(--surface-0);
+  }
+
+  /* generator 激活时主区吞掉右栏，向导全宽 */
+  .admin-workspace.workspace-span {
+    grid-column: 2 / -1;
   }
 
   .admin-inspector {
     grid-column: 3;
     container-name: inspector;
     container-type: inline-size;
-    background: #0d1420;
+    background: var(--surface-1);
   }
 
   .admin-navigation + .admin-inspector {
     grid-column: 2 / -1;
+  }
+
+  /* ── 主区顶部功能导航（从右栏迁移而来） ── */
+  .maintabs {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+    padding: 0 16px;
+    overflow-x: auto;
+    background: var(--surface-1);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .maintabs > button {
+    min-height: 40px;
+    padding: 0 14px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    color: #5a6480;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+    cursor: pointer;
+  }
+
+  .maintabs > button:hover {
+    color: #94a3b8;
+  }
+
+  .maintabs > button.on {
+    color: #eef2ff;
+    border-bottom-color: #6366f1;
+  }
+
+  /* ── 右栏统计卡 ── */
+  .rstat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .rstat-card {
+    padding: 10px 6px;
+    text-align: center;
+    background: var(--surface-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+  }
+
+  .rstat-num {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #eef2ff;
+    font-family: var(--font-mono);
+  }
+
+  .rstat-name {
+    margin-top: 3px;
+    font-size: 10px;
+    color: #5a6480;
+    line-height: 1.3;
+  }
+
+  /* ── 人物卡片网格 ── */
+  .char-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 12px;
+  }
+
+  .char-card {
+    overflow: hidden;
+    background: var(--surface-2);
+    border: 1px solid var(--border-default);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: border-color 0.18s, transform 0.18s, box-shadow 0.18s;
+  }
+
+  .char-card:hover {
+    border-color: var(--border-strong);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  }
+
+  .char-asset-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* ── 叙事节奏条 ── */
+  .rhythm-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 52px;
+  }
+
+  .rhythm-bar > div {
+    flex: 1;
+    min-width: 4px;
+    border-radius: 3px 3px 0 0;
+    background: #6366f1;
+    opacity: 0.55;
+    transition: opacity 0.15s;
+  }
+
+  .rhythm-bar > div:hover {
+    opacity: 1;
+  }
+
+  .rhythm-bar > div.peak {
+    background: #f59e0b;
+    opacity: 1;
+  }
+
+  /* ── 顶栏 ComfyUI 状态 pill ── */
+  .comfy-pill {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 99px;
+    border: 1px solid var(--border-default);
+    background: var(--surface-2);
+    font-size: 11px;
+    font-weight: 500;
+    color: #94a3b8;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .comfy-pill:hover {
+    border-color: var(--border-strong);
+    color: #eef2ff;
+  }
+
+  .comfy-pop {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 300;
+    min-width: 230px;
+    padding: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   }
 
   .admin-inspector-toolbar {
@@ -101,66 +308,8 @@
     min-height: max-content;
     gap: 12px;
     padding: 10px clamp(10px, 1.2vw, 18px);
-    background: rgba(13, 20, 32, 0.96);
+    background: rgba(24, 28, 42, 0.96);
     border-color: var(--line);
-  }
-
-  .right-tabs {
-    display: grid;
-    flex-shrink: 0;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 4px;
-    width: 100%;
-    min-width: 0;
-    padding: 3px;
-    overflow: hidden;
-    border: 1px solid var(--line-soft);
-    border-radius: 8px;
-    background: #090f19;
-  }
-
-  .right-tabs > button {
-    width: 100%;
-    min-width: 0;
-    height: 36px;
-    padding: 0 clamp(6px, 0.8vw, 12px);
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    border: 0;
-    border-radius: 5px;
-  }
-
-  .right-tabs > button[class*="text-slate-100"] {
-    color: #f8fafc;
-    background: #182335;
-    box-shadow: inset 0 -2px 0 #60a5fa;
-  }
-
-  .right-tabs-dropdown {
-    display: none;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .right-tabs-dropdown > span {
-    color: #94a3b8;
-    font-size: 0.6875rem;
-    font-weight: 700;
-  }
-
-  .right-tabs-dropdown > select {
-    width: 100%;
-    min-width: 0;
-    height: 38px;
-    padding-inline: 10px 32px;
-    overflow: hidden;
-    color: #f8fafc;
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-overflow: ellipsis;
-    border: 1px solid #334155;
-    background: #111a28;
   }
 
   .inspector-actions {
@@ -176,22 +325,6 @@
     max-width: 100%;
   }
 
-  @container inspector (max-width: 20rem) {
-    .right-tabs {
-      display: none;
-    }
-
-    .right-tabs-dropdown {
-      display: grid;
-    }
-  }
-
-  @container inspector (min-width: 20.001rem) and (max-width: 24rem) {
-    .right-tabs {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
   .admin-shell button,
   .admin-shell input,
   .admin-shell select,
@@ -200,20 +333,27 @@
   }
 
   .admin-shell button {
-    min-height: 30px;
+    min-height: 28px;
   }
 
   .admin-shell button:focus-visible,
   .admin-shell input:focus-visible,
   .admin-shell select:focus-visible,
   .admin-shell textarea:focus-visible {
-    outline: 2px solid rgba(96, 165, 250, 0.9);
+    outline: 2px solid rgba(99, 102, 241, 0.9);
     outline-offset: 2px;
   }
 
-  .admin-shell [class*="rounded-xl"],
+  .admin-shell [class*="rounded-xl"] {
+    border-radius: 10px;
+  }
+
   .admin-shell [class*="rounded-2xl"] {
-    border-radius: 8px;
+    border-radius: 14px;
+  }
+
+  .admin-shell [class*="rounded-full"] {
+    border-radius: 999px;
   }
 
   .admin-shell [class*="bg-red-950"],
@@ -226,14 +366,14 @@
   }
 
   .admin-shell [class*="bg-blue-950"] {
-    border-color: rgba(96, 165, 250, 0.26);
+    border-color: rgba(99, 102, 241, 0.3);
   }
 
   .character-design-modal {
     height: min(820px, 90vh);
-    border-radius: 8px;
-    background: #0d1420;
-    border-color: #2a374a;
+    border-radius: 14px;
+    background: var(--surface-2, #181c2a);
+    border-color: rgba(255, 255, 255, 0.09);
   }
 
   .admin-shell > .fixed.inset-0 {
@@ -288,6 +428,7 @@
 
     .admin-layout {
       display: flex !important;
+      flex-direction: column;
       min-height: auto;
       overflow: visible;
     }

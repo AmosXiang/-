@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频智能分析工作台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ════════════════ DESIGN TOKENS ════════════════ */
+:root {
+  --brand-300:#a5b4fc;--brand-400:#818cf8;--brand-500:#6366f1;--brand-600:#4f46e5;
+  --surface-0:#0b0d14;--surface-1:#11141e;--surface-2:#181c2a;
+  --surface-3:#1f2438;--surface-4:#272d47;--surface-5:#303759;
+  --border-subtle:rgba(255,255,255,.05);--border-default:rgba(255,255,255,.09);
+  --border-strong:rgba(255,255,255,.16);--border-brand:rgba(99,102,241,.35);
+  --success:#22c55e;--success-bg:rgba(34,197,94,.10);--success-border:rgba(34,197,94,.2);
+  --warning:#f59e0b;--warning-bg:rgba(245,158,11,.10);--warning-border:rgba(245,158,11,.22);
+  --error:#ef4444;--error-bg:rgba(239,68,68,.08);--error-border:rgba(239,68,68,.2);
+  --neutral:#94a3b8;--neutral-bg:rgba(148,163,184,.09);
+  --gold:#e8a628;--gold-bg:rgba(232,166,40,.10);--gold-border:rgba(232,166,40,.25);
+  --txt-primary:#eef2ff;--txt-secondary:#94a3b8;--txt-tertiary:#5a6480;
+  --t-xs:11px;--t-sm:13px;--t-base:14px;--t-lg:16px;--t-xl:20px;--t-2xl:26px;--t-hero:36px;
+  --r-xs:4px;--r-sm:6px;--r-md:10px;--r-lg:14px;--r-xl:20px;
+  --sidebar-w:220px;--right-w:276px;--topbar-h:46px;
+  --anim:cubic-bezier(.4,0,.2,1);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{font-family:'Inter','Noto Sans SC',system-ui,sans-serif;background:var(--surface-0);color:var(--txt-primary);font-size:var(--t-base);line-height:1.5;-webkit-font-smoothing:antialiased;}
+button{cursor:pointer;border:none;background:none;font:inherit;}
+input,select,textarea{font:inherit;}
+::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--surface-4);border-radius:99px;}
+
+/* ════════════════ SHELL ════════════════ */
+.shell{display:grid;grid-template-rows:var(--topbar-h) 1fr;grid-template-columns:var(--sidebar-w) 1fr var(--right-w);height:100vh;overflow:hidden;}
+
+/* ════════════════ TOPBAR ════════════════ */
+.topbar{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 18px;background:var(--surface-1);border-bottom:1px solid var(--border-subtle);z-index:100;}
+.t-logo{display:flex;align-items:center;gap:8px;font-size:var(--t-sm);font-weight:600;}
+.logo-sq{width:26px;height:26px;background:var(--brand-500);border-radius:var(--r-sm);display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;}
+.t-file{display:flex;align-items:center;gap:5px;padding:3px 10px;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-sm);font-size:var(--t-xs);color:var(--txt-secondary);}
+.t-file strong{color:var(--txt-primary);}
+.t-spacer{flex:1;}
+.spill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;font-size:var(--t-xs);font-weight:500;}
+.spill-success{background:var(--success-bg);color:var(--success);border:1px solid var(--success-border);}
+.spill-warning{background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning-border);}
+.spill .dot{width:5px;height:5px;border-radius:50%;background:currentColor;}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:5px 13px;border-radius:var(--r-sm);font-size:var(--t-sm);font-weight:500;transition:all .15s var(--anim);white-space:nowrap;line-height:1.4;}
+.btn-primary{background:var(--brand-500);color:#fff;}
+.btn-primary:hover{background:var(--brand-600);}
+.btn-primary:disabled{background:var(--surface-4);color:var(--txt-tertiary);cursor:not-allowed;}
+.btn-ghost{border:1px solid var(--border-default);color:var(--txt-secondary);}
+.btn-ghost:hover{background:var(--surface-3);color:var(--txt-primary);border-color:var(--border-strong);}
+.btn-warning-outline{border:1px solid var(--warning-border);color:var(--warning);background:transparent;}
+.btn-warning-outline:hover{background:var(--warning-bg);}
+.btn-success-outline{border:1px solid var(--success-border);color:var(--success);background:transparent;}
+.btn-sm{padding:4px 10px;font-size:var(--t-xs);}
+.btn-xs{padding:2px 7px;font-size:10px;}
+.tag{display:inline-flex;align-items:center;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:500;line-height:1.4;}
+.tg-n{background:var(--neutral-bg);color:var(--neutral);}
+.tg-b{background:rgba(99,102,241,.14);color:var(--brand-400);}
+.tg-s{background:var(--success-bg);color:var(--success);}
+.tg-w{background:var(--warning-bg);color:var(--warning);}
+.tg-e{background:var(--error-bg);color:var(--error);}
+.tg-g{background:var(--gold-bg);color:var(--gold);}
+.toggle{width:32px;height:17px;background:var(--surface-4);border-radius:99px;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;}
+.toggle.on{background:var(--brand-500);}
+.toggle::after{content:'';position:absolute;top:2px;left:2px;width:13px;height:13px;background:#fff;border-radius:50%;transition:transform .2s;}
+.toggle.on::after{transform:translateX(15px);}
+
+/* ════════════════ SIDEBAR ════════════════ */
+.sidebar{background:var(--surface-1);border-right:1px solid var(--border-subtle);display:flex;flex-direction:column;overflow:hidden;}
+.sz{padding:12px 12px 10px;}
+.sz+.sz{border-top:1px solid var(--border-subtle);}
+.sz-label{font-size:var(--t-xs);font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;}
+.upload-zone{border:1.5px dashed var(--border-default);border-radius:var(--r-md);padding:12px 8px;text-align:center;cursor:pointer;transition:all .2s;}
+.upload-zone:hover{border-color:var(--brand-400);background:rgba(99,102,241,.04);}
+.upload-zone .ui{font-size:18px;margin-bottom:3px;color:var(--txt-tertiary);}
+.upload-zone .ul{font-size:var(--t-xs);color:var(--txt-secondary);font-weight:500;}
+.upload-zone .uh{font-size:10px;color:var(--txt-tertiary);margin-top:1px;}
+.mode-row{display:flex;align-items:center;justify-content:space-between;}
+.mode-row span{font-size:var(--t-xs);color:var(--txt-secondary);}
+.filter-row{display:flex;gap:5px;margin-top:8px;}
+.fsel{flex:1;appearance:none;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-sm);color:var(--txt-secondary);font-size:var(--t-xs);padding:5px 7px;cursor:pointer;outline:none;}
+.fsel:focus{border-color:var(--brand-400);}
+.stabs{display:flex;border-top:1px solid var(--border-subtle);flex-shrink:0;}
+.stab{flex:1;padding:7px 4px;text-align:center;font-size:var(--t-xs);font-weight:500;color:var(--txt-tertiary);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;}
+.stab.on{color:var(--brand-400);border-bottom-color:var(--brand-400);}
+.vlib{flex:1;overflow-y:auto;padding:6px;}
+.vcard{padding:9px 10px;border-radius:var(--r-md);cursor:pointer;border:1px solid transparent;transition:all .12s;margin-bottom:2px;}
+.vcard:hover{background:var(--surface-3);}
+.vcard.on{background:var(--surface-4);border-color:var(--border-default);}
+.vcard-name{font-size:var(--t-sm);font-weight:500;color:var(--txt-primary);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.vcard-meta{font-size:10px;color:var(--txt-tertiary);margin-bottom:3px;}
+.vcard-tags{display:flex;gap:3px;flex-wrap:wrap;}
+.hlist{flex:1;overflow-y:auto;padding:6px;}
+.hitem{padding:8px 10px;border-radius:var(--r-sm);cursor:pointer;transition:background .12s;margin-bottom:1px;}
+.hitem:hover{background:var(--surface-2);}
+.hitem-name{font-size:var(--t-sm);color:var(--txt-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:1px;}
+.hitem-date{font-size:10px;color:var(--txt-tertiary);}
+
+/* ════════════════ MAIN ════════════════ */
+.main{display:flex;flex-direction:column;overflow:hidden;}
+.maintabs{display:flex;align-items:center;padding:0 20px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;background:var(--surface-1);}
+.mtab{padding:12px 14px;font-size:var(--t-sm);font-weight:500;color:var(--txt-tertiary);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap;}
+.mtab:hover{color:var(--txt-secondary);}
+.mtab.on{color:var(--txt-primary);border-bottom-color:var(--brand-500);}
+.mtab-spacer{flex:1;}
+.tabpanel{display:none;flex:1;flex-direction:column;overflow:hidden;}
+.tabpanel.on{display:flex;}
+.iw{display:flex;align-items:center;gap:8px;padding:7px 20px;font-size:var(--t-xs);background:var(--warning-bg);border-bottom:1px solid var(--warning-border);color:var(--warning);flex-shrink:0;}
+.iw-msg{flex:1;}
+.iw-actions{display:flex;gap:6px;}
+.iw-link{font-size:var(--t-xs);font-weight:600;color:var(--warning);text-decoration:underline;cursor:pointer;white-space:nowrap;}
+.iw-close{color:var(--txt-tertiary);cursor:pointer;font-size:14px;}
+
+/* Player */
+.player-wrap{flex-shrink:0;position:relative;background:#000;overflow:hidden;}
+.player-bg{width:100%;height:165px;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#0f1020 0%,#1a1836 40%,#0d1020 100%);}
+.player-grad{position:absolute;inset:0;background:linear-gradient(to bottom,rgba(11,13,20,.05) 30%,rgba(11,13,20,.92) 100%);}
+.player-ctrl{position:absolute;bottom:0;left:0;right:0;padding:7px 16px 10px;display:flex;align-items:center;gap:10px;}
+.pbtn{width:30px;height:30px;border-radius:50%;background:var(--brand-500);color:#fff;display:grid;place-items:center;font-size:11px;flex-shrink:0;}
+.pbtn:hover{background:var(--brand-600);}
+.pbar{flex:1;height:3px;background:rgba(255,255,255,.12);border-radius:99px;cursor:pointer;position:relative;}
+.pfill{height:100%;width:6%;background:var(--brand-400);border-radius:99px;}
+.phandle{position:absolute;top:50%;right:0;transform:translate(50%,-50%);width:9px;height:9px;border-radius:50%;background:var(--brand-400);box-shadow:0 0 0 2px rgba(99,102,241,.3);}
+.ptime{font-size:var(--t-xs);color:var(--txt-tertiary);font-family:'JetBrains Mono',monospace;white-space:nowrap;}
+.live-badge{position:absolute;top:10px;left:14px;display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;background:rgba(11,13,20,.7);border:1px solid rgba(255,255,255,.15);font-size:var(--t-xs);font-weight:600;color:var(--txt-primary);backdrop-filter:blur(4px);}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--error);animation:livepulse 1.5s infinite;}
+@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.3}}
+.shot-strip{flex-shrink:0;padding:10px 20px;background:var(--surface-1);border-bottom:1px solid var(--border-subtle);}
+.ss-r1{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;}
+.ss-tc{font-family:'JetBrains Mono',monospace;font-size:var(--t-xs);color:var(--brand-400);background:rgba(99,102,241,.12);padding:2px 7px;border-radius:var(--r-xs);flex-shrink:0;}
+.ss-title{font-size:var(--t-lg);font-weight:600;color:var(--txt-primary);}
+.ss-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;margin-bottom:5px;}
+.ss-kv label{font-size:var(--t-xs);color:var(--txt-tertiary);display:block;margin-bottom:1px;}
+.ss-kv .val{display:flex;gap:3px;flex-wrap:wrap;align-items:center;font-size:var(--t-sm);color:var(--txt-secondary);}
+.ss-detail{font-size:var(--t-xs);color:var(--txt-tertiary);line-height:1.6;}
+.ttbar{display:flex;align-items:center;gap:8px;padding:7px 20px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;}
+.search-wrap{position:relative;flex:1;max-width:220px;}
+.search-icon{position:absolute;left:7px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--txt-tertiary);pointer-events:none;}
+.search-input{width:100%;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-sm);color:var(--txt-primary);font-size:var(--t-xs);padding:5px 8px 5px 24px;outline:none;transition:border-color .15s;}
+.search-input:focus{border-color:var(--brand-400);}
+.filter-tabs{display:flex;gap:2px;}
+.ftab{padding:4px 9px;border-radius:var(--r-sm);font-size:var(--t-xs);font-weight:500;color:var(--txt-tertiary);cursor:pointer;transition:all .12s;}
+.ftab.on{background:var(--surface-4);color:var(--txt-primary);}
+.tcount{margin-left:auto;font-size:var(--t-xs);color:var(--txt-tertiary);}
+.table-wrap{flex:1;overflow-y:auto;}
+table{width:100%;border-collapse:collapse;}
+thead{position:sticky;top:0;background:var(--surface-0);z-index:2;}
+thead th{padding:9px 14px;text-align:left;font-size:var(--t-xs);font-weight:600;color:var(--txt-tertiary);letter-spacing:.05em;text-transform:uppercase;border-bottom:1px solid var(--border-subtle);white-space:nowrap;}
+tbody tr{cursor:pointer;border-bottom:1px solid var(--border-subtle);transition:background .1s;}
+tbody tr:nth-child(even){background:rgba(255,255,255,.013);}
+tbody tr:hover{background:var(--surface-3);}
+tbody tr.row-on{background:var(--surface-4);box-shadow:inset 2px 0 0 var(--brand-500);}
+tbody td{padding:9px 14px;font-size:var(--t-sm);color:var(--txt-secondary);vertical-align:middle;}
+.td-tc{font-family:'JetBrains Mono',monospace;font-size:var(--t-xs);color:var(--txt-tertiary);}
+.td-name{color:var(--txt-primary);font-weight:500;}
+.td-tags{display:flex;gap:3px;flex-wrap:wrap;}
+
+/* ════════════════ 人物画像 TAB ════════════════ */
+
+/* Character strip */
+.char-strip{display:flex;gap:10px;overflow-x:auto;padding:12px 20px 10px;flex-shrink:0;border-bottom:1px solid var(--border-subtle);}
+.char-strip::-webkit-scrollbar{height:3px;}
+.cstrip-item{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;transition:all .15s;}
+.cstrip-ava{width:52px;height:52px;border-radius:var(--r-md);border:2px solid transparent;transition:border-color .15s;display:flex;align-items:center;justify-content:center;font-size:26px;position:relative;}
+.cstrip-item:hover .cstrip-ava{border-color:var(--border-strong);}
+.cstrip-item.on .cstrip-ava{border-color:var(--brand-500);box-shadow:0 0 0 2px rgba(99,102,241,.2);}
+.cstrip-completeness{width:100%;height:3px;background:var(--surface-4);border-radius:99px;overflow:hidden;}
+.cstrip-completeness-fill{height:100%;border-radius:99px;transition:width .3s;}
+.cstrip-name{font-size:9px;color:var(--txt-tertiary);text-align:center;max-width:58px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cstrip-item.on .cstrip-name{color:var(--brand-400);}
+
+/* Character panel */
+.char-panel{flex:1;overflow-y:auto;padding:18px 20px 36px;}
+.char-panel-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.char-panel-title{font-size:var(--t-xl);font-weight:700;color:var(--txt-primary);}
+.char-panel-subtitle{font-size:var(--t-xs);color:var(--txt-tertiary);margin-top:2px;}
+
+/* Character card */
+.char-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;}
+.char-card{background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-lg);overflow:hidden;cursor:pointer;transition:all .18s;position:relative;}
+.char-card:hover{border-color:var(--border-strong);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3);}
+.char-card-img{width:100%;height:110px;display:flex;align-items:center;justify-content:center;font-size:44px;position:relative;}
+.char-card-body{padding:12px;}
+.char-card-name{font-size:var(--t-base);font-weight:700;color:var(--txt-primary);margin-bottom:1px;}
+.char-card-role{font-size:var(--t-xs);color:var(--brand-400);margin-bottom:10px;}
+
+/* Asset meter on card */
+.char-asset-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;}
+.char-asset-item{display:flex;align-items:center;gap:5px;font-size:10px;}
+.char-asset-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.char-asset-dot.ok{background:var(--success);}
+.char-asset-dot.warn{background:var(--warning);}
+.char-asset-dot.miss{background:var(--surface-5);}
+.char-asset-label{color:var(--txt-tertiary);}
+.char-asset-val{color:var(--txt-secondary);font-weight:500;}
+
+/* Three-view mini strip on card */
+.char-3view-row{display:flex;gap:5px;margin-bottom:10px;}
+.c3v{flex:1;background:var(--surface-3);border:1px solid var(--border-subtle);border-radius:var(--r-sm);padding:5px 4px;text-align:center;font-size:9px;transition:border-color .12s;}
+.c3v.done{border-color:var(--success-border);}
+.c3v.miss{border-color:var(--warning-border);background:rgba(245,158,11,.04);}
+.c3v-icon{font-size:13px;display:block;margin-bottom:2px;}
+.c3v-label{color:var(--txt-tertiary);}
+.c3v.done .c3v-label{color:var(--success);}
+.c3v.miss .c3v-label{color:var(--warning);}
+
+/* Card actions */
+.char-card-actions{display:flex;gap:5px;}
+.char-card-hover{position:absolute;inset:0;background:rgba(99,102,241,.05);opacity:0;transition:opacity .15s;pointer-events:none;}
+.char-card:hover .char-card-hover{opacity:1;}
+
+/* ════════════════ CHARACTER ASSET MODAL ════════════════ */
+.modal-overlay{position:fixed;inset:0;background:rgba(11,13,20,.82);z-index:200;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(7px);opacity:0;pointer-events:none;transition:opacity .2s;}
+.modal-overlay.on{opacity:1;pointer-events:all;}
+.modal{width:720px;max-height:88vh;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-xl);overflow:hidden;display:flex;flex-direction:column;transform:translateY(14px) scale(.97);transition:transform .22s var(--anim);}
+.modal-overlay.on .modal{transform:translateY(0) scale(1);}
+
+/* Modal header */
+.modal-hdr{display:flex;align-items:flex-start;gap:14px;padding:18px 20px 14px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;}
+.modal-ava{width:68px;height:68px;border-radius:var(--r-md);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:34px;}
+.modal-title-block{flex:1;min-width:0;}
+.modal-name{font-size:var(--t-xl);font-weight:700;color:var(--txt-primary);margin-bottom:2px;}
+.modal-role{font-size:var(--t-xs);color:var(--brand-400);font-weight:500;margin-bottom:6px;}
+.modal-asset-pills{display:flex;gap:5px;flex-wrap:wrap;}
+.asset-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600;}
+.ap-ok{background:var(--success-bg);color:var(--success);border:1px solid var(--success-border);}
+.ap-warn{background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning-border);}
+.ap-miss{background:var(--neutral-bg);color:var(--txt-tertiary);border:1px solid var(--border-default);}
+.modal-close{width:28px;height:28px;border-radius:var(--r-sm);display:grid;place-items:center;color:var(--txt-tertiary);background:var(--surface-3);flex-shrink:0;transition:all .12s;}
+.modal-close:hover{background:var(--surface-4);color:var(--txt-primary);}
+
+/* Modal tabs */
+.modal-tabs{display:flex;border-bottom:1px solid var(--border-subtle);flex-shrink:0;padding:0 20px;background:var(--surface-1);}
+.modal-tab{padding:10px 14px;font-size:var(--t-sm);font-weight:500;color:var(--txt-tertiary);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap;}
+.modal-tab:hover{color:var(--txt-secondary);}
+.modal-tab.on{color:var(--txt-primary);border-bottom-color:var(--brand-500);}
+.modal-tab-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:9px;font-weight:700;margin-left:4px;}
+.mtb-warn{background:var(--warning-bg);color:var(--warning);}
+.mtb-ok{background:var(--success-bg);color:var(--success);}
+
+/* Modal body */
+.modal-body{flex:1;overflow:hidden;}
+.modal-tabpanel{display:none;height:100%;overflow-y:auto;padding:18px 20px 24px;}
+.modal-tabpanel.on{display:block;}
+
+/* ── Tab: 角色档案 ── */
+.mfld-label{font-size:var(--t-xs);font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px;}
+.mfld-text{font-size:var(--t-sm);color:var(--txt-secondary);line-height:1.75;margin-bottom:14px;}
+.mquote{padding:12px 14px;background:var(--surface-3);border:1px solid var(--border-default);border-left:3px solid var(--brand-500);border-radius:var(--r-sm);font-size:var(--t-sm);color:var(--txt-primary);font-style:italic;line-height:1.6;margin-bottom:14px;}
+.mskills{display:flex;flex-wrap:wrap;gap:6px;}
+
+/* ── Tab: Avatar ── */
+.ava-section{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.ava-preview{background:var(--surface-3);border:1px solid var(--border-default);border-radius:var(--r-lg);overflow:hidden;}
+.ava-preview-img{width:100%;aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:60px;}
+.ava-preview-foot{padding:9px 12px;border-top:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between;}
+.ava-preview-label{font-size:var(--t-xs);font-weight:600;color:var(--txt-secondary);}
+.ava-meta{display:flex;flex-direction:column;gap:10px;}
+.ava-stat-row{display:flex;flex-direction:column;gap:4px;}
+.ava-stat-label{font-size:10px;color:var(--txt-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:.05em;}
+.ava-stat-val{font-size:var(--t-sm);color:var(--txt-primary);}
+.ava-actions{display:flex;flex-direction:column;gap:6px;margin-top:auto;}
+
+/* ── Tab: 三视图 (THE CORE FEATURE) ── */
+.triview-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+.triview-title{font-size:var(--t-base);font-weight:600;color:var(--txt-primary);}
+.triview-global-actions{display:flex;gap:6px;flex-wrap:wrap;}
+.triview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;}
+.tvcard{background:var(--surface-3);border:1px solid var(--border-default);border-radius:var(--r-lg);overflow:hidden;transition:border-color .15s;}
+.tvcard.done{border-color:rgba(34,197,94,.2);}
+.tvcard.warn{border-color:var(--warning-border);}
+.tvcard.miss{border-color:var(--error-border);}
+.tvcard-preview{aspect-ratio:9/12;display:flex;align-items:center;justify-content:center;position:relative;font-size:40px;}
+.tvcard-preview-content{display:flex;flex-direction:column;align-items:center;gap:6px;}
+.tvcard-overlay{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;padding:8px;}
+.tvcard-angle{font-size:10px;font-weight:700;padding:3px 7px;border-radius:99px;backdrop-filter:blur(4px);background:rgba(11,13,20,.7);border:1px solid rgba(255,255,255,.1);color:var(--txt-secondary);}
+.tvcard-status{align-self:flex-end;}
+.tvcard-body{padding:10px 11px;}
+.tvcard-name{font-size:var(--t-sm);font-weight:600;color:var(--txt-primary);margin-bottom:6px;}
+.tvcard-meta{display:flex;flex-direction:column;gap:3px;margin-bottom:8px;}
+.tvcard-meta-row{display:flex;align-items:center;justify-content:space-between;font-size:10px;}
+.tvcard-meta-key{color:var(--txt-tertiary);}
+.tvcard-meta-val{color:var(--txt-secondary);font-weight:500;}
+.tvcard-meta-val.ok{color:var(--success);}
+.tvcard-meta-val.warn{color:var(--warning);}
+.tvcard-actions{display:flex;gap:4px;flex-wrap:wrap;}
+.tvbtn{display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:var(--r-xs);font-size:10px;font-weight:500;cursor:pointer;transition:all .12s;border:1px solid var(--border-default);color:var(--txt-tertiary);background:transparent;}
+.tvbtn:hover{background:var(--surface-4);color:var(--txt-primary);border-color:var(--border-strong);}
+.tvbtn.primary{background:var(--brand-500);color:#fff;border-color:var(--brand-500);}
+.tvbtn.primary:hover{background:var(--brand-600);}
+.tvbtn.warn{border-color:var(--warning-border);color:var(--warning);}
+.tvbtn.warn:hover{background:var(--warning-bg);}
+
+/* Lock bar */
+.triview-lock-bar{background:linear-gradient(90deg,rgba(99,102,241,.12),rgba(99,102,241,.06));border:1px solid var(--border-brand);border-radius:var(--r-md);padding:12px 16px;display:flex;align-items:center;gap:12px;}
+.tl-icon{font-size:18px;}
+.tl-text{flex:1;}
+.tl-title{font-size:var(--t-sm);font-weight:600;color:var(--brand-400);margin-bottom:2px;}
+.tl-desc{font-size:var(--t-xs);color:var(--txt-tertiary);}
+.tl-actions{display:flex;gap:6px;}
+
+/* ── Character model generator panel ── */
+.cmodel-panel{background:var(--surface-3);border:1px solid var(--border-default);border-radius:var(--r-lg);padding:14px;margin-bottom:14px;}
+.cmodel-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px;}
+.cmodel-col{display:flex;flex-direction:column;gap:5px;}
+.cmodel-label{font-size:var(--t-xs);font-weight:600;color:var(--txt-secondary);}
+.cmodel-select{width:100%;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-sm);color:var(--txt-primary);font-size:var(--t-sm);padding:6px 10px;outline:none;}
+.cmodel-btn-master{background:var(--brand-500);color:#fff;font-weight:600;width:100%;text-align:center;justify-content:center;font-size:var(--t-sm);border-radius:var(--r-sm);padding:8px;margin-top:6px;transition:all .15s;}
+.cmodel-btn-master:hover{background:var(--brand-600);}
+.cmodel-btn-triview{background:#a855f7;color:#fff;font-weight:600;width:100%;text-align:center;justify-content:center;font-size:var(--t-sm);border-radius:var(--r-sm);padding:8px;margin-top:6px;transition:all .15s;}
+.cmodel-btn-triview:hover{background:#9333ea;}
+.cmodel-subtext{font-size:10px;color:var(--txt-tertiary);margin-top:4px;}
+.cmodel-status-box{background:var(--surface-4);border:1px solid var(--border-subtle);border-radius:var(--r-sm);padding:8px 10px;margin-top:6px;font-size:10px;}
+.cmodel-status-hdr{display:flex;justify-content:between;margin-bottom:4px;}
+.cmodel-btn-link{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;color:var(--brand-400);cursor:pointer;text-decoration:none;}
+.cmodel-btn-link:hover{text-decoration:underline;}
+
+.btn-generate-shots{background:rgba(34,197,94,.12);border:1px solid var(--success-border);color:var(--success);width:100%;justify-content:center;padding:9px;font-weight:600;font-size:var(--t-sm);border-radius:var(--r-sm);transition:all .15s;margin-top:4px;}
+.btn-generate-shots:hover{background:var(--success-bg);border-color:var(--success);}
+
+/* ── Tri-view status & adjust area ── */
+.tvcard-status-sec{margin-top:8px;padding-top:8px;border-top:1px solid var(--border-subtle);font-size:10px;}
+.tvcard-status-lbl{display:flex;justify-content:space-between;margin-bottom:4px;font-size:10px;}
+.tvcard-status-desc{color:var(--txt-tertiary);line-height:1.4;margin-bottom:6px;font-size:9px;}
+.tvcard-status-btns{display:flex;gap:4px;}
+.tvcard-status-btn{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:3px;padding:4px 6px;background:var(--surface-4);border:1px solid var(--border-default);border-radius:var(--r-xs);color:var(--txt-secondary);font-size:9px;cursor:pointer;transition:all .12s;}
+.tvcard-status-btn:hover{background:var(--surface-5);color:var(--txt-primary);}
+
+/* ── Tab: 提示词 ── */
+.prompt-block{background:var(--surface-3);border:1px solid var(--border-default);border-radius:var(--r-md);padding:12px;margin-bottom:10px;}
+.prompt-label{font-size:10px;font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+.prompt-text{font-size:var(--t-xs);color:var(--txt-secondary);line-height:1.7;font-family:'JetBrains Mono',monospace;}
+
+/* ── Tab: 使用记录 ── */
+.usage-item{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-3);border:1px solid var(--border-subtle);border-radius:var(--r-md);margin-bottom:6px;cursor:pointer;transition:background .12s;}
+.usage-item:hover{background:var(--surface-4);}
+.usage-tc{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--brand-400);background:rgba(99,102,241,.1);padding:2px 6px;border-radius:var(--r-xs);flex-shrink:0;white-space:nowrap;}
+.usage-info{flex:1;}
+.usage-name{font-size:var(--t-sm);font-weight:500;color:var(--txt-primary);margin-bottom:3px;}
+.usage-assets{display:flex;gap:4px;flex-wrap:wrap;}
+.usage-asset-chip{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:600;padding:1px 6px;border-radius:99px;}
+.uac-ok{background:var(--success-bg);color:var(--success);}
+.uac-warn{background:var(--warning-bg);color:var(--warning);}
+.uac-miss{background:var(--neutral-bg);color:var(--txt-tertiary);}
+
+/* ════════════════ 叙事与亮点 TAB ════════════════ */
+.narrative-panel{flex:1;overflow-y:auto;padding:20px 24px 40px;}
+.narrative-section{margin-bottom:26px;}
+.narrative-sec-hdr{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border-subtle);}
+.narrative-sec-num{width:24px;height:24px;border-radius:50%;background:var(--gold-bg);border:1px solid var(--gold-border);display:grid;place-items:center;font-size:var(--t-xs);font-weight:700;color:var(--gold);flex-shrink:0;}
+.narrative-sec-title{font-size:var(--t-lg);font-weight:700;color:var(--txt-primary);}
+.narrative-sec-en{font-size:var(--t-xs);font-weight:600;color:var(--gold);letter-spacing:.06em;text-transform:uppercase;}
+.act-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;}
+.act-card{background:var(--surface-2);border:1px solid var(--border-subtle);border-radius:var(--r-md);padding:12px;}
+.act-card-label{font-size:10px;font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px;}
+.act-card-title{font-size:var(--t-sm);font-weight:600;color:var(--txt-primary);margin-bottom:4px;}
+.act-card-range{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--brand-400);margin-bottom:5px;}
+.act-card-desc{font-size:var(--t-xs);color:var(--txt-tertiary);line-height:1.6;}
+.narrative-sec-body{font-size:var(--t-sm);color:var(--txt-secondary);line-height:1.8;}
+.nh{color:var(--txt-primary);font-weight:500;}
+.na{color:var(--brand-400);}
+.nw{color:var(--warning);}
+.rhythm-bar{display:flex;align-items:flex-end;gap:3px;height:48px;margin:10px 0 4px;}
+.rb{flex:1;border-radius:var(--r-xs) var(--r-xs) 0 0;background:var(--brand-500);opacity:.5;transition:opacity .15s;min-width:6px;}
+.rb:hover{opacity:1;}
+.rb.peak{background:var(--warning);opacity:1;}
+.highlight-list{display:flex;flex-direction:column;gap:8px;}
+.hl-item{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border-subtle);border-radius:var(--r-md);}
+.hl-tc{font-family:'JetBrains Mono',monospace;font-size:var(--t-xs);color:var(--brand-400);background:rgba(99,102,241,.1);padding:2px 6px;border-radius:var(--r-xs);flex-shrink:0;white-space:nowrap;}
+.hl-body{flex:1;}
+.hl-title{font-size:var(--t-sm);font-weight:600;color:var(--txt-primary);margin-bottom:2px;}
+.hl-desc{font-size:var(--t-xs);color:var(--txt-tertiary);line-height:1.5;}
+
+/* ════════════════ RIGHT PANEL ════════════════ */
+.rpanel{background:var(--surface-1);border-left:1px solid var(--border-subtle);display:flex;flex-direction:column;overflow:hidden;}
+.rstat-sec{padding:14px 14px 12px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;}
+.rstat-label{font-size:var(--t-xs);font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.08em;margin-bottom:9px;}
+.rstat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;}
+.rstat-card{background:var(--surface-2);border:1px solid var(--border-subtle);border-radius:var(--r-md);padding:10px 8px;text-align:center;}
+.rstat-num{font-size:var(--t-hero);font-weight:700;color:var(--txt-primary);line-height:1;margin-bottom:3px;}
+.rstat-num sub{font-size:var(--t-lg);font-weight:400;color:var(--txt-secondary);vertical-align:baseline;}
+.rstat-name{font-size:10px;color:var(--txt-tertiary);line-height:1.3;}
+.rpanel-content{flex:1;overflow-y:auto;}
+.rp-section{padding:13px 14px;border-bottom:1px solid var(--border-subtle);}
+.rp-label{font-size:var(--t-xs);font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.07em;margin-bottom:9px;}
+.tl-item{display:flex;align-items:flex-start;gap:7px;padding:6px;border-radius:var(--r-md);cursor:pointer;transition:background .12s;}
+.tl-item:hover{background:var(--surface-2);}
+.tl-n{font-size:10px;font-weight:700;color:var(--txt-tertiary);width:14px;text-align:right;flex-shrink:0;margin-top:2px;}
+.tl-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:4px;}
+.tl-body{flex:1;min-width:0;}
+.tl-name{font-size:var(--t-sm);font-weight:500;color:var(--txt-primary);margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tl-desc{font-size:var(--t-xs);color:var(--txt-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.d1{background:#6366f1}.d2{background:#06b6d4}.d3{background:#a855f7}.d4{background:#3b82f6}.d5{background:#10b981}.d6{background:#f59e0b}
+
+/* Right panel char cards */
+.rdossier-item{display:flex;align-items:flex-start;gap:9px;padding:9px;border-radius:var(--r-md);cursor:pointer;transition:all .15s;margin-bottom:3px;}
+.rdossier-item:hover{background:var(--surface-2);}
+.rdossier-ava{width:40px;height:40px;border-radius:var(--r-sm);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px;}
+.rdossier-info{flex:1;min-width:0;}
+.rdossier-name{font-size:var(--t-sm);font-weight:600;color:var(--txt-primary);margin-bottom:1px;}
+.rdossier-role{font-size:10px;color:var(--brand-400);margin-bottom:4px;}
+/* Mini 3-view progress in right panel */
+.rdossier-3v{display:flex;gap:3px;align-items:center;}
+.r3v-dot{width:8px;height:8px;border-radius:2px;}
+.r3v-dot.ok{background:var(--success);}
+.r3v-dot.miss{background:var(--warning);}
+.r3v-label{font-size:10px;color:var(--txt-tertiary);margin-left:2px;}
+
+/* Asset completeness bar in right panel */
+.rp-asset-bar{margin-bottom:12px;}
+.rp-asset-bar-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;}
+.rp-asset-bar-title{font-size:var(--t-xs);color:var(--txt-secondary);}
+.rp-asset-bar-val{font-size:var(--t-xs);font-weight:600;color:var(--txt-primary);}
+.rp-asset-progress{height:5px;background:var(--surface-4);border-radius:99px;overflow:hidden;}
+.rp-asset-fill{height:100%;border-radius:99px;transition:width .4s;}
+
+/* Narr summary */
+.rnarr-item{padding:9px;border-radius:var(--r-md);background:var(--surface-2);border:1px solid var(--border-subtle);margin-bottom:5px;}
+.rnarr-label{font-size:10px;font-weight:600;color:var(--gold);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px;}
+.rnarr-text{font-size:var(--t-xs);color:var(--txt-secondary);line-height:1.6;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- ══ TOPBAR ══ -->
+<header class="topbar">
+  <div class="t-logo"><div class="logo-sq">分</div>视频智能分析工作台</div>
+  <div class="t-file"><strong>Pro_Edit_Final_V4.mp4</strong>（演示样本）</div>
+  <div class="t-spacer"></div>
+  <div class="spill spill-success"><span class="dot"></span>分析已完成</div>
+  <a href="creative.html"><button class="btn btn-primary btn-sm">✨ 创意生成</button></a>
+  <button class="btn btn-ghost btn-sm">↓ 导出 JSON 报告</button>
+</header>
+
+<!-- ══ SIDEBAR ══ -->
+<aside class="sidebar">
+  <div class="sz">
+    <div class="upload-zone">
+      <div class="ui">⬆</div>
+      <div class="ul">拖拽 / 点击上传视频</div>
+      <div class="uh">MP4 · MOV · WEBM · AVI · 最大 4GB</div>
+    </div>
+  </div>
+  <div class="sz">
+    <div class="mode-row"><span>竖屏短视频模式</span><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+    <div class="filter-row">
+      <select class="fsel"><option>全部类型</option><option>叙事</option><option>动作</option></select>
+      <select class="fsel"><option>全部情绪</option><option>震撼</option><option>神秘</option></select>
+    </div>
+  </div>
+  <div class="stabs">
+    <div class="stab on" id="stab-lib" onclick="swsidebar('lib')">素材库</div>
+    <div class="stab" id="stab-hist" onclick="swsidebar('hist')">历史剧本</div>
+  </div>
+  <div class="vlib" id="sb-lib">
+    <div class="vcard on"><div class="vcard-name">蒸汽飞空艇与少女</div><div class="vcard-meta">内容检测完成 · 4 角色</div><div class="vcard-tags"><span class="tag tg-n">奇幻</span><span class="tag tg-b">4角色</span></div></div>
+    <div class="vcard"><div class="vcard-name">test a</div><div class="vcard-tags"><span class="tag tg-n">草稿</span></div></div>
+    <div class="vcard"><div class="vcard-name">3676237762-1-192</div><div class="vcard-tags"><span class="tag tg-b">分析中</span></div></div>
+    <div class="vcard"><div class="vcard-name">37900191798-1-192</div><div class="vcard-tags"><span class="tag tg-w">未知</span></div></div>
+  </div>
+  <div class="hlist" id="sb-hist" style="display:none">
+    <div class="hitem"><div class="hitem-name">孤岛豪宅谋杀案：深宅密影</div><div class="hitem-date">07/04 · 74 分镜</div></div>
+    <div class="hitem"><div class="hitem-name">生化危机：消雾动漫</div><div class="hitem-date">07/03 · 58 分镜</div></div>
+    <div class="hitem"><div class="hitem-name">浮生若梦</div><div class="hitem-date">07/01 · 32 分镜</div></div>
+  </div>
+</aside>
+
+<!-- ══ MAIN ══ -->
+<main class="main">
+  <nav class="maintabs">
+    <div class="mtab on" onclick="swmain('shot')">分镜脉络</div>
+    <div class="mtab" onclick="swmain('char')">人物画像</div>
+    <div class="mtab" onclick="swmain('narr')">叙事与亮点</div>
+    <div class="mtab" onclick="window.location='creative.html'">创意生成 ↗</div>
+    <div class="mtab-spacer"></div>
+  </nav>
+
+  <!-- ── 分镜脉络 ── -->
+  <div class="tabpanel on" id="tp-shot">
+    <div class="iw" id="iw1">
+      <span>⚠</span><span class="iw-msg">ComfyUI 未连接，图像生成功能暂不可用</span>
+      <div class="iw-actions"><span class="iw-link">启动服务</span><span class="iw-link">重新检测</span><span class="iw-link">查看日志</span></div>
+      <span class="iw-close" onclick="this.closest('.iw').remove()">✕</span>
+    </div>
+    <div class="player-wrap">
+      <div class="player-bg"><span style="color:var(--txt-tertiary);font-size:var(--t-xs);letter-spacing:.1em">VIDEO PREVIEW</span></div>
+      <div class="player-grad"></div>
+      <div class="live-badge"><span class="live-dot"></span>LIVE REPLAY</div>
+      <div class="player-ctrl">
+        <button class="pbtn">▶</button>
+        <div class="pbar"><div class="pfill"></div><div class="phandle"></div></div>
+        <span class="ptime">00:00 / 05:37</span>
+      </div>
+    </div>
+    <div class="shot-strip">
+      <div class="ss-r1"><span class="ss-tc">00:00 — 00:07</span><span class="ss-title">全景航拍转倾斜翻冲 (Aerial Wide to Dive)</span></div>
+      <div class="ss-grid">
+        <div class="ss-kv"><label>画面构图</label><div class="val">对称构图及下三分法构图</div></div>
+        <div class="ss-kv"><label>情绪基调</label><div class="val"><span class="tag tg-w">震撼</span><span class="tag tg-n">壮丽</span><span class="tag tg-n">史诗</span></div></div>
+      </div>
+      <div class="ss-detail">一艘巨大的蒸汽飞空艇在白云缭绕的崇山峻岭间飞行，随后镜头垂直向下俯冲展现飞空艇的动力推进装置，奠定了影片宏大的奇幻工业世界观。</div>
+    </div>
+    <div class="ttbar">
+      <div class="search-wrap"><span class="search-icon">🔍</span><input class="search-input" type="text" placeholder="搜索分镜运镜/构图/情绪…"></div>
+      <div class="filter-tabs">
+        <span class="ftab on">全部</span><span class="ftab">航拍</span><span class="ftab">特写</span><span class="ftab">远景</span>
+      </div>
+      <span class="tcount">17 个分镜</span>
+      <button class="btn btn-ghost btn-sm">导出表格</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th style="width:68px">时间码</th><th>运镜方式</th><th>画面构图</th><th>情绪基调</th></tr></thead>
+        <tbody id="shotTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── 人物画像 ── -->
+  <div class="tabpanel" id="tp-char">
+    <div class="char-strip" id="charStrip"></div>
+    <div class="char-panel">
+      <div class="char-panel-hdr">
+        <div>
+          <div class="char-panel-title">识别角色与画像档案</div>
+          <div class="char-panel-subtitle">IDENTIFIED CHARACTERS · 视频分析出 4 位角色的人物特征档案</div>
+        </div>
+        <div style="display:flex;gap:7px">
+          <button class="btn btn-ghost btn-sm">导出角色报告</button>
+        </div>
+      </div>
+      <div class="char-grid" id="charGrid"></div>
+    </div>
+  </div>
+
+  <!-- ── 叙事与亮点 ── -->
+  <div class="tabpanel" id="tp-narr">
+    <div class="narrative-panel">
+      <div class="narrative-section">
+        <div class="narrative-sec-hdr">
+          <div class="narrative-sec-num">1</div>
+          <div><div class="narrative-sec-title">三幕叙事结构分析</div><div class="narrative-sec-en">NARRATIVE ARC</div></div>
+        </div>
+        <div class="act-grid">
+          <div class="act-card"><div class="act-card-label">第一幕 · 建置</div><div class="act-card-title">飞空艇生活常规开场</div><div class="act-card-range">00:00 → 02:30</div><div class="act-card-desc">围绕生活习惯的喜剧争执，建立角色关系，以极速感官场景切入</div></div>
+          <div class="act-card"><div class="act-card-label">第二幕 · 对抗</div><div class="act-card-title">多维世界连续穿越</div><div class="act-card-range">02:30 → 04:10</div><div class="act-card-desc">雪山·王国·深海·古迹，视觉奇观层出不穷，情绪张力不断堆叠</div></div>
+          <div class="act-card"><div class="act-card-label">第三幕 · 解决</div><div class="act-card-title">情感收束·终章</div><div class="act-card-range">04:10 → 05:37</div><div class="act-card-desc">角色特性在危机中完整展现，叙事感染合自然，以远景收束整体</div></div>
+        </div>
+        <div class="narrative-sec-body">经典三段式公路片结构：<span class="nh">【常规生活·建置】</span>以飞空艇日常为引子建立角色关系 →<span class="na">【极速感官·对抗】</span>多重维度连续穿越，视觉密度极高 →<span class="nw">【深渊决战·收束】</span>情感与叙事在古迹高潮处双重爆发。整体结构自然流畅，角色在危机中展现得淋漓尽致。</div>
+      </div>
+      <div class="narrative-section">
+        <div class="narrative-sec-hdr">
+          <div class="narrative-sec-num">2</div>
+          <div><div class="narrative-sec-title">视听剪辑节奏特点</div><div class="narrative-sec-en">EDIT & AUDIO RHYTHM</div></div>
+        </div>
+        <div class="rhythm-bar" id="rhythmBar"></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px"><span style="font-size:10px;color:var(--txt-tertiary)">00:00</span><span style="font-size:10px;color:var(--txt-tertiary)">02:48</span><span style="font-size:10px;color:var(--txt-tertiary)">05:37</span></div>
+        <div class="narrative-sec-body">平均镜头时长 <span class="nh">2秒</span>，高峰段落密度翻倍。以慢镜头大远景作为情感收束，节奏张弛有度。密集台词配合神态转移推进步骤链接，配乐与画面节奏高度匹配，最终以平静步伐收尾强化留白。</div>
+      </div>
+      <div class="narrative-section">
+        <div class="narrative-sec-hdr">
+          <div class="narrative-sec-num">3</div>
+          <div><div class="narrative-sec-title">亮点位置与戏剧冲突高潮点</div><div class="narrative-sec-en">SPECTACLE DESIGN</div></div>
+        </div>
+        <div class="highlight-list">
+          <div class="hl-item"><span class="hl-tc">00:00–00:30</span><div class="hl-body"><div class="hl-title">开场宏观建立</div><div class="hl-desc">航拍全景建立世界观，蒸汽飞空艇俯冲奠定工业奇幻基调，黄金7秒抓眼</div></div><span class="tag tg-g">建置</span></div>
+          <div class="hl-item"><span class="hl-tc">02:21–02:50</span><div class="hl-body"><div class="hl-title">人物关系激化</div><div class="hl-desc">对话密度达峰值，节奏突然加快，情绪爆发前的最后蓄力节点</div></div><span class="tag tg-w">张力</span></div>
+          <div class="hl-item"><span class="hl-tc">03:36–04:10</span><div class="hl-body"><div class="hl-title">视觉奇观·第一高潮</div><div class="hl-desc">多重维度传送，视觉密度最高，配乐切至高潮，角色完成关键抉择</div></div><span class="tag tg-e">高潮</span></div>
+          <div class="hl-item"><span class="hl-tc">04:52–05:37</span><div class="hl-body"><div class="hl-title">情感收束·终章</div><div class="hl-desc">大远景日落云海，步伐放缓，情感余韵完成叙事闭环</div></div><span class="tag tg-s">收束</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ══ RIGHT PANEL ══ -->
+<aside class="rpanel" id="rpanel">
+  <div class="rstat-sec">
+    <div class="rstat-label">视频分析统计</div>
+    <div class="rstat-grid">
+      <div class="rstat-card"><div class="rstat-num">17</div><div class="rstat-name">分镜总数</div></div>
+      <div class="rstat-card"><div class="rstat-num">19<sub>.8s</sub></div><div class="rstat-name">平均时长</div></div>
+      <div class="rstat-card"><div class="rstat-num">4<sub>位</sub></div><div class="rstat-name">识别角色</div></div>
+    </div>
+  </div>
+  <div class="rpanel-content" id="rpanelContent"></div>
+</aside>
+
+</div><!-- /shell -->
+
+<!-- ══ CHARACTER ASSET MODAL ══ -->
+<div class="modal-overlay" id="charModal" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-hdr" id="modalHdr"></div>
+    <div class="modal-tabs" id="modalTabs"></div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+/* ════════ DATA ════════ */
+const shots=[
+  {tc:'00:00',name:'全景航拍转倾斜翻冲 (Aerial Wide to Dive)',comp:'对称/下三分',moods:['震撼','壮丽']},
+  {tc:'00:07',name:'低角度擦步跟拍至舱内内推',comp:'金属廊门透视',moods:['神秘','暗流涌动']},
+  {tc:'00:27',name:'中景对话 (Medium Shot) 结构',comp:'黄金分割点',moods:['风趣','辩论气氛']},
+  {tc:'00:40',name:'定机位双人特写 (Two-Shot C.U.)',comp:'强对比左右',moods:['深邃']},
+  {tc:'00:57',name:'透透者拉伸步幅 (Dolly Zoom)',comp:'透视拉伸',moods:['张力','失衡']},
+  {tc:'01:11',name:'中景大仰拍 Downtrack C.U.',comp:'仰角三等线',moods:['澎湃']},
+  {tc:'01:31',name:'第一人称POV广场',comp:'主视角引导',moods:['沉浸']},
+  {tc:'01:43',name:'高速跑道步满幅 (Free-fall)',comp:'倾斜构图',moods:['肾上腺素']},
+  {tc:'01:53',name:'领头步幅镜头',comp:'引导线',moods:['诗意','孤独']},
+  {tc:'01:58',name:'高定位扫描 (Skyline P.)',comp:'水平线居中',moods:['宏大','壮观']},
+  {tc:'02:14',name:'极近特写·眼神对峙',comp:'面部填充',moods:['情感']},
+  {tc:'02:29',name:'对话切换·正反打',comp:'越轴双人',moods:['紧张','争论']},
+  {tc:'02:48',name:'俯拍全景·甲板',comp:'鸟瞰构图',moods:['宏大']},
+  {tc:'03:05',name:'慢镜头·齿轮运转',comp:'近景细节',moods:['工业感','精密']},
+  {tc:'03:22',name:'推进镜头·船头破云',comp:'中央引导线',moods:['希望','出发']},
+  {tc:'03:41',name:'旋转环绕·飞艇全貌',comp:'360°轨道',moods:['壮观']},
+  {tc:'04:00',name:'大远景·日落云海',comp:'极简分层',moods:['史诗','终章']},
+];
+
+/* Character data — each is a full asset package */
+const chars=[
+  {
+    id:0,emoji:'🧑‍🦱',name:'黑发少女',alias:'萝莉魔法使',
+    role:'团队战力担当与法术核心（时空穿梭者）',
+    bg:'linear-gradient(135deg,#1e0f3d,#4c1d95)',
+    costume:'服饰：黑色羽翼般连帽中长披风，高领交叉细颈链，精致十字架耳坠，双排金属扣黑皮腰带，超厚底高帮筒涂渗皮战靴，腿部白皙形成极致色彩反差。',
+    personality:'沉着冷静、面无表情、果断干练，带有一丝高冷的冷血萌。实力深不可测，能在极速坠落中精准操控多个维度的传送门。',
+    quote:'"下去的时候尽量别叫。……这只是减速带。"',
+    skills:['虚空穿梭门','重力改写术','黑铁重锤召唤','丝滑重体力学控制'],
+    avatar:{ ok:true, model:'Pure Film-4E', upscaled:true, imported:true },
+    pulid:{ ok:true, refCount:17 },
+    views:{
+      front:{ status:'done', model:'Pure Film-4E', upscaled:true, imported:true, setAsRef:true },
+      side:{ status:'done', model:'Pure Film-4E', upscaled:false, imported:false, setAsRef:false },
+      back:{ status:'missing', model:null, upscaled:false, imported:false, setAsRef:false }
+    },
+    usedInShots:[0,1,3,5,8,10,12,16],
+    promptPositive:'young female, dark brown short hair, flight goggles, leather aviator jacket, bold anime outlines, warm rim light, stylized animation art...',
+    promptNegative:'blurry, low quality, inconsistent style, realistic photo...',
+  },
+  {
+    id:1,emoji:'🧔',name:'赫伯特教授',alias:'Herbert / 博士',
+    role:'团队智慧担当与科技核心（量子力学者）',
+    bg:'linear-gradient(135deg,#1e3a5f,#1e40af)',
+    costume:'深棕色皮革马甲，白色衬衫，金属框眼镜，随身记录本与计算尺',
+    personality:'极度神经质、傲娇，理论语言学者，表面冷漠实则关心队友，危急时刻总能从意想不到的角度提出解决方案。',
+    quote:'"你们的直觉在物理面前一文不值……但这次，你们是对的。"',
+    skills:['任意计算','双复数玄幻轮机'],
+    avatar:{ ok:true, model:'Pure Film-4E', upscaled:true, imported:false },
+    pulid:{ ok:true, refCount:9 },
+    views:{
+      front:{ status:'done', model:'Pure Film-4E', upscaled:true, imported:false, setAsRef:false },
+      side:{ status:'missing', model:null, upscaled:false, imported:false, setAsRef:false },
+      back:{ status:'missing', model:null, upscaled:false, imported:false, setAsRef:false }
+    },
+    usedInShots:[2,3,7,11,13],
+    promptPositive:'middle-aged male, beard, leather vest, metal frame glasses, notebook, bold anime outlines...',
+    promptNegative:'blurry, photo realistic, inconsistent...',
+  },
+  {
+    id:2,emoji:'👩',name:'四叶',alias:'',
+    role:'团队后勤与生存担当',
+    bg:'linear-gradient(135deg,#14532d,#065f46)',
+    costume:'服饰：军绿色战术背心，黑色打底，扎马尾，腰间挂满各种工具袋。',
+    personality:'乐观开朗，总是能在最绝望的时候找到可利用的资源。行动力极强，身手敏捷，但偶尔冒失会给队伍带来麻烦。',
+    quote:'"出发前我就说要多带点食物吧！没人听我的。"',
+    skills:['野外生存','物资改造','快速撤离'],
+    avatar:{ ok:false, model:null, upscaled:false, imported:false }
+  },
+  {
+    id:3,emoji:'👴',name:'伯爵',alias:'',
+    role:'公会领袖 · 主要反派',
+    bg:'linear-gradient(135deg,#7c2d12,#9a3412)',
+    costume:'服饰：深红色贵族大衣，银色胸针，戴白手套，举止优雅但目光阴鸷。',
+    personality:'表面彬彬有礼，实则野心勃勃。对规则有着极端的执念，认为混乱本身就是一种秩序。将主角团视为有趣的棋子。',
+    quote:'"规则是为那些无法驾驭混乱的人准备的。"',
+    skills:['政治操控','暗器技艺','组织统御'],
+    avatar:{ ok:false, model:null, upscaled:false, imported:false }
+  }
+];
+
+/* ════════ HELPERS ════════ */
+const moodCls=m=>{
+  if(['震撼','张力','澎湃','肾上腺素'].includes(m)) return 'tg-w';
+  if(['神秘','深邃','暗流涌动'].includes(m)) return 'tg-b';
+  return 'tg-n';
+};
+
+/* ════════ SHOT TABLE ════════ */
+let activeShot=0;
+function renderShots(){
+  document.getElementById('shotTbody').innerHTML=shots.map((s,i)=>`
+    <tr class="${i===activeShot?'row-on':''}" onclick="selShot(${i})">
+      <td class="td-tc">${s.tc}</td>
+      <td class="td-name">${s.name}</td>
+      <td><span class="tag tg-n" style="font-size:10px">${s.comp}</span></td>
+      <td class="td-tags">${s.moods.map(m=>`<span class="tag ${moodCls(m)}">${m}</span>`).join('')}</td>
+    </tr>
+  `).join('');
+}
+function selShot(i){activeShot=i;renderShots();}
+
+/* ════════ CHAR STRIP ════════ */
+function renderCharStrip(){
+  document.getElementById('charStrip').innerHTML=chars.map((c,i)=>{
+    return `
+      <div class="cstrip-item" onclick="swmain('char')" style="width:58px">
+        <div class="cstrip-ava" style="background:${c.bg}">${c.emoji}</div>
+        <div class="cstrip-name">${c.name}</div>
+      </div>`;
+  }).join('');
+}
+
+/* ════════ CHAR CARDS ════════ */
+function renderCharGrid(){
+  document.getElementById('charGrid').innerHTML=chars.map((c,i)=>{
+    return `
+          <div class="char-card" onclick="openModal(${i})">
+        <div class="char-card-img" style="background:${c.bg}">${c.emoji}</div>
+        <div class="char-card-body">
+          <div class="char-card-name">${c.name}${c.alias?` / ${c.alias}`:''}</div>
+          <div class="char-card-role">${c.role.split('（')[0]}</div>
+          <div class="char-card-desc" style="font-size:11px;color:var(--txt-tertiary);margin:6px 0 10px;line-height:1.5">${c.personality}</div>
+          <div class="char-card-actions">
+            <button class="btn btn-ghost btn-sm" style="width:100%;justify-content:center">查看完整档案</button>
+          </div>
+        </div>
+        <div class="char-card-hover"></div>
+      </div>`;
+  }).join('');
+}
+
+/* ════════ MODAL ════════ */
+let activeCharId=0;
+
+function openModal(charIdx){
+  activeCharId=charIdx;
+  renderModal();
+  document.getElementById('charModal').classList.add('on');
+}
+function closeModal(){ document.getElementById('charModal').classList.remove('on'); }
+
+function renderModal(){
+  const c=chars[activeCharId];
+  
+  // Custom styled pure profile matching Screenshot 1 exactly
+  document.getElementById('modalHdr').innerHTML=`
+    <div style="display:flex;align-items:center;gap:8px;font-size:var(--t-sm);font-weight:600;color:var(--brand-300)">
+      <span style="font-size:16px">👤</span> 角色完整档案
+    </div>
+    <button class="modal-close" style="margin-left:auto" onclick="closeModal()">✕</button>
+  `;
+  
+  // Hide tabs header container dynamically in index.html
+  const tabsHeader = document.getElementById('modalTabs');
+  if(tabsHeader) tabsHeader.style.display = 'none';
+  
+  document.getElementById('modalBody').innerHTML=`
+    <div style="padding:20px;display:flex;flex-direction:column;gap:16px;max-height:74vh;overflow-y:auto">
+      <!-- Profile Header Card -->
+      <div style="display:flex;gap:16px;align-items:flex-start">
+        <div class="modal-ava" style="background:${c.bg};width:80px;height:80px;font-size:38px">${c.emoji}</div>
+        <div style="flex:1">
+          <div class="modal-name" style="font-size:var(--t-xl);font-weight:700;color:var(--txt-primary);margin-bottom:4px">${c.name}${c.alias ? ` / ${c.alias}` : ''}</div>
+          <div class="modal-role" style="font-size:var(--t-sm);color:#a855f7;font-weight:600;margin-bottom:6px">${c.role.split('（')[0]} <span style="color:var(--txt-tertiary)">(${c.role.includes('（') ? c.role.split('（')[1].replace('）','') : ''})</span></div>
+        </div>
+      </div>
+      
+      <!-- Costume Description -->
+      <div>
+        <div class="mfld-label" style="font-size:11px;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">服饰与外貌描述</div>
+        <div style="background:var(--surface-3);border:1px solid var(--border-default);border-radius:var(--r-sm);padding:12px;font-size:var(--t-sm);color:var(--txt-secondary);line-height:1.65">${c.costume}</div>
+      </div>
+      
+      <!-- Personality -->
+      <div>
+        <div class="mfld-label" style="font-size:11px;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">性格与定位</div>
+        <div style="background:var(--surface-3);border:1px solid var(--border-default);border-radius:var(--r-sm);padding:12px;font-size:var(--t-sm);color:var(--txt-secondary);line-height:1.65">${c.personality}</div>
+      </div>
+      
+      <!-- Banter Quote -->
+      <div>
+        <div class="mfld-label" style="font-size:11px;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">经典台词 / BANTER QUOTE</div>
+        <div class="mquote" style="margin-bottom:0;background:rgba(168,85,247,.05);border-color:rgba(168,85,247,.2);border-left:3px solid #a855f7">${c.quote}</div>
+      </div>
+      
+      <!-- Skills -->
+      <div>
+        <div class="mfld-label" style="font-size:11px;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">核心能力与标签</div>
+        <div class="mskills">
+          ${c.skills.map(s=>`<span class="tag tg-b" style="font-size:11px;padding:5px 12px;background:var(--surface-3);border:1px solid var(--border-default);color:var(--txt-secondary);border-radius:99px">${s}</span>`).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ════════ MAIN TAB SWITCH ════════ */
+const rpContents={
+  shot:`
+    <div class="rp-section">
+      <div class="rp-label">故事发展脉络</div>
+      ${[['云海蒸汽飞空艇','对话阵容，建立小队联系','d1'],['万米极速离空遭降','自由落体演行','d2'],['翻越雪山滑雪特技','第一道时空传送门','d3'],['深海特工·蓝色行动','水下基地渗透','d4'],['糖果王国 Candy Land','反差喜剧，角色性格爆发','d5'],['远古遗迹·终极对决','剧情收束，情感高峰','d6']].map((t,i)=>`
+        <div class="tl-item"><span class="tl-n">${i+1}</span><div class="tl-dot ${t[2]}"></div><div class="tl-body"><div class="tl-name">${t[0]}</div><div class="tl-desc">${t[1]}</div></div></div>
+      `).join('')}
+    </div>`,
+  char:`
+    <div class="rp-section">
+      <div class="rp-label">探险小队成员画像</div>
+      <div style="font-size:10px;color:var(--txt-tertiary);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">CHARACTERS DOSSIER</div>
+      ${chars.map((c,i)=>`
+        <div class="rdossier-item" onclick="openModal(${i})">
+          <div class="rdossier-ava" style="background:${c.bg}">${c.emoji}</div>
+          <div class="rdossier-info">
+            <div class="rdossier-name">${c.name}</div>
+            <div class="rdossier-role" style="color:#a855f7;font-weight:600;font-size:10px">${c.role.split('（')[0]}</div>
+            <div class="rdossier-desc" style="font-size:10px;color:var(--txt-tertiary);line-height:1.4;margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${c.personality}</div>
+          </div>
+        </div>`).join('')}
+    </div>`,
+  narr:`
+    <div class="rp-section">
+      <div class="rp-label">叙事亮点速览</div>
+      <div class="rnarr-item"><div class="rnarr-label">三幕结构</div><div class="rnarr-text">经典公路片三幕：建置/对抗/解决。以飞空艇为载体串联多个异世界场景，角色在危机中完成成长弧线。</div></div>
+      <div class="rnarr-item"><div class="rnarr-label">剪辑节奏</div><div class="rnarr-text">平均镜头时长 2s，高峰段落密度翻倍。以慢镜头大远景作为情感收束，节奏张弛有度。</div></div>
+      <div class="rnarr-item"><div class="rnarr-label">高潮点位</div><div class="rnarr-text">4 个关键节点：00:00 建立、02:21 激化、03:36 奇观、04:52 收束。</div></div>
+    </div>
+    <div class="rp-section">
+      <div class="rp-label">情感波动</div>
+      <div id="miniRhythm" style="display:flex;align-items:flex-end;gap:2px;height:32px"></div>
+    </div>`
+};
+
+let activeTab='shot';
+function swmain(tab){
+  activeTab=tab;
+  document.querySelectorAll('.tabpanel').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.mtab').forEach((t,i)=>{
+    const tabs=['shot','char','narr'];
+    t.classList.toggle('on',tabs[i]===tab);
+  });
+  const el=document.getElementById(`tp-${tab}`);
+  if(el)el.classList.add('on');
+  document.getElementById('rpanelContent').innerHTML=rpContents[tab]||rpContents.shot;
+  if(tab==='narr'){
+    const mr=document.getElementById('miniRhythm');
+    if(mr){const h=[20,30,45,60,80,90,75,55,40,30];mr.innerHTML=h.map((v,i)=>`<div style="flex:1;height:${v}%;background:${i===7?'var(--warning)':'var(--brand-500)'};opacity:${i===7?1:.5};border-radius:2px 2px 0 0;min-width:4px"></div>`).join('');}
+  }
+}
+
+function swsidebar(t){
+  ['lib','hist'].forEach(k=>{
+    document.getElementById(`stab-${k}`).classList.toggle('on',k===t);
+    document.getElementById(`sb-${k}`).style.display=k===t?'':'none';
+  });
+}
+
+function renderRhythm(){
+  const h=[20,30,25,45,35,28,60,80,55,70,45,90,75,85,60,95,50,40,65,78,55,42,38,30,20];
+  const pk=[7,11,15,17];
+  document.getElementById('rhythmBar').innerHTML=h.map((v,i)=>`<div class="rb ${pk.includes(i)?'peak':''}" style="height:${v}px"></div>`).join('');
+}
+
+document.querySelectorAll('.ftab').forEach(t=>{
+  t.addEventListener('click',()=>{ document.querySelectorAll('.ftab').forEach(x=>x.classList.remove('on')); t.classList.add('on'); });
+});
+
+/* Init */
+renderShots();
+renderCharStrip();
+renderCharGrid();
+renderRhythm();
+swmain('shot');
+</script>
+</body>
+</html>

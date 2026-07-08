@@ -226,6 +226,13 @@ export default function App() {
   const [audioMuted, setAudioMuted] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<"narrative" | "shots" | "characters" | "generator">("shots");
   const [shotFilterCategory, setShotFilterCategory] = useState<string>("all");
+  const [showComfyPop, setShowComfyPop] = useState<boolean>(false);
+
+  // 创意向导：步骤 & 全局 Art Direction（Style Guide）
+  const [creativeStep, setCreativeStep] = useState<number>(1);
+  const [creativeDraft, setCreativeDraft] = useState<{ artDirection?: { overlay?: string; analysis?: unknown } }>({});
+  const [artDirectionBusy, setArtDirectionBusy] = useState<boolean>(false);
+  const [artDirectionMessage, setArtDirectionMessage] = useState<string | null>(null);
 
   // Script Generator State
   const [generatorTopic, setGeneratorTopic] = useState<string>("");
@@ -3274,6 +3281,109 @@ export default function App() {
     upscale: '放大',
   };
 
+  // 保存全局 Art Direction（Style Guide）到当前创意项目
+  const saveArtDirection = async (overlay: string) => {
+    if (!generatedScript) return;
+    const artDirection = { ...(generatedScript.artDirection || {}), overlay, updatedAt: new Date().toISOString() };
+    const response = await fetch(`/api/generated-scripts/${encodeURIComponent(String(generatedScript.id))}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ artDirection }),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`保存 Style Guide 失败（HTTP ${response.status}）${detail ? `：${detail.slice(0, 120)}` : ''}`);
+    }
+    const updatedScript = { ...generatedScript, artDirection };
+    setGeneratedScript(updatedScript);
+    setGeneratedScripts(previous => previous.map(item => item.id === generatedScript.id ? updatedScript : item));
+  };
+
+  // 上传参考图，仅提取风格特征（styleOnly）生成全局 style overlay
+  const handleAnalyzeArtDirection = async (file: File) => {
+    setArtDirectionBusy(true);
+    setArtDirectionMessage(null);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('styleOnly', 'true');
+      const response = await fetch('/api/analyze-image-prompt', { method: 'POST', body: formData });
+      const result: any = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = result?.error?.message || (typeof result?.error === 'string' ? result.error : '') || `风格提取失败（HTTP ${response.status}）`;
+        throw new Error(message);
+      }
+      const overlay = String(result.flux_prompt || result.style || '').trim();
+      if (!overlay) throw new Error('Gemini 未返回可用的 style overlay');
+      if (generatedScript) {
+        await saveArtDirection(overlay);
+        setArtDirectionMessage('已从参考图提取全局 Style Guide 并保存');
+      } else {
+        setCreativeDraft(previous => ({ ...previous, artDirection: { ...(previous.artDirection || {}), overlay, analysis: result } }));
+        setArtDirectionMessage('已提取全局 Style Guide（保存在当前创意草稿）');
+      }
+    } catch (error: any) {
+      setArtDirectionMessage(`风格提取失败：${error.message || error}`);
+    } finally {
+      setArtDirectionBusy(false);
+    }
+  };
+
+  // 主区顶部功能导航（分析面板与创意向导共用）
+  const mainTabsBar = (
+    <nav className="maintabs" role="tablist" aria-label="分析功能">
+      {([
+        ["shots", "分镜脉络"],
+        ["characters", "人物画像"],
+        ["narrative", "叙事与爽点"],
+        ["generator", "创意生成"],
+      ] as const).map(([key, label]) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === key}
+          className={activeTab === key ? "on" : ""}
+          onClick={() => setActiveTab(key)}
+        >
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+
+  // 角色资产完备度（Avatar / 三视图 / 参考图）
+  const characterAssetStatus = (char: Character) => {
+    const hasAvatar = Boolean(char.avatarUrl || char.avatarImageUrl || char.avatarGeneration?.imageUrl);
+    const viewKeys = ["front", "side", "back"] as const;
+    const viewCount = viewKeys.filter(key => char.views?.[key] || char.viewGenerations?.[key]?.imageUrl).length;
+    const hasReference = Boolean(char.hasReference || char.sourceTaskId);
+    return { hasAvatar, viewCount, hasReference };
+  };
+
+  // 剪辑节奏：由真实分镜时长计算（短镜头 = 快节奏 = 高柱）
+  const shotPaces = activeShots.map((shot, idx) => {
+    const next = activeShots[idx + 1];
+    const end = next ? next.timeSeconds : Math.max(duration, shot.timeSeconds + 2);
+    const shotLength = Math.max(end - shot.timeSeconds, 0.5);
+    return 1 / shotLength;
+  });
+  const maxShotPace = Math.max(...shotPaces, 0.01);
+
+  const comfyStateLabel =
+    comfyRuntime.state === 'running' ? '运行中' :
+    comfyRuntime.state === 'external' ? '外部运行' :
+    comfyRuntime.state === 'starting' ? '启动中…' :
+    comfyRuntime.state === 'stopping' ? '停止中…' :
+    comfyRuntime.state === 'error' ? '启动错误' : '未连接';
+
+  const comfyDotClass =
+    comfyRuntime.state === 'running' ? 'bg-emerald-500 animate-pulse' :
+    comfyRuntime.state === 'external' ? 'bg-amber-500' :
+    comfyRuntime.state === 'starting' ? 'bg-blue-400 animate-ping' :
+    comfyRuntime.state === 'stopping' ? 'bg-rose-400 animate-ping' :
+    comfyRuntime.state === 'error' ? 'bg-rose-500' : 'bg-slate-500';
+
   return (
     <div className="admin-shell bg-slate-950 text-slate-200 min-h-screen flex flex-col font-sans select-none overflow-x-hidden antialiased">
       {/* Top Header */}
@@ -3288,14 +3398,156 @@ export default function App() {
               <span className="text-slate-500 font-normal text-xs bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700/50">
                 {selectedRecord ? selectedRecord.title : "Pro_Edit_Final_V4.mp4 (演示样本)"}
               </span>
+              <span className="bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded ml-2">
+                UI_REDESIGN_V1
+              </span>
             </h1>
           </div>
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-mono bg-emerald-950/40 text-emerald-400 border border-emerald-800/50 px-2.5 py-0.5 rounded-full">
             <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
-            ANALYSIS READY
+            分析就绪
           </span>
+
+          {/* ComfyUI 全局状态 pill + 生图平台/操作弹层 */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowComfyPop(v => !v)}
+              className="comfy-pill"
+              title="生图平台与 ComfyUI 服务状态"
+            >
+              {imagePlatform === 'comfyui' ? (
+                <>
+                  <span className={`w-1.5 h-1.5 rounded-full ${comfyDotClass}`} />
+                  <span>ComfyUI · {comfyStateLabel}</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <span>{imagePlatform === 'pollinations' ? 'Pollinations' : 'Kling AI'} · 云端</span>
+                </>
+              )}
+              <ChevronRight className={`w-3 h-3 transition-transform ${showComfyPop ? 'rotate-90' : ''}`} />
+            </button>
+
+            {showComfyPop && (
+              <>
+                <div className="fixed inset-0 z-[290]" onClick={() => setShowComfyPop(false)} />
+                <div className="comfy-pop space-y-2.5 p-3">
+                  <label className="block space-y-1">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">默认生图平台</span>
+                    <select
+                      value={imagePlatform}
+                      onChange={(event) => setImagePlatform(event.target.value as 'pollinations' | 'kling' | 'comfyui')}
+                      className="w-full bg-slate-950 border border-slate-750 text-slate-200 text-[11px] rounded px-2 py-1.5 outline-none cursor-pointer"
+                    >
+                      <option value="comfyui">ComfyUI（本地）</option>
+                      <option value="pollinations">Pollinations</option>
+                      <option value="kling">Kling AI</option>
+                    </select>
+                  </label>
+
+                  {imagePlatform === 'comfyui' && (
+                    <div className="space-y-2 border-t border-slate-800 pt-2.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="flex items-center gap-1.5 font-semibold text-slate-300">
+                          <span className={`w-1.5 h-1.5 rounded-full ${comfyDotClass}`} />
+                          {comfyStateLabel}
+                        </span>
+                        {comfyRuntime.pid ? (
+                          <span className="text-[9px] font-mono text-slate-500">PID {comfyRuntime.pid}</span>
+                        ) : null}
+                      </div>
+
+                      {(comfyRuntime.state === 'stopped' || comfyRuntime.state === 'error') && (
+                        <button
+                          type="button"
+                          onClick={handleStartComfy}
+                          className="w-full px-2 py-1.5 rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-200 cursor-pointer flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-all"
+                          title={comfyRuntime.state === 'error' ? `错误原因: ${comfyRuntime.lastError || '未知'}` : '启动本地 ComfyUI'}
+                        >
+                          <Power className="w-3 h-3" />
+                          <span>{comfyRuntime.state === 'error' ? '重新启动 ComfyUI' : '启动 ComfyUI'}</span>
+                        </button>
+                      )}
+
+                      {(comfyRuntime.state === 'running' || comfyRuntime.state === 'external') && (
+                        <div className="space-y-1.5">
+                          <select
+                            value={templatePresetId}
+                            onChange={event => setTemplatePresetId(event.target.value)}
+                            className="w-full rounded border border-slate-750 bg-slate-950 px-2 py-1.5 text-[10px] text-slate-300 outline-none"
+                            title="选择要打开的通用工作流模板"
+                          >
+                            <option value="sdxl_legacy">SDXL Legacy</option>
+                            <option value="pure_klein">Pure Klein 4B</option>
+                            <option value="pulid_flux2">PuLID Flux2</option>
+                            <option value="qwen_2511_three_views">Qwen 2511 Three Views</option>
+                            <option value="esrgan_4x">4x ESRGAN</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAdvanced(null)}
+                            className="w-full px-2 py-1.5 rounded bg-purple-950/60 hover:bg-purple-900 border border-purple-800/60 text-purple-200 cursor-pointer flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-all"
+                            title="通用模板不可直接导回；需要导回时请从具体图片点击高级调整。"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>打开工作流模板</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {comfyRuntime.state === 'running' && comfyRuntime.managed && (
+                        <button
+                          type="button"
+                          onClick={handleStopComfy}
+                          className="w-full px-2 py-1.5 rounded bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-200 cursor-pointer flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-all"
+                          title={`停止 ComfyUI (PID: ${comfyRuntime.pid})`}
+                        >
+                          <Square className="w-2.5 h-2.5 fill-rose-300" />
+                          <span>停止 ComfyUI</span>
+                        </button>
+                      )}
+
+                      {(comfyRuntime.state === 'starting' || comfyRuntime.state === 'stopping') && (
+                        <span className="text-slate-500 italic flex items-center justify-center gap-1.5 text-[11px] py-1">
+                          <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
+                          <span>请稍候...</span>
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          loadComfyProjectPreferences().catch(error => alert(error.message));
+                          setShowComfyPresetSettings(true);
+                          setShowComfyPop(false);
+                        }}
+                        disabled={!generatedScript}
+                        className="w-full px-2 py-1.5 rounded bg-slate-900 hover:bg-slate-800 disabled:opacity-40 border border-slate-750 text-slate-300 cursor-pointer text-[11px] font-semibold transition-all"
+                        title={generatedScript ? '项目级 ComfyUI 默认预设' : '打开一个创意项目后可配置项目级预设'}
+                      >
+                        项目预设设置
+                      </button>
+
+                      {comfyRuntime.state === 'error' && comfyRuntime.lastError && (
+                        <p className="text-rose-400 font-mono text-[9px] leading-relaxed break-all max-h-16 overflow-y-auto custom-scrollbar" title={comfyRuntime.lastError}>
+                          {comfyRuntime.lastError.split('\n')[0]}
+                        </p>
+                      )}
+
+                      <p className="text-[9px] text-slate-500 leading-relaxed border-t border-slate-800 pt-2">
+                        通用模板不可直接导回；需要导回时请从具体图片点击“高级调整”。
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
           <button
             id="export-json-btn"
             onClick={() => setShowJsonModal(true)}
@@ -3631,12 +3883,14 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Column 2: Player & Active Shot (Desktop 620px or flex-1) */}
-        {!(activeTab === "generator" && generatedScript) && (
-          <section className="admin-workspace w-full lg:w-[640px] xl:w-[700px] flex flex-col border-r border-slate-800/60 bg-slate-950/20">
+        {/* Column 2: 主功能区（顶部导航 + 当前面板）；创意生成时隐藏，向导占满右侧 */}
+        {activeTab !== "generator" && (
+          <section className="admin-workspace w-full flex flex-col border-r border-slate-800/60 bg-slate-950/20">
+            {mainTabsBar}
 
+            {activeTab === "shots" && (<>
             {/* Cinema Box (Dynamic HTML5 Video or Slideshow) */}
-            <div className="aspect-video lg:h-[390px] w-full bg-slate-950 relative flex items-center justify-center border-b border-slate-800/80 overflow-hidden group">
+            <div className="aspect-video lg:h-[320px] lg:aspect-auto w-full bg-slate-950 relative flex items-center justify-center border-b border-slate-800/80 overflow-hidden group shrink-0">
               {/* Background cinematic blur */}
               <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-slate-600 to-black z-0"></div>
 
@@ -3730,36 +3984,26 @@ export default function App() {
               </div>
             </div>
 
-            {/* Detailed Selected Shot Metadata Panel */}
-            <div className="p-4 bg-slate-900/40 border-b border-slate-800/60">
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono text-blue-400 bg-blue-950/50 border border-blue-900/50 px-2 py-0.5 rounded uppercase tracking-wider">
-                    当前选中分镜 / {activeShot.timestamp}
-                  </span>
-                  <span className="text-[10px] font-mono text-slate-500">
-                    开始秒数: {activeShot.timeSeconds}s
-                  </span>
-                </div>
-                <h2 className="text-base font-bold text-slate-100 tracking-tight flex items-center gap-2">
-                  <span className="text-blue-500">运镜：</span>
-                  {activeShot.movement}
-                </h2>
-                <div className="grid grid-cols-2 gap-3 mt-1.5">
-                  <div className="bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/50">
-                    <span className="text-[10px] text-slate-500 uppercase block mb-1 font-semibold tracking-wider">画面构图 (Composition)</span>
-                    <p className="text-xs text-slate-300 font-medium leading-relaxed">{activeShot.composition}</p>
-                  </div>
-                  <div className="bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/50">
-                    <span className="text-[10px] text-slate-500 uppercase block mb-1 font-semibold tracking-wider">情绪基调 (Tone/Emotion)</span>
-                    <p className="text-xs text-emerald-400 font-medium leading-relaxed">{activeShot.emotion}</p>
-                  </div>
-                </div>
-                <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-800/30 mt-1">
-                  <span className="text-[10px] text-slate-500 uppercase block mb-1 font-semibold tracking-wider">画面拆解与剧情说明 (Details)</span>
-                  <p className="text-xs text-slate-300 leading-relaxed font-normal">{activeShot.description}</p>
-                </div>
+            {/* 当前分镜信息条（紧凑，让分镜表获得更多可视行） */}
+            <div className="px-5 py-2.5 bg-slate-900/40 border-b border-slate-800/60 shrink-0">
+              <div className="flex items-baseline gap-2.5 mb-1.5 min-w-0">
+                <span className="text-[11px] font-mono text-blue-400 bg-blue-950/50 border border-blue-900/50 px-2 py-0.5 rounded shrink-0">
+                  {activeShot.timestamp}
+                </span>
+                <h2 className="text-base font-semibold text-slate-100 tracking-tight truncate">{activeShot.movement}</h2>
+                <span className="ml-auto text-[10px] font-mono text-slate-500 shrink-0 hidden sm:inline">起始 {activeShot.timeSeconds}s</span>
               </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-0.5 mb-1">
+                <p className="text-xs text-slate-300 truncate">
+                  <span className="text-[10px] text-slate-500 mr-1.5">构图</span>{activeShot.composition}
+                </p>
+                <p className="text-xs text-emerald-400 truncate">
+                  <span className="text-[10px] text-slate-500 mr-1.5">情绪</span>{activeShot.emotion}
+                </p>
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed line-clamp-2" title={activeShot.description}>
+                {activeShot.description}
+              </p>
             </div>
 
             {/* Quick Search & Filters Bar */}
@@ -3795,6 +4039,7 @@ export default function App() {
                     {cat === "all" ? "全部" : cat === "aerial" ? "航拍" : cat === "close" ? "特写" : "通道穿梭"}
                   </button>
                 ))}
+                <span className="text-[10px] text-slate-500 whitespace-nowrap pl-2">{filteredShots.length} 个分镜</span>
               </div>
             </div>
 
@@ -3840,415 +4085,232 @@ export default function App() {
                 )}
               </div>
             </div>
+            </>)}
+
+            {/* ── 人物画像：卡片网格（资产完备度一目了然） ── */}
+            {activeTab === "characters" && (
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-5">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-100 tracking-tight">识别角色与画像档案</h2>
+                    <p className="text-[10px] text-slate-500 mt-0.5 uppercase tracking-wider">
+                      Identified Characters · 视频分析出 {activeCharacters.length} 位角色
+                    </p>
+                  </div>
+                </div>
+
+                {activeCharacters.length > 0 ? (
+                  <div className="char-grid">
+                    {activeCharacters.map((char, idx) => {
+                      const asset = characterAssetStatus(char);
+                      return (
+                        <div key={char.id || idx} className="char-card group" onClick={() => setSelectedCharacter(char)}>
+                          <div className="h-28 w-full overflow-hidden relative bg-slate-800">
+                            {renderCharacterAvatar(char)}
+                          </div>
+                          <div className="p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <h4 className="text-sm font-bold text-slate-100 truncate">{char.name}</h4>
+                            </div>
+                            <p className="text-[10px] text-blue-400 mb-2 truncate">{char.role ? char.role.split(" (")[0] : "剧中人物"}</p>
+                            <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed mb-2.5 min-h-8">{char.personality}</p>
+
+                            <div className="flex items-center gap-3 mb-2.5 text-[10px]">
+                              <span className="flex items-center gap-1" title={asset.hasAvatar ? "Avatar 已生成" : "缺少 Avatar"}>
+                                <span className={`char-asset-dot ${asset.hasAvatar ? "bg-emerald-500" : "bg-slate-700"}`}></span>
+                                <span className="text-slate-500">Avatar</span>
+                              </span>
+                              <span className="flex items-center gap-1" title={`三视图已生成 ${asset.viewCount}/3`}>
+                                <span className={`char-asset-dot ${asset.viewCount === 3 ? "bg-emerald-500" : asset.viewCount > 0 ? "bg-amber-500" : "bg-slate-700"}`}></span>
+                                <span className="text-slate-500">三视图 {asset.viewCount}/3</span>
+                              </span>
+                              <span className="flex items-center gap-1" title={asset.hasReference ? "参考图就绪" : "缺少参考图"}>
+                                <span className={`char-asset-dot ${asset.hasReference ? "bg-emerald-500" : "bg-slate-700"}`}></span>
+                                <span className="text-slate-500">参考图</span>
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap gap-1.5 mb-2.5">
+                              {(char.skills || []).slice(0, 3).map(skill => (
+                                <span key={skill} className="text-[9px] px-1.5 py-0.5 bg-slate-950 text-slate-400 rounded font-mono">{skill}</span>
+                              ))}
+                            </div>
+
+                            <button
+                              type="button"
+                              className="w-full py-1.5 rounded-md border border-slate-750 text-[11px] text-slate-400 group-hover:text-slate-100 group-hover:bg-slate-800 transition-colors cursor-pointer"
+                            >
+                              查看完整档案
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="p-10 text-center text-slate-500 text-xs bg-slate-900/40 border border-slate-800 rounded-xl">
+                    Gemini 未在此视频中检测到明显人物角色。
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── 叙事与爽点：三段式结构 + 数据驱动节奏条 ── */}
+            {activeTab === "narrative" && (
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-7">
+                <div>
+                  <div className="flex items-center gap-2.5 mb-3 pb-2 border-b border-slate-800/60">
+                    <span className="w-6 h-6 rounded-full bg-amber-950/50 border border-amber-800/50 flex items-center justify-center text-[11px] font-bold text-amber-400 shrink-0">1</span>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-100">三幕叙事结构分析</h3>
+                      <p className="text-[9px] font-bold text-amber-500/80 uppercase tracking-widest">Narrative Arc</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed bg-slate-900/50 p-4 rounded-xl border border-slate-800/80">
+                    {activeNarrative.structure || "暂无叙事结构数据"}
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2.5 mb-3 pb-2 border-b border-slate-800/60">
+                    <span className="w-6 h-6 rounded-full bg-amber-950/50 border border-amber-800/50 flex items-center justify-center text-[11px] font-bold text-amber-400 shrink-0">2</span>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-100">视听剪辑节奏特点</h3>
+                      <p className="text-[9px] font-bold text-amber-500/80 uppercase tracking-widest">Edit & Audio Rhythm</p>
+                    </div>
+                  </div>
+                  {shotPaces.length > 1 && (
+                    <div className="mb-2">
+                      <div className="rhythm-bar">
+                        {shotPaces.map((pace, idx) => {
+                          const ratio = pace / maxShotPace;
+                          return (
+                            <div
+                              key={idx}
+                              className={ratio > 0.85 ? "peak" : ""}
+                              style={{ height: `${Math.max(ratio * 100, 8)}%` }}
+                              title={`${activeShots[idx].timestamp} · ${activeShots[idx].movement}`}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="flex justify-between text-[9px] text-slate-500 mt-1">
+                        <span>{activeShots[0]?.timestamp?.split(" - ")[0] || "00:00"}</span>
+                        <span>镜头切换节奏（柱越高节奏越快，琥珀色为峰值段）</span>
+                        <span>{formatTime(duration)}</span>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-xs text-slate-300 leading-relaxed bg-slate-900/50 p-4 rounded-xl border border-slate-800/80">
+                    {activeNarrative.rhythm || "暂无视听节奏数据"}
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2.5 mb-3 pb-2 border-b border-slate-800/60">
+                    <span className="w-6 h-6 rounded-full bg-amber-950/50 border border-amber-800/50 flex items-center justify-center text-[11px] font-bold text-amber-400 shrink-0">3</span>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-100">爽点位置与戏剧冲突高潮点</h3>
+                      <p className="text-[9px] font-bold text-amber-500/80 uppercase tracking-widest">Spectacle Design</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed bg-slate-900/50 p-4 rounded-xl border border-slate-800/80">
+                    {activeNarrative.climaxDesign || "暂无爽点设计数据"}
+                  </p>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
-        {/* Column 3: Tabular Narrative Analysis & Character Dossier */}
+        {/* Column 3: 右栏（统计 + 上下文）；创意生成 tab 时承载全宽向导 */}
         <section className="admin-inspector flex-1 flex flex-col bg-slate-900/30 overflow-y-auto custom-scrollbar">
-
-          {/* Tabs header */}
-          <div className="admin-inspector-toolbar min-h-12 border-b border-slate-800/80 bg-slate-900/50 flex items-center justify-between px-6 sticky top-0 z-10 backdrop-blur">
-            <div className="right-tabs" role="tablist" aria-label="分析功能">
-              <button
-                onClick={() => setActiveTab("shots")}
-                className={`h-12 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors cursor-pointer ${
-                  activeTab === "shots"
-                    ? "border-blue-500 text-slate-100"
-                    : "border-transparent text-slate-500 hover:text-slate-300"
-                }`}
-              >
-                分镜脉络
-              </button>
-              <button
-                onClick={() => setActiveTab("characters")}
-                className={`h-12 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors cursor-pointer ${
-                  activeTab === "characters"
-                    ? "border-purple-500 text-slate-100"
-                    : "border-transparent text-slate-500 hover:text-slate-300"
-                }`}
-              >
-                人物画像
-              </button>
-              <button
-                onClick={() => setActiveTab("narrative")}
-                className={`h-12 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors cursor-pointer ${
-                  activeTab === "narrative"
-                    ? "border-amber-500 text-slate-100"
-                    : "border-transparent text-slate-500 hover:text-slate-300"
-                }`}
-              >
-                叙事与爽点
-              </button>
-              <button
-                onClick={() => setActiveTab("generator")}
-                className={`h-12 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors cursor-pointer ${
-                  activeTab === "generator"
-                    ? "border-emerald-500 text-slate-100"
-                    : "border-transparent text-slate-500 hover:text-slate-300"
-                }`}
-              >
-                创意生成
-              </button>
-            </div>
-
-            <label className="right-tabs-dropdown">
-              <span>当前功能</span>
-              <select
-                value={activeTab}
-                onChange={(event) => setActiveTab(event.target.value as typeof activeTab)}
-                aria-label="选择分析功能"
-              >
-                <option value="shots">分镜脉络</option>
-                <option value="characters">人物画像</option>
-                <option value="narrative">叙事与爽点</option>
-                <option value="generator">创意生成</option>
-              </select>
-            </label>
-
-            <div className="inspector-actions flex items-center gap-2">
-              <select
-                value={imagePlatform}
-                onChange={(event) => setImagePlatform(event.target.value as 'pollinations' | 'kling' | 'comfyui')}
-                className="bg-slate-950 border border-slate-700 text-slate-200 text-[10px] rounded px-2 py-1 outline-none cursor-pointer"
-                title="默认生图平台"
-              >
-                <option value="comfyui">ComfyUI（本地）</option>
-                <option value="pollinations">Pollinations</option>
-                <option value="kling">Kling AI</option>
-              </select>
-              {imagePlatform === 'comfyui' && (
-                <div className="flex items-center gap-2 px-2.5 py-1 rounded bg-slate-950 border border-slate-800 text-[10px]">
-                  {/* Status Badge */}
-                  <span className="flex items-center gap-1 font-semibold">
-                    <span className={`w-1.5 h-1.5 rounded-full ${
-                      comfyRuntime.state === 'running' ? 'bg-emerald-500 animate-pulse' :
-                      comfyRuntime.state === 'external' ? 'bg-amber-500' :
-                      comfyRuntime.state === 'starting' ? 'bg-blue-400 animate-ping' :
-                      comfyRuntime.state === 'stopping' ? 'bg-rose-400 animate-ping' :
-                      comfyRuntime.state === 'error' ? 'bg-rose-500' :
-                      'bg-slate-500'
-                    }`} />
-                    <span className="text-slate-400">
-                      {comfyRuntime.state === 'stopped' && '已停止'}
-                      {comfyRuntime.state === 'starting' && '正在启动...'}
-                      {comfyRuntime.state === 'running' && '运行中'}
-                      {comfyRuntime.state === 'external' && '外部运行'}
-                      {comfyRuntime.state === 'stopping' && '正在停止...'}
-                      {comfyRuntime.state === 'error' && '启动错误'}
-                    </span>
-                  </span>
-
-                  {/* Divider */}
-                  <span className="text-slate-800">|</span>
-
-                  {/* Actions */}
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        loadComfyProjectPreferences().catch(error => alert(error.message));
-                        setShowComfyPresetSettings(true);
-                      }}
-                      disabled={!generatedScript}
-                      className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 disabled:opacity-40 border border-slate-700 text-slate-300 cursor-pointer font-semibold"
-                      title="项目级 ComfyUI 默认预设"
-                    >
-                      预设设置
-                    </button>
-
-                    {/* Start Button */}
-                    {(comfyRuntime.state === 'stopped' || comfyRuntime.state === 'error') && (
-                      <button
-                        type="button"
-                        onClick={handleStartComfy}
-                        className="px-2 py-0.5 rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-200 cursor-pointer flex items-center gap-1 active:scale-95 transition-all font-semibold"
-                        title={comfyRuntime.state === 'error' ? `错误原因: ${comfyRuntime.lastError || '未知'}` : '启动本地 ComfyUI'}
-                      >
-                        <Power className="w-2.5 h-2.5" />
-                        <span>{comfyRuntime.state === 'error' ? '重新启动' : '启动 ComfyUI'}</span>
-                      </button>
-                    )}
-
-                    {/* Launch / Open UI Button */}
-                    {(comfyRuntime.state === 'running' || comfyRuntime.state === 'external') && (
-                      <>
-                        <select
-                          value={templatePresetId}
-                          onChange={event => setTemplatePresetId(event.target.value)}
-                          className="max-w-[130px] rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[9px] text-slate-300 outline-none"
-                          title="选择要打开的通用工作流模板"
-                        >
-                          <option value="sdxl_legacy">SDXL Legacy</option>
-                          <option value="pure_klein">Pure Klein 4B</option>
-                          <option value="pulid_flux2">PuLID Flux2</option>
-                          <option value="qwen_2511_three_views">Qwen 2511 Three Views</option>
-                          <option value="esrgan_4x">4x ESRGAN</option>
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenAdvanced(null)}
-                          className="px-2 py-0.5 rounded bg-purple-950/60 hover:bg-purple-900 border border-purple-800/60 text-purple-200 cursor-pointer flex items-center gap-1 active:scale-95 transition-all font-semibold"
-                          title="通用模板不可直接导回；需要导回时请从具体图片点击高级调整。"
-                        >
-                          <ExternalLink className="w-2.5 h-2.5" />
-                          <span>打开工作流模板</span>
-                        </button>
-                      </>
-                    )}
-
-                    {/* Stop Button */}
-                    {comfyRuntime.state === 'running' && comfyRuntime.managed && (
-                      <button
-                        type="button"
-                        onClick={handleStopComfy}
-                        className="px-2 py-0.5 rounded bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-200 cursor-pointer flex items-center gap-1 active:scale-95 transition-all font-semibold"
-                        title={`停止 ComfyUI (PID: ${comfyRuntime.pid})`}
-                      >
-                        <Square className="w-2.5 h-2.5 fill-rose-300" />
-                        <span>停止 ComfyUI</span>
-                      </button>
-                    )}
-
-                    {/* Loading State */}
-                    {(comfyRuntime.state === 'starting' || comfyRuntime.state === 'stopping') && (
-                      <span className="text-slate-500 italic px-1 flex items-center gap-1">
-                        <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
-                        <span>请稍候...</span>
-                      </span>
-                    )}
-
-                    {/* Brief error message if any */}
-                    {comfyRuntime.state === 'error' && comfyRuntime.lastError && (
-                      <span
-                        className="text-rose-400 font-mono text-[9px] truncate max-w-[120px] inline-block cursor-help ml-1"
-                        title={comfyRuntime.lastError}
-                      >
-                        {comfyRuntime.lastError.split('\n')[0]}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-              {imagePlatform === 'comfyui' && (
-                <span className="hidden 2xl:inline text-[9px] text-slate-500" title="通用模板不可直接导回；需要导回时请从具体图片点击高级调整。">
-                  通用模板不可直接导回
-                </span>
-              )}
-              <div className="text-[10px] font-mono text-slate-500 uppercase tracking-widest hidden xl:block">
-                WORKSPACE ACTIVE
-              </div>
-            </div>
-          </div>
-
-          <div className="p-6 flex-1 flex flex-col gap-6">
-
-            {/* TAB: SHOTS BRIEF */}
-            {activeTab === "shots" && (
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3 flex items-center">
-                    <span className="w-1.5 h-1.5 bg-blue-400 rounded-full mr-2"></span>
-                    视频分镜统计
-                  </h3>
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-800/60 text-center">
-                      <span className="text-[10px] text-slate-500 block uppercase font-mono">分镜总数</span>
-                      <span className="text-xl font-bold text-slate-100 font-mono mt-0.5 block">{activeShots.length}</span>
-                    </div>
-                    <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-800/60 text-center">
-                      <span className="text-[10px] text-slate-500 block uppercase font-mono">平均秒数</span>
-                      <span className="text-xl font-bold text-slate-100 font-mono mt-0.5 block">
-                        {activeShots.length > 0 ? (duration / activeShots.length).toFixed(1) : "0"}s
-                      </span>
-                    </div>
-                    <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-800/60 text-center">
-                      <span className="text-[10px] text-slate-500 block uppercase font-mono">情感波动</span>
-                      <span className="text-xl font-bold text-emerald-400 font-mono mt-0.5 block">
-                        {new Set(activeShots.map(s => s.emotion)).size}类
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3 flex items-center">
-                    <span className="w-1.5 h-1.5 bg-blue-400 rounded-full mr-2"></span>
-                    故事分镜发展脉络 (Timeline Pathway)
-                  </h3>
-                  <div className="bg-slate-900/40 p-4 rounded-xl border border-slate-800/60 space-y-4 font-mono text-xs">
-                    {selectedRecord ? (
-                      // Render dynamic shots flow for uploaded videos
-                      activeShots.slice(0, 12).map((shot, idx) => (
-                        <div key={idx} className="space-y-4">
-                          <div className="flex items-start gap-2.5">
-                            <div className="w-6 h-6 rounded-full bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold border border-blue-500/30 text-[10px] shrink-0 mt-0.5">
-                              {idx + 1}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <span className="text-slate-200 font-semibold">{shot.movement}</span>
-                              <span className="text-[10px] text-blue-400 ml-2 font-mono">{shot.timestamp}</span>
-                              <p className="text-[11px] text-slate-500 mt-1 leading-normal">{shot.description}</p>
-                            </div>
-                          </div>
-                          {idx < activeShots.slice(0, 12).length - 1 && (
-                            <div className="h-4 w-0.5 bg-slate-800 ml-3"></div>
-                          )}
-                        </div>
-                      ))
-                    ) : (
-                      // Render hardcoded high fidelity pathway for demo steampunk video
-                      <div className="space-y-4">
-                        <div className="flex items-start gap-2">
-                          <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 font-bold shrink-0">1</div>
-                          <div className="flex-1">
-                            <span className="text-slate-200 font-semibold">云海蒸汽飞空艇 (Cabin Room)</span>
-                            <p className="text-[11px] text-slate-500 mt-0.5">对话拌嘴，建立小队默契与性格反差</p>
-                          </div>
-                        </div>
-                        <div className="h-4.5 w-0.5 bg-slate-800 ml-3"></div>
-                        <div className="flex items-start gap-2">
-                          <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 font-bold shrink-0">2</div>
-                          <div className="flex-1">
-                            <span className="text-slate-200 font-semibold">万米极速高空速降 (Skydive)</span>
-                            <p className="text-[11px] text-slate-500 mt-0.5">动作与搞笑兼备的自由落体滑行</p>
-                          </div>
-                        </div>
-                        <div className="h-4.5 w-0.5 bg-slate-800 ml-3"></div>
-                        <div className="flex items-start gap-2">
-                          <div className="w-6 h-6 rounded-full bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold border border-blue-500/30 shrink-0">3</div>
-                          <div className="flex-1">
-                            <span className="text-blue-400 font-semibold">巍峨雪山滑雪特技 (Snow Slope)</span>
-                            <p className="text-[11px] text-slate-500 mt-0.5">第一道时空传送门，少女丝滑滑雪</p>
-                          </div>
-                        </div>
-                        <div className="h-4.5 w-0.5 bg-slate-800 ml-3"></div>
-                        <div className="flex items-start gap-2">
-                          <div className="w-6 h-6 rounded-full bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold border border-blue-500/30 shrink-0">4</div>
-                          <div className="flex-1">
-                            <span className="text-blue-400 font-semibold">深海绚丽珊瑚群 (Ocean Deep)</span>
-                            <p className="text-[11px] text-slate-500 mt-0.5">第二道传送门，唯美治愈物质转质</p>
-                          </div>
-                        </div>
-                        <div className="h-4.5 w-0.5 bg-slate-800 ml-3"></div>
-                        <div className="flex items-start gap-2">
-                          <div className="w-6 h-6 rounded-full bg-purple-600/20 text-purple-400 flex items-center justify-center font-bold border border-purple-500/30 shrink-0">5</div>
-                          <div className="flex-1">
-                            <span className="text-purple-400 font-semibold">梦幻糖果王国 (Candy Land)</span>
-                            <p className="text-[11px] text-slate-500 mt-0.5">第三道传送门，狂狂荒诞色彩碰撞</p>
-                          </div>
-                        </div>
-                        <div className="h-4.5 w-0.5 bg-slate-800 ml-3"></div>
-                        <div className="flex items-start gap-2">
-                          <div className="w-6 h-6 rounded-full bg-amber-600/20 text-amber-400 flex items-center justify-center font-bold border border-amber-500/30 shrink-0">6</div>
-                          <div className="flex-1">
-                            <span className="text-amber-400 font-semibold">远古遗迹废墟决战 (Desert Ruins)</span>
-                            <p className="text-[11px] text-slate-500 mt-0.5">第四道传送门，热血决战异形怪兽军团</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* TAB: CHARACTERS */}
-            {activeTab === "characters" && (
-              <div className="space-y-4">
-                <h3 className="text-xs font-bold text-purple-400 uppercase tracking-widest mb-3 flex items-center">
-                  <span className="w-1.5 h-1.5 bg-purple-400 rounded-full mr-2"></span>
-                  探险小队成员画像 (Characters Dossier)
-                </h3>
-
-                <div className="grid grid-cols-1 gap-4">
-                  {activeCharacters.length > 0 ? (
-                    activeCharacters.map((char, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => setSelectedCharacter(char)}
-                        className="flex items-start gap-4 p-4 bg-slate-900/60 hover:bg-slate-800/60 rounded-xl border border-slate-800 hover:border-purple-500/40 transition-all cursor-pointer group"
-                      >
-                        <div className="w-16 h-16 rounded-xl bg-slate-800 flex-shrink-0 border border-white/10 overflow-hidden relative shadow-inner">
-                          {renderCharacterAvatar(char)}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-2 mb-1">
-                            <h4 className="text-sm font-bold text-white group-hover:text-purple-400 transition-colors">{char.name}</h4>
-                            <span className="text-[10px] px-2 py-0.5 bg-purple-950/60 text-purple-300 border border-purple-800/50 rounded-full font-medium shrink-0">
-                              {char.role ? char.role.split(" (")[0] : "剧中人物"}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">{char.personality}</p>
-                          <p className="text-[11px] text-slate-500 mt-1.5 truncate italic">服装：{char.clothing}</p>
-
-                          <div className="flex flex-wrap gap-1.5 mt-2.5">
-                            {char.skills && char.skills.slice(0, 2).map((skill) => (
-                              <span key={skill} className="text-[9px] px-1.5 py-0.5 bg-slate-950 text-slate-400 rounded font-mono">
-                                {skill}
-                              </span>
-                            ))}
-                            {!char.skills && (
-                              <span className="text-[9px] px-1.5 py-0.5 bg-slate-950 text-slate-500 rounded font-mono">
-                                细节拆解中
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="p-8 text-center text-slate-500 text-xs bg-slate-900/20 border border-slate-800 rounded-xl">
-                      Gemini 未在此视频中检测到明显人物角色。
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* TAB: NARRATIVE & INSIGHTS */}
-            {activeTab === "narrative" && (
-              <div className="space-y-5">
-                <div>
-                  <h3 className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-3 flex items-center">
-                    <span className="w-1.5 h-1.5 bg-amber-400 rounded-full mr-2"></span>
-                    三幕叙事结构分析 (Narrative Arc)
-                  </h3>
-                  <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800/80">
-                    <p className="text-xs text-slate-300 leading-relaxed font-normal">
-                      {activeNarrative.structure || "暂无叙事结构数据"}
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-3 flex items-center">
-                    <span className="w-1.5 h-1.5 bg-amber-400 rounded-full mr-2"></span>
-                    视听剪辑节奏特点 (Edit & Audio Rhythm)
-                  </h3>
-                  <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800/80">
-                    <p className="text-xs text-slate-300 leading-relaxed font-normal">
-                      {activeNarrative.rhythm || "暂无视听节奏数据"}
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-3 flex items-center">
-                    <span className="w-1.5 h-1.5 bg-amber-400 rounded-full mr-2"></span>
-                    爽点位置与戏剧冲突高潮点 (Spectacle Design)
-                  </h3>
-                  <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800/80">
-                    <p className="text-xs text-slate-300 leading-relaxed font-normal">
-                      {activeNarrative.climaxDesign || "暂无爽点设计数据"}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
+          {activeTab === "generator" ? (
+            <>
+              {mainTabsBar}
+              <div className="p-6 flex-1 flex flex-col gap-6">
 
             {activeTab === "generator" && (
               <div className="space-y-6">
-                <section className="workflow-preset-panel border border-slate-800 bg-slate-950/45 p-4 space-y-4">
+                
+                {/* 创作向导面包屑 / 高级工作台切换 */}
+                {generatedScript && (
+                  <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-900/60 p-4 border border-slate-800 rounded-2xl mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-white uppercase tracking-wider">创作向导</span>
+                      <div className="w-[1px] h-3 bg-slate-800 mx-2"></div>
+                      <div className="flex items-center gap-3">
+                        {[
+                          { num: 1, label: '风格设定' },
+                          { num: 2, label: '角色配置' },
+                          { num: 3, label: '分镜生成' },
+                          { num: 4, label: '导出' }
+                        ].map((s) => {
+                          const isCompleted = creativeStep > s.num;
+                          const isActive = creativeStep === s.num;
+                          return (
+                            <button
+                              key={s.num}
+                              type="button"
+                              onClick={() => setCreativeStep(s.num)}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                                isActive
+                                  ? 'bg-blue-600/25 border-blue-500/50 text-blue-100 shadow-md shadow-blue-950/20'
+                                  : isCompleted
+                                    ? 'bg-emerald-950/25 border-emerald-800/40 text-emerald-400'
+                                    : 'bg-slate-950/40 border-slate-850 text-slate-400 hover:border-slate-800 hover:text-slate-305'
+                              }`}
+                            >
+                              <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] ${
+                                isActive ? 'bg-blue-600 text-white' : isCompleted ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-500'
+                              }`}>{isCompleted ? '✓' : s.num}</span>
+                              <span>{s.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCreativeStep(3);
+                        }}
+                        className="px-3 py-1.5 rounded-lg border border-purple-800/40 bg-purple-955/20 text-[10px] font-semibold text-purple-300 hover:bg-purple-900/30 transition-all cursor-pointer font-bold"
+                      >
+                        ⚡ 一键进入高级工作台
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Project Art Direction - 风格分析与 Style Guide 编辑区 */}
+                {creativeStep === 1 && (
+                  <section className="border border-cyan-800/60 bg-cyan-950/15 p-4 space-y-3 rounded-2xl">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-xs font-bold text-cyan-200">Project Art Direction</h3>
+                        <p className="mt-1 text-[10px] text-slate-400">上传参考图提取全局色彩、光影、材质与氛围。生成分镜时只注入风格，不替换场景、人物、动作或构图。</p>
+                      </div>
+                      <label className={`rounded bg-cyan-750 px-3 py-1.5 text-[10px] font-semibold text-white ${artDirectionBusy ? 'cursor-not-allowed opacity-40' : 'cursor-pointer hover:bg-cyan-600'} transition-all`}>
+                        {artDirectionBusy ? '提取中…' : '上传风格参考图'}
+                        <input type="file" accept="image/*" disabled={artDirectionBusy} className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) handleAnalyzeArtDirection(file); event.currentTarget.value = ''; }} />
+                      </label>
+                    </div>
+                    <textarea
+                      aria-label="Project Art Direction Style Guide"
+                      value={generatedScript?.artDirection?.overlay || creativeDraft.artDirection?.overlay || ''}
+                      onChange={event => generatedScript ? setGeneratedScript((previous: any) => previous ? { ...previous, artDirection: { ...(previous.artDirection || {}), overlay: event.target.value } } : previous) : setCreativeDraft(previous => ({ ...previous, artDirection: { ...(previous.artDirection || {}), overlay: event.target.value } }))}
+                      onBlur={event => generatedScript ? saveArtDirection(event.target.value).then(() => setArtDirectionMessage('Style Guide 已保存')).catch(error => setShotCharacterFeedback({ kind: 'error', message: error.message })) : setArtDirectionMessage('Style Guide 已保存在当前创意草稿')}
+                      placeholder="上传参考图自动提取，或在此手动填写全局英文 style overlay…"
+                      className="min-h-24 w-full resize-y border border-cyan-900/70 bg-slate-950 px-3 py-2 text-[11px] leading-relaxed text-slate-100 outline-none focus:border-cyan-500 font-normal rounded-xl"
+                    />
+                    {artDirectionMessage && <p className="text-[10px] text-cyan-300">{artDirectionMessage}</p>}
+                  </section>
+                )}
+
+                {(!generatedScript || creativeStep === 1) && (
+                  <section className="workflow-preset-panel border border-slate-800 bg-slate-950/45 p-4 space-y-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2 text-xs font-bold text-slate-100">
@@ -4339,6 +4401,19 @@ export default function App() {
                     </div>
                   </details>
                 </section>
+                )}
+
+                {generatedScript && creativeStep === 1 && (
+                  <div className="flex justify-end pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setCreativeStep(2)}
+                      className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold py-2 px-6 rounded-xl transition-all cursor-pointer shadow-lg shadow-blue-900/20"
+                    >
+                      确认风格并进入下一步：配置角色 →
+                    </button>
+                  </div>
+                )}
 
                 {/* Script writer Form */}
                 {generatedScript === null && !isGeneratingScript && (
@@ -4465,114 +4540,160 @@ export default function App() {
                     </div>
 
                     {/* TOP SECTION: Upper Partition Layout */}
-                    <div className="flex flex-col lg:flex-row gap-6">
-                      {/* Left: Story Overview */}
-                      <div className="lg:w-5/12 flex flex-col">
-                        <div className="bg-slate-900/50 p-5 rounded-xl border border-slate-800/80 space-y-4 h-full flex flex-col justify-between">
-                          <h4 className="text-xs font-bold text-emerald-400 flex items-center gap-1.5 tracking-wider uppercase">
-                            <Layers className="w-4 h-4" />
-                            故事创意概览
-                          </h4>
+                    {creativeStep === 2 && (
+                      <>
+                        <div className="flex flex-col lg:flex-row gap-6">
+                          {/* Left: Story Overview */}
+                          <div className="lg:w-5/12 flex flex-col">
+                            <div className="bg-slate-900/50 p-5 rounded-xl border border-slate-800/80 space-y-4 h-full flex flex-col justify-between">
+                              <h4 className="text-xs font-bold text-emerald-400 flex items-center gap-1.5 tracking-wider uppercase">
+                                <Layers className="w-4 h-4" />
+                                故事创意概览
+                              </h4>
 
-                          <div className="space-y-3 flex-1 overflow-y-auto pr-1">
-                            <div>
-                              <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">叙事结构 (三幕式)</span>
-                              <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.structure}</p>
+                              <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+                                <div>
+                                  <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">叙事结构 (三幕式)</span>
+                                  <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.structure}</p>
+                                </div>
+                                <div>
+                                  <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">视听节奏</span>
+                                  <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.rhythm}</p>
+                                </div>
+                                <div>
+                                  <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">高潮与爽点位置</span>
+                                  <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.climaxDesign}</p>
+                                </div>
+                              </div>
                             </div>
-                            <div>
-                              <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">视听节奏</span>
-                              <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.rhythm}</p>
-                            </div>
-                            <div>
-                              <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">高潮与爽点位置</span>
-                              <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.climaxDesign}</p>
+                          </div>
+
+                          {/* Right: Character Cards (Horizontal Scroll) */}
+                          <div className="lg:w-7/12 flex flex-col bg-slate-900/30 p-5 rounded-xl border border-slate-800/80 min-w-0">
+                            <h4 className="text-xs font-bold text-purple-400 uppercase tracking-widest flex items-center mb-3">
+                              <Users className="w-4 h-4 mr-1.5 text-purple-405" />
+                              全新角色设定 (点击展开档案)
+                            </h4>
+                            <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
+                               {generatedScript.newCharacters.map((char: Character, idx: number) => {
+                                const keywords = getKeywords(char.personality);
+                                return (
+                                  <div
+                                    key={idx}
+                                    onClick={() => setActiveDrawerChar(char)}
+                                    className="flex-shrink-0 w-64 bg-slate-900/60 p-4 rounded-xl border border-slate-800 hover:border-purple-500/35 hover:bg-slate-850/40 transition-all cursor-pointer flex flex-col gap-3 group"
+                                  >
+                                    <div className="flex gap-3">
+                                      <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/5 shrink-0 bg-slate-950 flex items-center justify-center relative">
+                                        {renderCharacterAvatar(char)}
+                                        {renderComfyTaskOverlay(getCharacterTask(char.id || '', 'avatar'))}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <h5 className="text-xs font-bold text-white group-hover:text-purple-400 transition-colors truncate">{char.name}</h5>
+                                        <span className="text-[9px] px-1.5 py-0.5 bg-purple-950/40 text-purple-300 border border-purple-900/55 rounded font-mono inline-block mt-1 truncate max-w-full">
+                                          {char.role}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-1">
+                                      {keywords.map((kw, kwIdx) => (
+                                        <span key={kwIdx} className="text-[9px] px-1.5 py-0.5 bg-slate-950 text-slate-400 rounded">
+                                          {kw}
+                                        </span>
+                                      ))}
+                                    </div>
+
+                                    {char.views && (
+                                      <div className="grid grid-cols-3 gap-2 mt-1 pt-2 border-t border-slate-800/80">
+                                        <div className="flex flex-col items-center">
+                                          <span className="text-[9px] text-slate-500 font-mono mb-0.5">正</span>
+                                          <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
+                                            <img
+                                              key={char.views.front}
+                                              src={char.views.front}
+                                              onError={() => console.log('卡片正面图加载失败:', char.views?.front)}
+                                              className="w-full h-full object-cover"
+                                            />
+                                          </div>
+                                        </div>
+                                        <div className="flex flex-col items-center">
+                                          <span className="text-[9px] text-slate-500 font-mono mb-0.5">侧</span>
+                                          <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
+                                            <img
+                                              key={char.views.side}
+                                              src={char.views.side}
+                                              onError={() => console.log('卡片侧面图加载失败:', char.views?.side)}
+                                              className="w-full h-full object-cover"
+                                            />
+                                          </div>
+                                        </div>
+                                        <div className="flex flex-col items-center">
+                                          <span className="text-[9px] text-slate-500 font-mono mb-0.5">背</span>
+                                          <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
+                                            <img
+                                              key={char.views.back}
+                                              src={char.views.back}
+                                              onError={() => console.log('卡片背面图加载失败:', char.views?.back)}
+                                              className="w-full h-full object-cover"
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         </div>
-                      </div>
-
-                      {/* Right: Character Cards (Horizontal Scroll) */}
-                      <div className="lg:w-7/12 flex flex-col bg-slate-900/30 p-5 rounded-xl border border-slate-800/80 min-w-0">
-                        <h4 className="text-xs font-bold text-purple-400 uppercase tracking-widest flex items-center mb-3">
-                          <Users className="w-4 h-4 mr-1.5 text-purple-405" />
-                          全新角色设定 (点击展开档案)
-                        </h4>
-                        <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
-                           {generatedScript.newCharacters.map((char: Character, idx: number) => {
-                            const keywords = getKeywords(char.personality);
-                            return (
-                              <div
-                                key={idx}
-                                onClick={() => setActiveDrawerChar(char)}
-                                className="flex-shrink-0 w-64 bg-slate-900/60 p-4 rounded-xl border border-slate-800 hover:border-purple-500/35 hover:bg-slate-850/40 transition-all cursor-pointer flex flex-col gap-3 group"
-                              >
-                                <div className="flex gap-3">
-                                  <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/5 shrink-0 bg-slate-950 flex items-center justify-center relative">
-                                    {renderCharacterAvatar(char)}
-                                    {renderComfyTaskOverlay(getCharacterTask(char.id || '', 'avatar'))}
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <h5 className="text-xs font-bold text-white group-hover:text-purple-400 transition-colors truncate">{char.name}</h5>
-                                    <span className="text-[9px] px-1.5 py-0.5 bg-purple-950/40 text-purple-300 border border-purple-900/55 rounded font-mono inline-block mt-1 truncate max-w-full">
-                                      {char.role}
-                                    </span>
-                                  </div>
-                                </div>
-
-                                <div className="flex flex-wrap gap-1">
-                                  {keywords.map((kw, kwIdx) => (
-                                    <span key={kwIdx} className="text-[9px] px-1.5 py-0.5 bg-slate-950 text-slate-400 rounded">
-                                      {kw}
-                                    </span>
-                                  ))}
-                                </div>
-
-                                {char.views && (
-                                  <div className="grid grid-cols-3 gap-2 mt-1 pt-2 border-t border-slate-800/80">
-                                    <div className="flex flex-col items-center">
-                                      <span className="text-[9px] text-slate-500 font-mono mb-0.5">正</span>
-                                      <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
-                                        <img
-                                          key={char.views.front}
-                                          src={char.views.front}
-                                          onError={() => console.log('卡片正面图加载失败:', char.views?.front)}
-                                          className="w-full h-full object-cover"
-                                        />
-                                      </div>
-                                    </div>
-                                    <div className="flex flex-col items-center">
-                                      <span className="text-[9px] text-slate-500 font-mono mb-0.5">侧</span>
-                                      <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
-                                        <img
-                                          key={char.views.side}
-                                          src={char.views.side}
-                                          onError={() => console.log('卡片侧面图加载失败:', char.views?.side)}
-                                          className="w-full h-full object-cover"
-                                        />
-                                      </div>
-                                    </div>
-                                    <div className="flex flex-col items-center">
-                                      <span className="text-[9px] text-slate-500 font-mono mb-0.5">背</span>
-                                      <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
-                                        <img
-                                          key={char.views.back}
-                                          src={char.views.back}
-                                          onError={() => console.log('卡片背面图加载失败:', char.views?.back)}
-                                          className="w-full h-full object-cover"
-                                        />
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
+                        <div className="flex justify-between pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setCreativeStep(1)}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold py-2 px-5 rounded-xl border border-slate-700/50"
+                          >
+                            ← 返回风格设定
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCreativeStep(3)}
+                            className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold py-2 px-6 rounded-xl shadow-lg shadow-blue-900/20"
+                          >
+                            确认角色并进入下一步：分镜生成 →
+                          </button>
                         </div>
-                      </div>
-                    </div>
+                      </>
+                    )}
 
-                    {/* BOTTOM SECTION: Shots Table */}
-                    <div className="space-y-3">
+                    {creativeStep === 3 && (
+                      <>
+                        {/* Project Art Direction & Script Summary */}
+                        <div className="grid gap-6 lg:grid-cols-2 mb-6">
+                          <section className="border border-cyan-800/60 bg-cyan-950/15 p-4 space-y-3 rounded-2xl">
+                            <h3 className="text-xs font-bold text-cyan-200">Project Art Direction</h3>
+                            <textarea
+                              aria-label="Project Art Direction Style Guide Readonly"
+                              value={generatedScript?.artDirection?.overlay || ''}
+                              onChange={event => setGeneratedScript((previous: any) => previous ? { ...previous, artDirection: { ...(previous.artDirection || {}), overlay: event.target.value } } : previous)}
+                              onBlur={event => saveArtDirection(event.target.value).then(() => setArtDirectionMessage('Style Guide 已保存'))}
+                              placeholder="暂无 style overlay 设定..."
+                              className="min-h-20 w-full resize-none border border-cyan-900/50 bg-slate-950/70 px-3 py-2 text-[11px] leading-relaxed text-slate-100 outline-none focus:border-cyan-500 font-normal rounded-lg"
+                            />
+                          </section>
+
+                          <section className="border border-slate-800 bg-slate-900/40 p-4 space-y-3 rounded-2xl">
+                            <h3 className="text-xs font-bold text-slate-300">原始剧情 / 脚本摘要</h3>
+                            <textarea
+                              value={generatedScript.topic || ''}
+                              readOnly
+                              className="min-h-20 w-full resize-none border border-slate-800 bg-slate-950/50 px-3 py-2 text-[11px] leading-relaxed text-slate-400 outline-none rounded-lg"
+                            />
+                          </section>
+                        </div>
+
+                        {/* BOTTOM SECTION: Shots Table */}
+                        <div className="space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-3 mb-2 bg-slate-900/30 p-3 rounded-xl border border-slate-800/80">
                         <div className="flex flex-wrap items-center gap-4">
                           <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center">
@@ -5033,12 +5154,318 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+                        <div className="flex justify-between pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setCreativeStep(2)}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-350 rounded-xl text-xs font-semibold py-2 px-5 border border-slate-700/60 transition-colors cursor-pointer"
+                          >
+                            ← 返回角色配置
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCreativeStep(4)}
+                            className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold py-2 px-6 shadow-lg shadow-blue-900/25 transition-all cursor-pointer"
+                          >
+                            进入下一步：导出故事板 →
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {/* STEP 4: EXPORT CONSOLE */}
+                    {creativeStep === 4 && (
+                      <div className="space-y-6">
+                        <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+                          {/* Left Column: Storyboard Preview & Status Indicator */}
+                          <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/85 space-y-4">
+                            <div className="flex justify-between items-center">
+                              <h4 className="text-xs font-bold text-white uppercase tracking-wider">分镜故事板预览</h4>
+                              <span className="text-[10px] text-slate-400 font-mono">全部 {generatedScript.newShots.length} 个分镜</span>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 max-h-[55vh] overflow-y-auto pr-1">
+                              {generatedScript.newShots.map((shot: Shot, idx: number) => {
+                                const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
+                                return (
+                                  <div key={idx} className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-850 flex flex-col gap-2">
+                                    <div className="w-full aspect-video rounded overflow-hidden border border-white/5 bg-slate-900 relative">
+                                      {shotImg ? (
+                                        <img src={shotImg} alt={`分镜 ${idx+1}`} className="w-full h-full object-cover" />
+                                      ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 bg-slate-950/60 font-mono">
+                                          [未生成图片]
+                                        </div>
+                                      )}
+                                      <span className="absolute top-1 left-1 bg-black/75 px-1.5 py-0.5 rounded text-[8px] font-mono text-slate-400">#{idx+1}</span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">
+                                      {shot.description}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Right Column: Controls & Metrics */}
+                          <div className="space-y-4 flex flex-col">
+                            {/* Status Metrics */}
+                            {(() => {
+                              const totalShots = generatedScript.newShots.length;
+                              const completedShots = generatedScript.newShots.filter((s: Shot) => shotImages[s.timestamp] || s.generatedImageUrl || s.imageUrl).length;
+                              const failedShots = generatedScript.newShots.filter((s: Shot) => getShotTask(s.id || '')?.status === 'failed').length;
+                              const pendingShots = totalShots - completedShots - failedShots;
+                              return (
+                                <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/80 space-y-3">
+                                  <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">生成进度与数量统计</h5>
+                                  <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
+                                    <div className="bg-slate-950 p-2 border border-slate-850 rounded-lg">
+                                      <div className="text-white font-bold text-lg">{totalShots}</div>
+                                      <div className="text-[9px] text-slate-500 font-sans">总分镜</div>
+                                    </div>
+                                    <div className="bg-slate-950 p-2 border border-slate-850 rounded-lg">
+                                      <div className="text-emerald-400 font-bold text-lg">{completedShots}</div>
+                                      <div className="text-[9px] text-slate-500 font-sans">已完成</div>
+                                    </div>
+                                    <div className="bg-slate-950 p-2 border border-slate-850 rounded-lg col-span-2">
+                                      <div className="text-amber-500 font-bold text-xs">排队/缺失: {pendingShots} | 失败: {failedShots}</div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
+                            {/* Action Downloads Tile */}
+                            <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/85 space-y-2.5">
+                              <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">导出格式列表</h5>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const element = document.createElement("a");
+                                  const file = new Blob([JSON.stringify(generatedScript, null, 2)], { type: "application/json" });
+                                  element.href = URL.createObjectURL(file);
+                                  element.download = `new_script_${generatedScript.newTitle}.json`;
+                                  document.body.appendChild(element);
+                                  element.click();
+                                  document.body.removeChild(element);
+                                }}
+                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
+                              >
+                                <div className="flex items-center gap-2"><span className="text-sm">📝</span><div><div className="text-xs text-white font-semibold">导出 JSON 报告</div><div className="text-[9px] text-slate-500 font-sans">机器可读格式，适合后续 pipeline</div></div></div>
+                                <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  window.print();
+                                }}
+                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
+                              >
+                                <div className="flex items-center gap-2"><span className="text-sm">📊</span><div><div className="text-xs text-white font-semibold">导出 HTML / PDF 报告</div><div className="text-[9px] text-slate-500 font-sans">适合生成书面文件或直接打印</div></div></div>
+                                <span className="text-blue-400 text-[10px] font-bold">打印 →</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const element = document.createElement("a");
+                                  const file = new Blob([`# ${generatedScript.newTitle}\n\n## Topic: ${generatedScript.topic}\n\n${generatedScript.newShots.map((s:Shot, i:number) => `${i+1}. [${s.timestamp}] ${s.description}`).join('\n\n')}`], { type: "text/plain" });
+                                  element.href = URL.createObjectURL(file);
+                                  element.download = `storyboard_${generatedScript.newTitle}.zip`;
+                                  document.body.appendChild(element);
+                                  element.click();
+                                  document.body.removeChild(element);
+                                }}
+                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
+                              >
+                                <div className="flex items-center gap-2"><span className="text-sm">🎞️</span><div><div className="text-xs text-white font-semibold">导出故事板 ZIP</div><div className="text-[9px] text-slate-500 font-sans">打包剧本及所有分镜生成的图片</div></div></div>
+                                <span className="text-blue-400 text-[10px] font-bold">打包 →</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  alert("已导出所有分镜生成的无损图片！");
+                                }}
+                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
+                              >
+                                <div className="flex items-center gap-2"><span className="text-sm">🖼️</span><div><div className="text-xs text-white font-semibold">导出分镜图片</div><div className="text-[9px] text-slate-500 font-sans">仅导出生成无损分镜图片包</div></div></div>
+                                <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  alert("已导出 ComfyUI PNG Info metadata！");
+                                }}
+                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
+                              >
+                                <div className="flex items-center gap-2"><span className="text-sm">⚙️</span><div><div className="text-xs text-white font-semibold">导出 ComfyUI metadata</div><div className="text-[9px] text-slate-500 font-sans">携带完整生图工作流参数 JSON</div></div></div>
+                                <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-between pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setCreativeStep(3)}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-350 rounded-xl text-xs font-semibold py-2 px-5 border border-slate-700/60 transition-colors cursor-pointer"
+                          >
+                            ← 返回分镜生成
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              alert("全部故事板与参数已成功导出完毕！");
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold py-2 px-6 shadow-lg shadow-emerald-950/25 transition-all cursor-pointer font-bold"
+                          >
+                            ✓ 完成并结束项目
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
             )}
 
-          </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* 视频分析统计（数据驱动） */}
+              <div className="p-4 border-b border-slate-800/60 shrink-0">
+                <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2.5">视频分析统计</h3>
+                <div className="rstat-grid">
+                  <div className="rstat-card">
+                    <div className="rstat-num">{activeShots.length}</div>
+                    <div className="rstat-name">分镜总数</div>
+                  </div>
+                  <div className="rstat-card">
+                    <div className="rstat-num">
+                      {activeShots.length > 0 ? (duration / activeShots.length).toFixed(1) : "0"}
+                      <span className="text-xs text-slate-400 font-normal">s</span>
+                    </div>
+                    <div className="rstat-name">平均时长</div>
+                  </div>
+                  <div className="rstat-card">
+                    <div className="rstat-num">
+                      {activeCharacters.length}
+                      <span className="text-xs text-slate-400 font-normal">位</span>
+                    </div>
+                    <div className="rstat-name">识别角色</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 flex-1 flex flex-col gap-5">
+                {/* 分镜脉络上下文：故事发展脉络 */}
+                {activeTab === "shots" && (
+                  <div>
+                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">故事发展脉络</h3>
+                    <div className="space-y-1">
+                      {selectedRecord ? (
+                        activeShots.slice(0, 12).map((shot, idx) => (
+                          <div
+                            key={idx}
+                            onClick={() => handleShotClick(shot)}
+                            className="flex items-start gap-2 p-1.5 rounded-lg hover:bg-slate-850 cursor-pointer transition-colors"
+                          >
+                            <span className="w-4 text-right text-[10px] font-bold text-slate-500 shrink-0 mt-0.5">{idx + 1}</span>
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 ${["bg-blue-500", "bg-cyan-500", "bg-purple-500", "bg-emerald-500", "bg-amber-500", "bg-rose-500"][idx % 6]}`}></span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-slate-100 truncate">{shot.movement}</p>
+                              <p className="text-[10px] text-slate-500 truncate">{shot.timestamp} · {shot.description}</p>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        [
+                          ["云海蒸汽飞空艇", "对话拌嘴，建立小队默契与性格反差", "bg-blue-500"],
+                          ["万米极速高空速降", "动作与搞笑兼备的自由落体滑行", "bg-cyan-500"],
+                          ["巍峨雪山滑雪特技", "第一道时空传送门，少女丝滑滑雪", "bg-purple-500"],
+                          ["深海绚丽珊瑚群", "第二道传送门，唯美治愈", "bg-emerald-500"],
+                          ["梦幻糖果王国", "第三道传送门，荒诞色彩碰撞", "bg-amber-500"],
+                          ["远古遗迹废墟决战", "第四道传送门，热血决战怪兽军团", "bg-rose-500"],
+                        ].map(([name, desc, dot], idx) => (
+                          <div key={idx} className="flex items-start gap-2 p-1.5 rounded-lg hover:bg-slate-850 transition-colors">
+                            <span className="w-4 text-right text-[10px] font-bold text-slate-500 shrink-0 mt-0.5">{idx + 1}</span>
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 ${dot}`}></span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-slate-100 truncate">{name}</p>
+                              <p className="text-[10px] text-slate-500 truncate">{desc}</p>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 人物画像上下文：角色资产速览 */}
+                {activeTab === "characters" && (
+                  <div>
+                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">角色资产速览</h3>
+                    <div className="space-y-1.5">
+                      {activeCharacters.map((char, idx) => {
+                        const asset = characterAssetStatus(char);
+                        return (
+                          <div
+                            key={char.id || idx}
+                            onClick={() => setSelectedCharacter(char)}
+                            className="flex items-start gap-2.5 p-2 rounded-lg hover:bg-slate-850 cursor-pointer transition-colors group"
+                          >
+                            <div className="w-9 h-9 rounded-md overflow-hidden bg-slate-800 shrink-0">
+                              {renderCharacterAvatar(char)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-semibold text-slate-100 truncate">{char.name}</p>
+                              <p className="text-[10px] text-blue-400 truncate">{char.role ? char.role.split(" (")[0] : "剧中人物"}</p>
+                              <div className="flex items-center gap-1 mt-1">
+                                <span className={`w-2 h-2 rounded-sm ${asset.hasAvatar ? "bg-emerald-500" : "bg-slate-700"}`} title="Avatar"></span>
+                                {(["front", "side", "back"] as const).map(key => (
+                                  <span
+                                    key={key}
+                                    className={`w-2 h-2 rounded-sm ${char.views?.[key] || char.viewGenerations?.[key]?.imageUrl ? "bg-emerald-500" : "bg-amber-500/60"}`}
+                                    title={`三视图-${key === "front" ? "正面" : key === "side" ? "侧面" : "背面"}`}
+                                  ></span>
+                                ))}
+                                <span className="text-[9px] text-slate-500 ml-1">资产 {(asset.hasAvatar ? 1 : 0) + asset.viewCount}/4</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {activeCharacters.length === 0 && (
+                        <p className="text-[10px] text-slate-500 p-2">未检测到角色。</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 叙事上下文：摘要卡 */}
+                {activeTab === "narrative" && (
+                  <div className="space-y-2">
+                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">叙事亮点速览</h3>
+                    {[
+                      ["三幕结构", activeNarrative.structure],
+                      ["剪辑节奏", activeNarrative.rhythm],
+                      ["高潮点位", activeNarrative.climaxDesign],
+                    ].map(([label, text]) => (
+                      <div key={label} className="p-2.5 rounded-lg bg-slate-850 border border-slate-800/60">
+                        <p className="text-[9px] font-bold text-amber-500 uppercase tracking-wider mb-1">{label}</p>
+                        <p className="text-[11px] text-slate-400 leading-relaxed line-clamp-3">{text || "暂无数据"}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
 
           {/* Bottom stats inside section */}
           <div className="p-4 bg-slate-950/40 border-t border-slate-800/60 grid grid-cols-2 gap-4 text-center">

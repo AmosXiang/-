@@ -1,0 +1,1498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>创意生成 — 视频智能分析工作台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ══ TOKENS (same system) ══ */
+:root {
+  --brand-300:#a5b4fc;--brand-400:#818cf8;--brand-500:#6366f1;--brand-600:#4f46e5;--brand-700:#4338ca;
+  --surface-0:#0b0d14;--surface-1:#11141e;--surface-2:#181c2a;--surface-3:#1f2438;--surface-4:#272d47;--surface-5:#303759;
+  --border-subtle:rgba(255,255,255,.05);--border-default:rgba(255,255,255,.09);--border-strong:rgba(255,255,255,.16);--border-brand:rgba(99,102,241,.4);
+  --success:#22c55e;--success-bg:rgba(34,197,94,.10);--success-border:rgba(34,197,94,.2);
+  --warning:#f59e0b;--warning-bg:rgba(245,158,11,.10);--warning-border:rgba(245,158,11,.2);
+  --error:#ef4444;--error-bg:rgba(239,68,68,.08);--error-border:rgba(239,68,68,.2);
+  --neutral:#94a3b8;--neutral-bg:rgba(148,163,184,.09);
+  --txt-primary:#eef2ff;--txt-secondary:#94a3b8;--txt-tertiary:#5a6480;--txt-accent:#818cf8;
+  --t-xs:11px;--t-sm:13px;--t-base:14px;--t-lg:16px;--t-xl:20px;--t-2xl:26px;
+  --r-xs:4px;--r-sm:6px;--r-md:10px;--r-lg:14px;--r-xl:18px;
+  --sidebar-w:224px;--topbar-h:46px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{font-family:'Inter','Noto Sans SC',system-ui,sans-serif;background:var(--surface-0);color:var(--txt-primary);font-size:var(--t-base);line-height:1.5;-webkit-font-smoothing:antialiased;}
+button{cursor:pointer;border:none;background:none;font:inherit;}
+input,select,textarea{font:inherit;}
+ul{list-style:none;}
+::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--surface-4);border-radius:99px;}
+
+/* ══ SHELL ══ */
+.shell{display:grid;grid-template-rows:var(--topbar-h) 1fr;grid-template-columns:var(--sidebar-w) 1fr;height:100vh;overflow:hidden;}
+
+/* ══ TOPBAR ══ */
+.topbar{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 18px;background:var(--surface-1);border-bottom:1px solid var(--border-subtle);z-index:20;}
+.t-logo{display:flex;align-items:center;gap:8px;font-size:var(--t-sm);font-weight:600;flex-shrink:0;}
+.logo-sq{width:26px;height:26px;background:var(--brand-500);border-radius:var(--r-sm);display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;}
+.t-file{display:flex;align-items:center;gap:5px;padding:3px 10px;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-sm);font-size:var(--t-xs);color:var(--txt-secondary);}
+.t-file strong{color:var(--txt-primary);}
+.t-spacer{flex:1;}
+.spill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;font-size:var(--t-xs);font-weight:500;}
+.spill-success{background:var(--success-bg);color:var(--success);border:1px solid var(--success-border);}
+.spill .dot{width:5px;height:5px;border-radius:50%;background:currentColor;}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:5px 13px;border-radius:var(--r-sm);font-size:var(--t-sm);font-weight:500;transition:all .15s;white-space:nowrap;line-height:1.4;}
+.btn-primary{background:var(--brand-500);color:#fff;}
+.btn-primary:hover{background:var(--brand-600);}
+.btn-primary:disabled{background:var(--surface-3);color:var(--txt-tertiary);cursor:not-allowed;opacity:.6;}
+.btn-ghost{border:1px solid var(--border-default);color:var(--txt-secondary);}
+.btn-ghost:hover{background:var(--surface-3);color:var(--txt-primary);border-color:var(--border-strong);}
+.btn-sm{padding:4px 10px;font-size:var(--t-xs);}
+.btn-icon{width:28px;height:28px;padding:0;display:grid;place-items:center;border-radius:var(--r-sm);color:var(--txt-tertiary);}
+.btn-icon:hover{background:var(--surface-3);color:var(--txt-primary);}
+
+/* Tag */
+.tag{display:inline-flex;align-items:center;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:500;line-height:1.5;}
+.tg-n{background:var(--neutral-bg);color:var(--neutral);}
+.tg-b{background:rgba(99,102,241,.14);color:var(--brand-400);}
+.tg-s{background:var(--success-bg);color:var(--success);}
+.tg-w{background:var(--warning-bg);color:var(--warning);}
+.tg-e{background:var(--error-bg);color:var(--error);}
+
+/* ══ SIDEBAR ══ */
+.sidebar{background:var(--surface-1);border-right:1px solid var(--border-subtle);display:flex;flex-direction:column;overflow:hidden;}
+.snav{padding:8px;display:flex;flex-direction:column;gap:2px;flex:1;}
+.sitem{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:var(--r-md);font-size:var(--t-sm);color:var(--txt-tertiary);cursor:pointer;transition:all .12s;}
+.sitem:hover{background:var(--surface-2);color:var(--txt-secondary);}
+.sitem.on{background:var(--surface-4);color:var(--txt-primary);}
+.sitem-icon{font-size:14px;width:17px;text-align:center;flex-shrink:0;}
+.sitem-badge{margin-left:auto;background:var(--brand-500);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;}
+.sdiv{height:1px;background:var(--border-subtle);margin:4px 8px;}
+.sproject{padding:10px 13px;border-top:1px solid var(--border-subtle);margin-top:auto;}
+.sproject-name{font-size:var(--t-sm);font-weight:500;color:var(--txt-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:1px;}
+.sproject-sub{font-size:10px;color:var(--txt-tertiary);}
+
+/* ══ MAIN (wizard) ══ */
+.main{display:flex;flex-direction:column;overflow:hidden;}
+
+/* Mode toggle banner */
+.mode-banner{
+  display:flex;align-items:center;gap:12px;
+  padding:6px 20px;
+  background:var(--surface-2);border-bottom:1px solid var(--border-subtle);
+  flex-shrink:0;font-size:var(--t-xs);
+}
+.mode-pill{
+  display:flex;align-items:center;gap:5px;
+  padding:3px 10px;border-radius:99px;
+  border:1px solid var(--border-default);cursor:pointer;
+  font-size:var(--t-xs);font-weight:500;color:var(--txt-tertiary);
+  transition:all .15s;
+}
+.mode-pill.on{background:rgba(99,102,241,.12);border-color:var(--border-brand);color:var(--brand-400);}
+.mode-sep{color:var(--txt-tertiary);}
+
+/* ══ WIZARD HEADER ══ */
+.whdr{display:flex;align-items:stretch;padding:0 24px;background:var(--surface-1);border-bottom:1px solid var(--border-subtle);flex-shrink:0;}
+.wsteps{display:flex;align-items:center;gap:0;flex:1;}
+.wstep{display:flex;align-items:center;gap:9px;padding:12px 16px 12px 0;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;}
+.wstep:not(:last-child)::after{content:'›';font-size:17px;color:var(--txt-tertiary);margin-right:16px;}
+.wcircle{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:var(--t-xs);font-weight:700;flex-shrink:0;transition:all .2s;border:2px solid var(--border-default);color:var(--txt-tertiary);}
+.wtext{display:flex;flex-direction:column;}
+.wlabel{font-size:var(--t-xs);color:var(--txt-tertiary);line-height:1.2;}
+.wname{font-size:var(--t-sm);font-weight:500;color:var(--txt-tertiary);}
+.wstep.done .wcircle{background:var(--success-bg);border-color:var(--success);color:var(--success);}
+.wstep.done .wname{color:var(--txt-secondary);}
+.wstep.done .wlabel{color:var(--success);font-size:10px;}
+.wstep.active{border-bottom-color:var(--brand-500);}
+.wstep.active .wcircle{background:var(--brand-500);border-color:var(--brand-500);color:#fff;}
+.wstep.active .wname{color:var(--txt-primary);font-weight:600;}
+.wstep.active .wlabel{color:var(--brand-400);}
+.wactions{display:flex;align-items:center;gap:7px;padding-left:18px;border-left:1px solid var(--border-subtle);margin-left:auto;}
+
+/* ══ COMFYUI BLOCKING ALERT ══ */
+.comfy-alert{
+  display:flex;align-items:flex-start;gap:12px;
+  padding:12px 20px;
+  background:rgba(245,158,11,.07);
+  border-bottom:1px solid var(--warning-border);
+  flex-shrink:0;
+}
+.comfy-icon{font-size:16px;flex-shrink:0;margin-top:1px;}
+.comfy-body{flex:1;}
+.comfy-title{font-size:var(--t-sm);font-weight:600;color:var(--warning);margin-bottom:3px;}
+.comfy-desc{font-size:var(--t-xs);color:var(--txt-secondary);margin-bottom:8px;}
+.comfy-actions{display:flex;gap:6px;flex-wrap:wrap;}
+.comfy-btn{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:4px 10px;border-radius:var(--r-sm);
+  font-size:var(--t-xs);font-weight:600;cursor:pointer;
+  border:1px solid var(--warning-border);
+  color:var(--warning);background:transparent;
+  transition:all .15s;
+}
+.comfy-btn:hover{background:var(--warning-bg);}
+.comfy-btn.primary-action{background:var(--warning);color:#000;}
+.comfy-btn.primary-action:hover{background:#e08e00;}
+.comfy-close{color:var(--txt-tertiary);cursor:pointer;font-size:14px;align-self:flex-start;margin-top:2px;}
+.comfy-close:hover{color:var(--txt-primary);}
+
+/* ══ WIZARD BODY ══ */
+.wbody{flex:1;overflow:hidden;display:flex;}
+.wpanel{display:none;flex:1;flex-direction:column;overflow:hidden;}
+.wpanel.active{display:flex;}
+
+/* ══ STEP 1 & 2 LAYOUT ══ */
+.slayout{display:grid;grid-template-columns:1fr 280px;flex:1;overflow:hidden;}
+.scontent{overflow-y:auto;padding:24px 28px 40px;}
+.saside{background:var(--surface-1);border-left:1px solid var(--border-subtle);overflow-y:auto;padding:18px 16px;}
+.aside-title{font-size:var(--t-xs);font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;}
+
+/* Form */
+.fsec{margin-bottom:24px;}
+.fsec-title{font-size:var(--t-lg);font-weight:600;color:var(--txt-primary);margin-bottom:3px;}
+.fsec-desc{font-size:var(--t-sm);color:var(--txt-tertiary);margin-bottom:14px;}
+.frow{display:grid;gap:12px;margin-bottom:12px;}
+.frow.c2{grid-template-columns:1fr 1fr;}
+.fld{display:flex;flex-direction:column;gap:4px;}
+.flabel{font-size:var(--t-xs);font-weight:500;color:var(--txt-secondary);}
+.finput{width:100%;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-sm);color:var(--txt-primary);font-size:var(--t-sm);padding:7px 11px;outline:none;transition:border-color .15s;}
+.finput:focus{border-color:var(--brand-400);}
+.fta{resize:vertical;min-height:75px;line-height:1.6;}
+.fhint{font-size:var(--t-xs);color:var(--txt-tertiary);margin-top:2px;}
+
+/* Style cards */
+.style-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;}
+.sc{border:1.5px solid var(--border-default);border-radius:var(--r-md);overflow:hidden;cursor:pointer;transition:all .15s;position:relative;}
+.sc:hover{border-color:var(--border-strong);}
+.sc.on{border-color:var(--brand-500);box-shadow:0 0 0 2px rgba(99,102,241,.18);}
+.sc-prev{height:64px;display:flex;align-items:center;justify-content:center;font-size:20px;}
+.sc-name{padding:5px 9px;background:var(--surface-2);font-size:var(--t-xs);font-weight:500;color:var(--txt-secondary);border-top:1px solid var(--border-subtle);}
+.sc.on .sc-name{color:var(--brand-400);}
+.sc-chk{position:absolute;top:5px;right:5px;width:15px;height:15px;border-radius:50%;background:var(--brand-500);display:none;place-items:center;font-size:9px;color:#fff;}
+.sc.on .sc-chk{display:grid;}
+
+/* Chips */
+.chips{display:flex;flex-wrap:wrap;gap:5px;}
+.chip{padding:4px 11px;border-radius:99px;font-size:var(--t-xs);font-weight:500;border:1px solid var(--border-default);color:var(--txt-secondary);cursor:pointer;transition:all .15s;user-select:none;}
+.chip:hover{border-color:var(--brand-400);color:var(--brand-400);}
+.chip.on{background:rgba(99,102,241,.14);border-color:var(--brand-400);color:var(--brand-400);}
+
+/* Preset cards */
+.plist{display:flex;flex-direction:column;gap:7px;}
+.pcard{display:flex;align-items:center;gap:11px;padding:11px 13px;background:var(--surface-2);border:1.5px solid var(--border-default);border-radius:var(--r-md);cursor:pointer;transition:all .15s;}
+.pcard:hover{border-color:var(--border-strong);}
+.pcard.on{border-color:var(--brand-500);background:rgba(99,102,241,.06);}
+.pradio{width:15px;height:15px;border-radius:50%;border:2px solid var(--border-default);display:grid;place-items:center;flex-shrink:0;transition:all .15s;}
+.pcard.on .pradio{border-color:var(--brand-500);background:var(--brand-500);}
+.pcard.on .pradio::after{content:'';width:5px;height:5px;border-radius:50%;background:#fff;}
+.pinfo{flex:1;min-width:0;}
+.pname{font-size:var(--t-sm);font-weight:600;color:var(--txt-primary);}
+.pdesc{font-size:var(--t-xs);color:var(--txt-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* ══ STEP 2 CHARS ══ */
+.cg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;}
+.ccard{background:var(--surface-2);border:1.5px solid var(--border-default);border-radius:var(--r-lg);overflow:hidden;cursor:pointer;transition:all .18s;position:relative;}
+.ccard:hover{border-color:var(--border-strong);transform:translateY(-1px);}
+.ccard.on{border-color:var(--brand-500);box-shadow:0 0 0 2px rgba(99,102,241,.16);}
+.cavatar{width:100%;aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:36px;position:relative;}
+.cavatar-badge{position:absolute;bottom:5px;right:5px;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;background:rgba(11,13,20,.8);color:var(--txt-tertiary);}
+.ccard.on .cavatar-badge{background:var(--brand-500);color:#fff;}
+.cinfo{padding:8px 11px;}
+.cname{font-size:var(--t-sm);font-weight:600;color:var(--txt-primary);margin-bottom:2px;}
+.crole{font-size:var(--t-xs);color:var(--txt-tertiary);}
+
+/* Avatar status indicator */
+.avatar-status{display:flex;align-items:center;gap:4px;font-size:10px;margin-top:3px;}
+.avatar-status.has-avatar{color:var(--success);}
+.avatar-status.no-avatar{color:var(--warning);}
+
+/* ── Character model generator panel (matches index.html) ── */
+.cmodel-panel{background:var(--surface-3);border:1px solid var(--border-default);border-radius:var(--r-lg);padding:14px;margin-bottom:14px;}
+.cmodel-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px;}
+.cmodel-col{display:flex;flex-direction:column;gap:5px;}
+.cmodel-label{font-size:var(--t-xs);font-weight:600;color:var(--txt-secondary);}
+.cmodel-select{width:100%;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-sm);color:var(--txt-primary);font-size:var(--t-sm);padding:6px 10px;outline:none;}
+.cmodel-btn-master{background:var(--brand-500);color:#fff;font-weight:600;width:100%;text-align:center;justify-content:center;font-size:var(--t-sm);border-radius:var(--r-sm);padding:8px;margin-top:6px;transition:all .15s;}
+.cmodel-btn-master:hover{background:var(--brand-600);}
+.cmodel-btn-triview{background:#a855f7;color:#fff;font-weight:600;width:100%;text-align:center;justify-content:center;font-size:var(--t-sm);border-radius:var(--r-sm);padding:8px;margin-top:6px;transition:all .15s;}
+.cmodel-btn-triview:hover{background:#9333ea;}
+.cmodel-subtext{font-size:10px;color:var(--txt-tertiary);margin-top:4px;}
+.cmodel-status-box{background:var(--surface-4);border:1px solid var(--border-subtle);border-radius:var(--r-sm);padding:8px 10px;margin-top:6px;font-size:10px;}
+.cmodel-status-hdr{display:flex;justify-content:between;margin-bottom:4px;}
+.cmodel-btn-link{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;color:var(--brand-400);cursor:pointer;text-decoration:none;}
+.cmodel-btn-link:hover{text-decoration:underline;}
+
+.btn-generate-shots{background:rgba(34,197,94,.12);border:1px solid var(--success-border);color:var(--success);width:100%;justify-content:center;padding:9px;font-weight:600;font-size:var(--t-sm);border-radius:var(--r-sm);transition:all .15s;margin-top:4px;}
+.btn-generate-shots:hover{background:var(--success-bg);border-color:var(--success);}
+
+
+.cadd{background:var(--surface-2);border:1.5px dashed var(--border-default);border-radius:var(--r-lg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;aspect-ratio:1;cursor:pointer;transition:all .15s;color:var(--txt-tertiary);font-size:var(--t-xs);}
+.cadd:hover{border-color:var(--brand-400);color:var(--brand-400);background:rgba(99,102,241,.04);}
+
+/* ══ STEP 3 — SHOT WORKBENCH ══ */
+.shot-wb{display:grid;grid-template-columns:240px 1fr 256px;flex:1;overflow:hidden;}
+
+/* Shot list col */
+.slcol{background:var(--surface-1);border-right:1px solid var(--border-subtle);display:flex;flex-direction:column;overflow:hidden;}
+.slhdr{padding:12px 14px 9px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;}
+.slhdr-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;}
+.slhdr-title{font-size:var(--t-sm);font-weight:600;color:var(--txt-primary);}
+.sl-prog-bar{height:3px;background:var(--surface-4);border-radius:99px;overflow:hidden;margin-bottom:4px;}
+.sl-prog-fill{height:100%;border-radius:99px;background:var(--brand-500);transition:width .4s ease;}
+.sl-prog-lbl{font-size:10px;color:var(--txt-tertiary);}
+.slitems{flex:1;overflow-y:auto;padding:6px;}
+.slitem{display:flex;align-items:center;gap:8px;padding:8px 9px;border-radius:var(--r-md);cursor:pointer;transition:all .12s;border:1px solid transparent;margin-bottom:2px;}
+.slitem:hover{background:var(--surface-2);}
+.slitem.on{background:var(--surface-4);border-color:var(--border-default);}
+.sln{font-size:10px;font-weight:700;color:var(--txt-tertiary);width:16px;text-align:right;flex-shrink:0;}
+.sli-body{flex:1;min-width:0;}
+.sli-tc{font-size:10px;color:var(--txt-tertiary);font-family:'JetBrains Mono',monospace;margin-bottom:1px;}
+.sli-name{font-size:var(--t-xs);color:var(--txt-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sli-st{width:19px;height:19px;border-radius:50%;display:grid;place-items:center;font-size:10px;flex-shrink:0;}
+.sli-st.done{background:var(--success-bg);color:var(--success);}
+.sli-st.active{background:rgba(99,102,241,.15);color:var(--brand-400);}
+.sli-st.pending{background:var(--surface-3);color:var(--txt-tertiary);}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+.sli-st.active{animation:blink 1.8s infinite;}
+
+/* Batch bar */
+.batch-bar{padding:8px 12px;border-top:1px solid var(--border-subtle);background:var(--surface-2);display:flex;align-items:center;gap:6px;flex-shrink:0;}
+.batch-bar span{font-size:var(--t-xs);color:var(--txt-tertiary);}
+
+/* Shot detail col */
+.sdcol{overflow-y:auto;padding:20px 22px;display:flex;flex-direction:column;gap:14px;}
+
+/* Shot header */
+.sd-hdr{display:flex;align-items:flex-start;gap:10px;}
+.sd-num{width:34px;height:34px;border-radius:var(--r-md);background:var(--brand-500);color:#fff;display:grid;place-items:center;font-size:var(--t-lg);font-weight:700;flex-shrink:0;}
+.sd-meta{flex:1;}
+.sd-tc{font-size:var(--t-xs);color:var(--txt-tertiary);font-family:'JetBrains Mono',monospace;margin-bottom:2px;}
+.sd-title{font-size:var(--t-xl);font-weight:600;color:var(--txt-primary);}
+.sd-moods{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;}
+
+/* Script box */
+.script-box{background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-lg);}
+.script-hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 13px;border-bottom:1px solid var(--border-subtle);}
+.script-label{display:flex;align-items:center;gap:5px;font-size:var(--t-xs);font-weight:600;color:var(--brand-400);}
+.ai-pulse{width:5px;height:5px;border-radius:50%;background:var(--brand-400);animation:blink 1.5s infinite;}
+.script-body{padding:13px;font-size:var(--t-sm);color:var(--txt-secondary);line-height:1.75;white-space:pre-wrap;}
+.script-foot{padding:8px 13px;border-top:1px solid var(--border-subtle);display:flex;gap:5px;flex-wrap:wrap;}
+
+/* Role binding row */
+.rbind-box{background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-lg);padding:12px 13px;}
+.rbind-title{font-size:var(--t-xs);font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;}
+.rbind-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.rbchip{display:flex;align-items:center;gap:5px;padding:4px 9px;border-radius:99px;background:var(--surface-3);border:1px solid var(--border-default);font-size:var(--t-xs);color:var(--txt-secondary);cursor:pointer;transition:all .15s;position:relative;}
+.rbchip:hover{border-color:var(--border-strong);}
+.rbchip.bound{background:rgba(99,102,241,.12);border-color:var(--border-brand);color:var(--brand-400);}
+.rbchip .ava{font-size:12px;}
+/* Avatar warning badge */
+.rbchip .no-ava{
+  position:absolute;top:-4px;right:-4px;
+  width:10px;height:10px;border-radius:50%;
+  background:var(--warning);border:1.5px solid var(--surface-2);
+  font-size:7px;display:grid;place-items:center;color:#000;font-weight:700;
+}
+
+/* ComfyUI inline (blocking) — inside step 3 */
+.comfy-inline{
+  background:rgba(245,158,11,.06);border:1px solid var(--warning-border);
+  border-radius:var(--r-lg);padding:12px 14px;
+}
+.comfy-inline-hdr{display:flex;align-items:center;gap:7px;margin-bottom:8px;}
+.comfy-inline-title{font-size:var(--t-sm);font-weight:600;color:var(--warning);}
+.comfy-inline-desc{font-size:var(--t-xs);color:var(--txt-secondary);margin-bottom:10px;}
+.comfy-inline-btns{display:flex;gap:6px;flex-wrap:wrap;}
+.cbtn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:var(--r-sm);font-size:var(--t-xs);font-weight:600;border:1px solid var(--warning-border);color:var(--warning);background:transparent;cursor:pointer;transition:all .15s;}
+.cbtn:hover{background:var(--warning-bg);}
+.cbtn.primary{background:var(--warning);color:#000;}
+.cbtn.primary:hover{background:#d18a00;}
+
+/* Global Art Direction box */
+.gad-box{background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-lg);overflow:hidden;}
+.gad-hdr{padding:9px 13px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between;}
+.gad-title{font-size:var(--t-xs);font-weight:600;color:var(--txt-primary);}
+.gad-body{padding:11px 13px;font-size:var(--t-xs);color:var(--txt-secondary);line-height:1.6;}
+.gad-layer{display:flex;flex-direction:column;gap:5px;}
+.gad-row{display:flex;gap:6px;align-items:baseline;}
+.gad-key{font-size:10px;color:var(--txt-tertiary);font-weight:600;text-transform:uppercase;width:56px;flex-shrink:0;}
+.gad-val{font-size:var(--t-xs);color:var(--txt-secondary);}
+
+/* ══ STEP 3 RIGHT CONTEXT ══ */
+.scxtcol{background:var(--surface-1);border-left:1px solid var(--border-subtle);overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:18px;}
+.ctx-sec{display:flex;flex-direction:column;gap:8px;}
+.ctx-title{font-size:var(--t-xs);font-weight:600;color:var(--txt-tertiary);text-transform:uppercase;letter-spacing:.07em;}
+
+/* Character status card */
+.char-status-card{background:var(--surface-2);border:1px solid var(--border-subtle);border-radius:var(--r-md);padding:8px 10px;}
+.csc-top{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.csc-ava{font-size:18px;}
+.csc-info{flex:1;min-width:0;}
+.csc-name{font-size:var(--t-sm);font-weight:500;color:var(--txt-primary);}
+.csc-role{font-size:10px;color:var(--txt-tertiary);}
+.csc-remove{color:var(--txt-tertiary);cursor:pointer;font-size:13px;}
+.csc-remove:hover{color:var(--error);}
+.csc-statuses{display:flex;gap:5px;flex-wrap:wrap;}
+.csc-st{display:flex;align-items:center;gap:3px;font-size:10px;font-weight:500;}
+.csc-st.ok{color:var(--success);}
+.csc-st.warn{color:var(--warning);}
+.csc-st.warn button{font-size:10px;font-weight:600;color:var(--warning);text-decoration:underline;cursor:pointer;padding:0;}
+
+/* Settings */
+.ctx-setting{display:flex;align-items:center;gap:8px;}
+.ctx-setting span{font-size:var(--t-xs);color:var(--txt-secondary);flex:1;}
+.toggle{width:32px;height:17px;background:var(--surface-4);border-radius:99px;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;}
+.toggle.on{background:var(--brand-500);}
+.toggle::after{content:'';position:absolute;top:2px;left:2px;width:13px;height:13px;background:#fff;border-radius:50%;transition:transform .2s;}
+.toggle.on::after{transform:translateX(15px);}
+.ctx-select{width:100%;appearance:none;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-sm);color:var(--txt-secondary);font-size:var(--t-xs);padding:5px 7px;cursor:pointer;outline:none;}
+
+/* ══ CHARACTER PORTRAIT STRIP (Step 3 top) ══ */
+.char-portrait-strip {
+  display:flex; gap:8px; overflow-x:auto; align-items:flex-end;
+  padding:10px 16px 8px;
+  background:var(--surface-1); border-bottom:1px solid var(--border-subtle);
+  flex-shrink:0;
+}
+.char-portrait-strip::-webkit-scrollbar { height:3px; }
+.cps-item {
+  display:flex; flex-direction:column; align-items:center; gap:4px;
+  cursor:pointer; transition:all .15s; flex-shrink:0;
+}
+.cps-avatar {
+  width:48px; height:48px; border-radius:var(--r-md);
+  border:2px solid transparent; transition:border-color .15s;
+  display:flex; align-items:center; justify-content:center; font-size:24px;
+  position:relative;
+}
+.cps-item.bound .cps-avatar { border-color:var(--brand-500); box-shadow:0 0 0 2px rgba(99,102,241,.2); }
+.cps-item.warn .cps-avatar { border-color:var(--warning); }
+.cps-avatar .ava-warn {
+  position:absolute; bottom:-2px; right:-2px;
+  width:13px; height:13px; border-radius:50%;
+  background:var(--warning); border:1.5px solid var(--surface-1);
+  display:flex; align-items:center; justify-content:center;
+  font-size:8px; color:#000; font-weight:700;
+}
+.cps-name { font-size:9px; color:var(--txt-tertiary); max-width:52px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cps-item.bound .cps-name { color:var(--brand-400); }
+.cps-item.warn .cps-name { color:var(--warning); }
+.cps-divider { width:1px; height:40px; background:var(--border-subtle); align-self:center; flex-shrink:0; }
+.cps-model-info {
+  display:flex; flex-direction:column; gap:3px;
+  padding:4px 10px; background:var(--surface-2);
+  border:1px solid var(--border-default); border-radius:var(--r-sm);
+  flex-shrink:0;
+}
+.cps-model-row { display:flex; align-items:center; gap:5px; font-size:10px; }
+.cps-model-dot { width:5px; height:5px; border-radius:50%; }
+.cps-run-btn {
+  margin-left:auto; flex-shrink:0; align-self:center;
+}
+
+/* ══ GENERATED IMAGE CARD ══ */
+.gen-img-card {
+  background:var(--surface-2); border:1px solid var(--border-default);
+  border-radius:var(--r-lg); overflow:hidden;
+}
+.gen-img-hdr {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 13px; border-bottom:1px solid var(--border-subtle);
+}
+.gen-img-label { font-size:var(--t-xs); font-weight:600; color:var(--txt-primary); }
+.gen-img-meta { font-size:10px; color:var(--txt-tertiary); }
+.gen-img-preview {
+  width:100%; aspect-ratio:16/9;
+  display:flex; align-items:center; justify-content:center;
+  font-size:28px; flex-direction:column; gap:6px;
+  font-size:var(--t-xs); color:var(--txt-tertiary);
+  background:var(--surface-3);
+  position:relative; overflow:hidden;
+}
+.gen-img-preview.has-image { background:#000; }
+.gen-img-preview img { width:100%; height:100%; object-fit:cover; position:absolute; inset:0; }
+.gen-img-preview-placeholder { display:flex; flex-direction:column; align-items:center; gap:6px; z-index:1; }
+.gen-img-placeholder-icon { font-size:26px; }
+.gen-img-actions {
+  display:flex; align-items:center; gap:6px; padding:8px 13px;
+  flex-wrap:wrap;
+}
+.gen-img-prompt {
+  padding:8px 13px; border-top:1px solid var(--border-subtle);
+  font-size:10px; color:var(--txt-tertiary); line-height:1.5;
+  font-family:'JetBrains Mono',monospace;
+}
+
+/* ══ STEP 4 EXPORT ══ */
+.export-wrap{flex:1;overflow-y:auto;padding:24px 28px 48px;}
+.export-layout{display:grid;grid-template-columns:1fr 340px;gap:24px;width:100%;max-width:1160px;margin:0 auto;}
+.export-storyboard{background:var(--surface-1);border:1px solid var(--border-default);border-radius:var(--r-xl);padding:20px;overflow-y:auto;max-height:80vh;}
+.export-storyboard-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.es-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;}
+.es-card{background:var(--surface-2);border:1px solid var(--border-subtle);border-radius:var(--r-md);overflow:hidden;position:relative;}
+.es-card-img{width:100%;aspect-ratio:16/9;background:linear-gradient(135deg,#1f1a3a,#0f0c1b);display:flex;align-items:center;justify-content:center;font-size:18px;position:relative;}
+.es-card-num{position:absolute;top:4px;left:4px;background:rgba(0,0,0,.7);padding:1px 5px;border-radius:var(--r-xs);font-size:9px;font-family:'JetBrains Mono',monospace;color:var(--txt-primary);border:1px solid var(--border-subtle);}
+.es-card-body{padding:8px;font-size:10px;}
+.es-card-title{font-weight:600;color:var(--txt-primary);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.es-card-txt{color:var(--txt-tertiary);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+
+.export-control-col{display:flex;flex-direction:column;gap:16px;}
+.export-banner{padding:20px;background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-lg);text-align:center;}
+.export-icon{font-size:32px;margin-bottom:8px;}
+.export-title{font-size:var(--t-lg);font-weight:700;color:var(--txt-primary);margin-bottom:4px;}
+.export-desc{font-size:var(--t-xs);color:var(--txt-secondary);}
+.export-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+.estat{background:var(--surface-2);border:1px solid var(--border-subtle);border-radius:var(--r-sm);padding:8px;text-align:center;}
+.estat-num{font-size:20px;font-weight:700;color:var(--txt-primary);line-height:1;margin-bottom:2px;}
+.estat-num sub{font-size:12px;font-weight:400;color:var(--txt-secondary);vertical-align:baseline;}
+.estat-lbl{font-size:9px;color:var(--txt-tertiary);}
+
+.export-config-box{background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-lg);padding:14px;}
+.export-fmts{background:var(--surface-2);border:1px solid var(--border-default);border-radius:var(--r-lg);overflow:hidden;}
+.efmt-hdr{padding:10px 14px;border-bottom:1px solid var(--border-subtle);font-size:var(--t-xs);font-weight:600;color:var(--txt-primary);text-transform:uppercase;letter-spacing:.05em;}
+.efmt{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background .12s;}
+.efmt:last-child{border-bottom:none;}
+.efmt:hover{background:var(--surface-3);}
+.efmt-icon{font-size:16px;width:24px;text-align:center;flex-shrink:0;}
+.efmt-info{flex:1;}
+.efmt-name{font-size:var(--t-sm);font-weight:500;color:var(--txt-primary);}
+.efmt-desc{font-size:10px;color:var(--txt-tertiary);}
+.efmt-dl{font-size:11px;font-weight:600;color:var(--brand-400);}
+
+/* Divider */
+.div{height:1px;background:var(--border-subtle);margin:20px 0;}
+
+/* ══ P0-1: Confirm overlay ══ */
+.confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;display:flex;align-items:center;justify-content:center;animation:fadeIn .15s ease;}
+.confirm-modal{background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--r-xl);padding:24px;width:420px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.4);}
+.confirm-title{font-size:var(--t-lg);font-weight:700;color:var(--warning);margin-bottom:8px;display:flex;align-items:center;gap:8px;}
+.confirm-body{font-size:var(--t-sm);color:var(--txt-secondary);line-height:1.7;margin-bottom:16px;}
+.confirm-charlist{display:flex;flex-direction:column;gap:4px;margin:8px 0;}
+.confirm-charitem{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--warning-bg);border:1px solid var(--warning-border);border-radius:var(--r-sm);font-size:var(--t-xs);color:var(--warning);}
+.confirm-actions{display:flex;gap:8px;justify-content:flex-end;}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* Highlight missing ccard */
+.ccard.highlight-missing{border-color:var(--warning)!important;box-shadow:0 0 0 2px var(--warning-border)!important;animation:pulseMissing 1.2s ease-in-out 3;}
+@keyframes pulseMissing{0%,100%{box-shadow:0 0 0 2px var(--warning-border)}50%{box-shadow:0 0 0 4px rgba(245,158,11,.35)}}
+
+/* ══ P0-2: ComfyUI global pill ══ */
+.comfy-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:99px;font-size:var(--t-xs);font-weight:600;cursor:pointer;transition:all .15s;position:relative;user-select:none;}
+.comfy-pill.connected{background:var(--success-bg);color:var(--success);border:1px solid var(--success-border);}
+.comfy-pill.disconnected{background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning-border);}
+.comfy-pill .cpill-dot{width:6px;height:6px;border-radius:50%;background:currentColor;}
+.comfy-pop{display:none;position:absolute;top:calc(100% + 6px);right:0;background:var(--surface-3);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:4px;min-width:180px;z-index:50;box-shadow:0 6px 20px rgba(0,0,0,.35);}
+.comfy-pop.open{display:block;}
+.comfy-pop-item{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:var(--r-sm);font-size:var(--t-xs);font-weight:500;color:var(--txt-secondary);cursor:pointer;transition:all .12s;white-space:nowrap;}
+.comfy-pop-item:hover{background:var(--surface-4);color:var(--txt-primary);}
+.comfy-pop-item.primary{color:var(--warning);font-weight:600;}
+
+/* Image card inline comfy link */
+.comfy-inline-link{font-size:var(--t-xs);color:var(--warning);cursor:pointer;display:flex;align-items:center;gap:4px;padding:10px 13px;}
+.comfy-inline-link:hover{text-decoration:underline;}
+
+/* ══ P2-8: Bottom CTA bar ══ */
+.bottom-cta{display:flex;gap:8px;justify-content:flex-end;padding:16px 28px;border-top:1px solid var(--border-subtle);background:var(--surface-1);flex-shrink:0;}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- ══════ TOPBAR ══════ -->
+<header class="topbar">
+  <div class="t-logo"><div class="logo-sq">分</div>视频智能分析工作台</div>
+  <div class="t-file"><strong>蒸汽飞空艇与少女</strong> <span style="color:var(--txt-tertiary)">/</span> 孤岛豪宅谋杀案</div>
+  <div class="t-spacer"></div>
+  <div class="spill spill-success"><span class="dot"></span>分析完成</div>
+  <span style="background:var(--brand-500);color:#fff;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;margin-right:4px">UX_BUILD: P0P1P2_20260707</span>
+  <a href="index.html"><button class="btn btn-ghost btn-sm">← 返回分镜列表</button></a>
+</header>
+
+<!-- ══════ SIDEBAR ══════ -->
+<aside class="sidebar">
+  <nav class="snav">
+    <div class="sitem" onclick="saveProgressAndNav('index.html')"><span class="sitem-icon">⚡</span>分镜脉络</div>
+    <div class="sitem"><span class="sitem-icon">👤</span>人物画像</div>
+    <div class="sitem"><span class="sitem-icon">🔗</span>叙事与亮点</div>
+    <div class="sdiv"></div>
+    <div class="sitem on"><span class="sitem-icon">✨</span>创意生成<span class="sitem-badge">NEW</span></div>
+  </nav>
+  <div class="sproject">
+    <div class="sproject-name">蒸汽飞空艇与少女</div>
+    <div class="sproject-sub">17 分镜 · 65:37 · 4 角色绑定</div>
+  </div>
+</aside>
+
+<!-- ══════ MAIN ══════ -->
+<main class="main">
+
+  <!-- Mode banner (wizard only) -->
+  <div class="mode-banner">
+    <span style="font-size:var(--t-xs);color:var(--txt-tertiary)">📋 创作向导 — 4 步引导完成剧本创建</span>
+  </div>
+
+  <!-- Wizard header -->
+  <div class="whdr" id="wizardHdr">
+    <div class="wsteps">
+      <div class="wstep done" id="ws1" onclick="goStep(1)">
+        <div class="wcircle">✓</div>
+        <div class="wtext"><span class="wlabel">已完成</span><span class="wname">风格设定</span></div>
+      </div>
+      <div class="wstep done" id="ws2" onclick="goStep(2)">
+        <div class="wcircle">✓</div>
+        <div class="wtext"><span class="wlabel">已完成</span><span class="wname">角色配置</span></div>
+      </div>
+      <div class="wstep active" id="ws3" onclick="goStep(3)">
+        <div class="wcircle">3</div>
+        <div class="wtext"><span class="wlabel">进行中</span><span class="wname">分镜生成</span></div>
+      </div>
+      <div class="wstep" id="ws4" onclick="goStep(4)">
+        <div class="wcircle">4</div>
+        <div class="wtext"><span class="wlabel">步骤 4</span><span class="wname">导出</span></div>
+      </div>
+    </div>
+    <div class="wactions">
+      <!-- P0-2: ComfyUI global pill -->
+      <div class="comfy-pill disconnected" id="comfyPill" onclick="toggleComfyPop()">
+        <span class="cpill-dot"></span>
+        <span id="comfyPillLabel">ComfyUI 未连接</span>
+        <div class="comfy-pop" id="comfyPop">
+          <div class="comfy-pop-item primary" onclick="event.stopPropagation();alert('正在启动 ComfyUI…')">▶ 启动 ComfyUI</div>
+          <div class="comfy-pop-item" onclick="event.stopPropagation();alert('正在检测…')">↺ 重新检测</div>
+          <div class="comfy-pop-item" onclick="event.stopPropagation();alert('日志')">📋 查看日志</div>
+          <div class="comfy-pop-item" onclick="event.stopPropagation();alert('配置')">⚙ 配置</div>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="prevBtn" onclick="prevStep()">← 上一步</button>
+      <button class="btn btn-primary btn-sm" id="nextBtn" onclick="nextStep()">下一步 →</button>
+    </div>
+  </div>
+
+  <!-- Wizard body -->
+  <div class="wbody">
+
+    <!-- ━━ STEP 1: 风格设定 ━━ -->
+    <div class="wpanel" id="p1">
+      <div class="slayout">
+        <div class="scontent">
+          <div class="fsec">
+            <div class="fsec-title">全局艺术方向</div>
+            <div class="fsec-desc">这组设定将作为 Global Style Layer 注入每个分镜——不替换原始画面描述，只叠加在其上统一风格</div>
+            <div class="frow">
+              <div class="fld">
+                <label class="flabel">风格提示词 (Global Art Direction)</label>
+                <textarea class="finput fta" placeholder="Stylized animation art, bold outlines...">Stylized animation art, bold outlines, warm sunset backlighting, cold shadow tones, expressive brushwork, concept art aesthetic, hand-drawn texture, cinematic color grading</textarea>
+                <div class="fhint">💡 建议参考：基础风格 + 光线特征 + 材质感 + 色调偏向</div>
+              </div>
+            </div>
+          </div>
+          <div class="div"></div>
+          <div class="fsec">
+            <div class="fsec-title">风格模板</div>
+            <div class="fsec-desc">快速选择，选后自动填充上方提示词（可再手动修改）</div>
+            <div class="style-grid">
+              <div class="sc on" onclick="selStyle(this)"><div class="sc-prev" style="background:linear-gradient(135deg,#1e1b4b,#3730a3)">🎨</div><div class="sc-name">赛博朋克动画</div><div class="sc-chk">✓</div></div>
+              <div class="sc" onclick="selStyle(this)"><div class="sc-prev" style="background:linear-gradient(135deg,#1c1917,#57534e)">📷</div><div class="sc-name">电影写实</div><div class="sc-chk">✓</div></div>
+              <div class="sc" onclick="selStyle(this)"><div class="sc-prev" style="background:linear-gradient(135deg,#0f172a,#1e3a5f)">🌊</div><div class="sc-name">水墨国风</div><div class="sc-chk">✓</div></div>
+              <div class="sc" onclick="selStyle(this)"><div class="sc-prev" style="background:linear-gradient(135deg,#14532d,#065f46)">🌿</div><div class="sc-name">手绘插画</div><div class="sc-chk">✓</div></div>
+              <div class="sc" onclick="selStyle(this)"><div class="sc-prev" style="background:linear-gradient(135deg,#1f2937,#374151)">🎭</div><div class="sc-name">黑色电影</div><div class="sc-chk">✓</div></div>
+              <div class="sc" onclick="selStyle(this)"><div class="sc-prev" style="background:linear-gradient(135deg,#1a1a2e,#16213e)">⚙️</div><div class="sc-name">自定义</div><div class="sc-chk">✓</div></div>
+            </div>
+          </div>
+          <div class="div"></div>
+          <div class="fsec">
+            <div class="fsec-title">情绪基调</div>
+            <div class="fsec-desc">影响 AI 脚本的叙述节奏与措辞风格（可多选）</div>
+            <div class="chips">
+              <div class="chip on" onclick="this.classList.toggle('on')">震撼史诗</div>
+              <div class="chip on" onclick="this.classList.toggle('on')">神秘悬疑</div>
+              <div class="chip" onclick="this.classList.toggle('on')">温情治愈</div>
+              <div class="chip" onclick="this.classList.toggle('on')">轻松幽默</div>
+              <div class="chip" onclick="this.classList.toggle('on')">黑暗压抑</div>
+              <div class="chip" onclick="this.classList.toggle('on')">热血燃情</div>
+              <div class="chip" onclick="this.classList.toggle('on')">浪漫唯美</div>
+              <div class="chip" onclick="this.classList.toggle('on')">末日惊悚</div>
+            </div>
+          </div>
+          <div class="div"></div>
+          <div class="fsec">
+            <div class="fsec-title">模型选择</div>
+            <div class="fsec-desc">LLM 用于脚本生成，ComfyUI 用于图像生成</div>
+            <div class="plist">
+              <div class="pcard on" onclick="selPreset(this)">
+                <div class="pradio"></div>
+                <div class="pinfo"><div class="pname">Pure Film-4E</div><div class="pdesc">不可用（本地）· tachi-bili</div></div>
+                <span class="tag tg-b">当前</span>
+              </div>
+              <div class="pcard" onclick="selPreset(this)">
+                <div class="pradio"></div>
+                <div class="pinfo"><div class="pname">GPT-4o</div><div class="pdesc">脚本质量最高，响应稍慢</div></div>
+                <span class="tag tg-n">云端</span>
+              </div>
+              <div class="pcard" onclick="selPreset(this)">
+                <div class="pradio"></div>
+                <div class="pinfo"><div class="pname">Claude Sonnet</div><div class="pdesc">长上下文，适合批量分镜</div></div>
+                <span class="tag tg-n">云端</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="saside">
+          <div class="aside-title">当前配置</div>
+          <div style="background:linear-gradient(135deg,#1e1b4b,#3730a3);border-radius:var(--r-md);padding:16px;text-align:center;margin-bottom:12px;font-size:28px">🎨</div>
+          <div style="font-size:var(--t-sm);font-weight:600;color:var(--txt-primary);margin-bottom:3px">赛博朋克动画</div>
+          <div style="font-size:var(--t-xs);color:var(--txt-tertiary);margin-bottom:14px">Stylized animation art, bold outlines...</div>
+          <div class="aside-title" style="margin-top:14px">情绪</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px">
+            <span class="tag tg-b">震撼史诗</span>
+            <span class="tag tg-b">神秘悬疑</span>
+          </div>
+          <div style="height:1px;background:var(--border-subtle);margin:12px 0"></div>
+          <div class="aside-title">服务状态</div>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <div style="display:flex;align-items:center;gap:7px;font-size:var(--t-xs)">
+              <span style="width:6px;height:6px;border-radius:50%;background:var(--success);flex-shrink:0"></span>
+              <span style="color:var(--txt-secondary);flex:1">LLM 脚本生成</span>
+              <span style="color:var(--success)">就绪</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;font-size:var(--t-xs);cursor:pointer" onclick="toggleComfyPop()">
+              <span style="width:6px;height:6px;border-radius:50%;background:var(--warning);flex-shrink:0"></span>
+              <span style="color:var(--txt-secondary);flex:1">ComfyUI 图像生成</span>
+              <span style="color:var(--warning)">→ 查看全局状态</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="bottom-cta">
+        <button class="btn btn-primary btn-sm" onclick="nextStep()">下一步：角色配置 →</button>
+      </div>
+    </div>
+
+    <!-- ━━ STEP 2: 角色配置 ━━ -->
+    <div class="wpanel" id="p2">
+      <div class="slayout">
+        <div class="scontent">
+          <div class="fsec">
+            <div class="fsec-title">角色配置</div>
+            <div class="fsec-desc">勾选参与本次生成的角色。Avatar 状态直接影响图像生成一致性——缺失时图像无法使用 PuLID 参考</div>
+            <div class="cg">
+              <div class="ccard on" data-char-name="艾达" data-has-avatar="true" onclick="this.classList.toggle('on')">
+                <div class="cavatar" style="background:linear-gradient(135deg,#312e81,#4c1d95)">👩‍🦱<span class="cavatar-badge">主角</span></div>
+                <div class="cinfo">
+                  <div class="cname">艾达</div>
+                  <div class="crole">女主角 · 飞行员</div>
+                  <div class="avatar-status has-avatar">✓ Avatar 已设置</div>
+                </div>
+              </div>
+              <div class="ccard on" data-char-name="维克托" data-has-avatar="true" onclick="this.classList.toggle('on')">
+                <div class="cavatar" style="background:linear-gradient(135deg,#1e3a5f,#1e40af)">🧔<span class="cavatar-badge">配角</span></div>
+                <div class="cinfo">
+                  <div class="cname">维克托</div>
+                  <div class="crole">机械师 · 副船长</div>
+                  <div class="avatar-status has-avatar">✓ Avatar 已设置</div>
+                </div>
+              </div>
+              <div class="ccard" data-char-name="奥古斯" data-has-avatar="false" onclick="this.classList.toggle('on')">
+                <div class="cavatar" style="background:linear-gradient(135deg,#14532d,#065f46)">🤖<span class="cavatar-badge">AI</span></div>
+                <div class="cinfo">
+                  <div class="cname">奥古斯</div>
+                  <div class="crole">自动驾驶系统</div>
+                  <div class="avatar-status no-avatar">⚠ 缺少 Avatar</div>
+                </div>
+              </div>
+              <div class="ccard" data-char-name="伯爵" data-has-avatar="false" onclick="this.classList.toggle('on')">
+                <div class="cavatar" style="background:linear-gradient(135deg,#7c2d12,#9a3412)">👴<span class="cavatar-badge">反派</span></div>
+                <div class="cinfo">
+                  <div class="cname">伯爵</div>
+                  <div class="crole">公会领袖</div>
+                  <div class="avatar-status no-avatar">⚠ 缺少 Avatar</div>
+                </div>
+              </div>
+              <div class="cadd">
+                <span style="font-size:20px">+</span>
+                <span>添加角色</span>
+              </div>
+          </div>
+          <div class="div"></div>
+          
+          <!-- Batch character asset generation panel (P1-4: renamed, removed shot generation button) -->
+          <div class="fsec">
+            <div class="fsec-title">批量生成全部角色资产</div>
+            <div class="fsec-desc">配置一致性生成算法，控制分镜生成时的参考源与优先级</div>
+            
+            <div class="cmodel-panel" style="margin-bottom:0">
+              <div class="cmodel-row">
+                <!-- Master model column -->
+                <div class="cmodel-col">
+                  <label class="cmodel-label">角色母版模型选择</label>
+                  <select class="cmodel-select">
+                    <option>Pure Klein 4B</option>
+                    <option>Pure Film-4E</option>
+                  </select>
+                  <button class="cmodel-btn-master" onclick="alert('正在生成选定角色母版…')">生成角色母版</button>
+                  <div class="cmodel-status-box">
+                    <div class="cmodel-status-hdr">
+                      <span style="color:var(--txt-tertiary)">状态:</span>
+                      <span style="color:#a855f7;font-weight:600">可高级调整</span>
+                    </div>
+                    <div style="color:var(--txt-secondary);font-size:9px;margin-bottom:6px">此图片由 Pure Klein 4B - flux-2-klein-base-4b.safetensors 生成</div>
+                    <div style="display:flex;gap:4px">
+                      <span class="cmodel-btn-link" onclick="alert('高级调整')">↗ 高级调整</span>
+                      <span class="cmodel-btn-link" style="color:var(--success)" onclick="alert('导入结果')">📥 导入结果</span>
+                    </div>
+                  </div>
+                </div>
+                <!-- Tri-view model column -->
+                <div class="cmodel-col">
+                  <label class="cmodel-label">三视图模型选择</label>
+                  <select class="cmodel-select">
+                    <option>Qwen 三视图</option>
+                    <option>SDXL Tri-View</option>
+                  </select>
+                  <button class="cmodel-btn-triview" onclick="alert('正在生成三视图…')">生成三视图</button>
+                  <div class="cmodel-status-box">
+                    <div class="cmodel-status-hdr">
+                      <span style="color:var(--txt-tertiary)">状态:</span>
+                      <span style="color:var(--success);font-weight:600">模型就绪</span>
+                    </div>
+                    <div style="color:var(--txt-secondary);font-size:9px;margin-bottom:6px">当前模型: qwen_image_edit_2511_fp8_e4m3fn.safetensors</div>
+                  </div>
+                </div>
+              </div>
+              <div style="font-size:9px;color:var(--txt-tertiary);margin-top:6px;text-align:center">参考优先级：角色母版 avatar → 正/侧/背三视图；只注入已验证 LoadImage reference 节点。</div>
+            </div>
+          </div>
+
+          <div class="div"></div>
+          <div class="fsec">
+            <div class="fsec-title">角色外观描述</div>
+            <div class="fsec-desc">用于图像生成提示词中的角色 LoRA / 参考图补充描述</div>
+            <div class="plist">
+              <div class="pcard on">
+                <div class="pradio"></div>
+                <div class="pinfo">
+                  <div class="pname">艾达 <span class="tag tg-s" style="margin-left:4px">Avatar ✓</span></div>
+                  <div class="pdesc">年轻女性，深棕色短发，飞行员护目镜，皮质飞行服，眼神坚定...</div>
+                </div>
+                <button class="btn btn-ghost btn-sm">编辑</button>
+              </div>
+              <div class="pcard">
+                <div class="pradio"></div>
+                <div class="pinfo">
+                  <div class="pname">维克托 <span class="tag tg-s" style="margin-left:4px">Avatar ✓</span></div>
+                  <div class="pdesc">中年男性，胡须，油腻工装，左手金属假肢，随身扳手...</div>
+                </div>
+                <button class="btn btn-ghost btn-sm">编辑</button>
+              </div>
+              <div class="pcard">
+                <div class="pradio"></div>
+                <div class="pinfo">
+                  <div class="pname">奥古斯 <span class="tag tg-w" style="margin-left:4px">缺 Avatar</span></div>
+                  <div class="pdesc">全息投影形态，蓝色发光轮廓，无实体...</div>
+                </div>
+                <button class="btn btn-primary btn-sm">生成 Avatar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+        <div class="saside">
+          <div class="aside-title">已选角色</div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">
+            <div style="display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--surface-2);border-radius:var(--r-md);font-size:var(--t-xs)">
+              <span style="font-size:16px">👩‍🦱</span>
+              <div style="flex:1"><div style="color:var(--txt-primary);font-weight:500">艾达</div><div style="color:var(--success)">✓ Avatar 就绪</div></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--surface-2);border-radius:var(--r-md);font-size:var(--t-xs)">
+              <span style="font-size:16px">🧔</span>
+              <div style="flex:1"><div style="color:var(--txt-primary);font-weight:500">维克托</div><div style="color:var(--success)">✓ Avatar 就绪</div></div>
+            </div>
+          </div>
+          <div style="height:1px;background:var(--border-subtle);margin:12px 0"></div>
+          <div class="aside-title">生成策略</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div class="ctx-setting"><span>风格一致性锁定</span><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+            <div class="ctx-setting"><span>缺 Avatar 时跳过图像</span><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+            <div class="ctx-setting"><span>自动使用 PuLID</span><div class="toggle" onclick="this.classList.toggle('on')"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="bottom-cta">
+        <button class="btn btn-ghost btn-sm" onclick="prevStep()">← 上一步：风格设定</button>
+        <button class="btn btn-primary btn-sm" onclick="nextStep()">下一步：分镜生成 →</button>
+      </div>
+    </div>
+
+    <!-- ━━ STEP 3: 分镜生成工作台 ━━ -->
+    <div class="wpanel" id="p3">
+      <!-- Character portrait strip -->
+      <div class="char-portrait-strip" id="charPortraitStrip"></div>
+
+      <div class="shot-wb">
+
+        <!-- Left: shot list -->
+        <div class="slcol">
+          <div class="slhdr">
+            <div class="slhdr-top">
+              <div class="slhdr-title">分镜列表</div>
+              <button class="btn btn-ghost btn-sm" title="全局 Art Direction">🎨</button>
+            </div>
+            <div class="sl-prog-bar"><div class="sl-prog-fill" id="progFill" style="width:18%"></div></div>
+            <div class="sl-prog-lbl" id="progLbl">已完成 3 / 17 个分镜</div>
+          </div>
+          <div class="slitems" id="slItems"></div>
+          <div class="batch-bar">
+            <span>批量操作：</span>
+            <button class="btn btn-ghost btn-sm">全部生成</button>
+            <button class="btn btn-ghost btn-sm">全部优化</button>
+          </div>
+        </div>
+
+        <!-- Center: shot detail -->
+        <div class="sdcol" id="sdDetail"></div>
+
+        <!-- Right: context -->
+        <div class="scxtcol">
+
+          <!-- Global Art Direction summary -->
+          <div class="ctx-sec">
+            <div class="ctx-title">全局风格</div>
+            <div class="gad-box">
+              <div class="gad-hdr">
+                <span class="gad-title">Art Direction</span>
+                <button class="btn btn-ghost btn-sm">编辑</button>
+              </div>
+              <div class="gad-body">
+                <div class="gad-layer">
+                  <div class="gad-row"><span class="gad-key">风格</span><span class="gad-val">赛博朋克动画</span></div>
+                  <div class="gad-row"><span class="gad-key">光线</span><span class="gad-val">暖日落 + 冷阴影</span></div>
+                  <div class="gad-row"><span class="gad-key">材质</span><span class="gad-val">手绘笔触、粗线稿</span></div>
+                  <div class="gad-row"><span class="gad-key">色调</span><span class="gad-val">电影级调色</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Current shot chars -->
+          <div class="ctx-sec">
+            <div class="ctx-title">当前分镜角色</div>
+            <div id="ctxCharList">
+              <div class="char-status-card">
+                <div class="csc-top">
+                  <span class="csc-ava">👩‍🦱</span>
+                  <div class="csc-info"><div class="csc-name">艾达</div><div class="csc-role">主角 · 飞行员</div></div>
+                  <span class="csc-remove" title="移除绑定">×</span>
+                </div>
+                <div class="csc-statuses">
+                  <div class="csc-st ok">✓ Avatar</div>
+                  <div class="csc-st ok">✓ PuLID</div>
+                  <div class="csc-st ok">✓ 参考图</div>
+                </div>
+              </div>
+              <div style="height:6px"></div>
+              <div class="char-status-card">
+                <div class="csc-top">
+                  <span class="csc-ava">🧔</span>
+                  <div class="csc-info"><div class="csc-name">维克托</div><div class="csc-role">配角 · 机械师</div></div>
+                  <span class="csc-remove">×</span>
+                </div>
+                <div class="csc-statuses">
+                  <div class="csc-st ok">✓ Avatar</div>
+                  <div class="csc-st warn">⚠ 缺参考图 <button onclick="">修复</button></div>
+                </div>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" style="margin-top:7px;width:100%;justify-content:center">+ 绑定角色</button>
+          </div>
+
+          <!-- Output settings -->
+          <div class="ctx-sec">
+            <div class="ctx-title">输出设置</div>
+            <div style="display:flex;flex-direction:column;gap:7px">
+              <div class="ctx-setting"><span>脚本语言</span></div>
+              <select class="ctx-select"><option>中文</option><option>English</option><option>双语</option></select>
+              <div class="ctx-setting" style="margin-top:4px"><span>自动生成全部</span><div class="toggle" onclick="this.classList.toggle('on')"></div></div>
+              <div class="ctx-setting"><span>生成后自动优化</span><div class="toggle" onclick="this.classList.toggle('on')"></div></div>
+            </div>
+          </div>
+
+        </div><!-- /scxtcol -->
+      </div><!-- /shot-wb -->
+    </div>
+
+    <!-- ━━ STEP 4: 导出 ━━ -->
+    <div class="wpanel" id="p4">
+      <div class="export-wrap">
+        <div class="export-layout">
+          
+          <!-- Left: Storyboard Grid Preview -->
+          <div class="export-storyboard">
+            <div class="export-storyboard-hdr">
+              <div style="font-size:var(--t-base);font-weight:700;color:var(--txt-primary)">故事板缩略预览 (17 分镜)</div>
+              <span class="tag tg-s" id="exportPreviewTag">✓ 12 张已生成</span>
+            </div>
+            <div class="es-grid">
+              <!-- Shot 1 -->
+              <div class="es-card">
+                <div class="es-card-img" style="background:linear-gradient(135deg,#1e1a3a 0%,#2d1b69 100%)">🎬<span class="es-card-num">01</span></div>
+                <div class="es-card-body">
+                  <div class="es-card-title">全景航拍转倾斜翻冲</div>
+                  <div class="es-card-txt">艾达猛地拉动操纵杆，飞艇俯冲直下云海。</div>
+                </div>
+              </div>
+              <!-- Shot 2 -->
+              <div class="es-card">
+                <div class="es-card-img" style="background:linear-gradient(135deg,#142c42 0%,#1e3a5f 100%)">🎬<span class="es-card-num">02</span></div>
+                <div class="es-card-body">
+                  <div class="es-card-title">低角度擦步跟拍</div>
+                  <div class="es-card-txt">低角度贴地拍摄艾达战靴踏过金属走廊。</div>
+                </div>
+              </div>
+              <!-- Shot 3 -->
+              <div class="es-card">
+                <div class="es-card-img" style="background:linear-gradient(135deg,#1e1a3a 0%,#2d1b69 100%)">🎬<span class="es-card-num">03</span></div>
+                <div class="es-card-body">
+                  <div class="es-card-title">中景对话结构</div>
+                  <div class="es-card-txt">甲板中央，艾达与维克托争辩，轻晃手持。</div>
+                </div>
+              </div>
+              <!-- Shot 4 -->
+              <div class="es-card">
+                <div class="es-card-img">🖼<span class="es-card-num">04</span></div>
+                <div class="es-card-body">
+                  <div class="es-card-title">建立两人特写</div>
+                  <div class="es-card-txt">镜头推近至两人面部，眼神在夕阳中汇聚。</div>
+                </div>
+              </div>
+              <!-- Shot 5 -->
+              <div class="es-card">
+                <div class="es-card-img">🖼<span class="es-card-num">05</span></div>
+                <div class="es-card-body">
+                  <div class="es-card-title"> Dolly Zoom 拉伸</div>
+                  <div class="es-card-txt">透透者拉伸步幅镜头，体现内心的极度震惊。</div>
+                </div>
+              </div>
+              <!-- Shot 6 -->
+              <div class="es-card">
+                <div class="es-card-img">🖼<span class="es-card-num">06</span></div>
+                <div class="es-card-body">
+                  <div class="es-card-title">中景大仰拍 Downtrack</div>
+                  <div class="es-card-txt">大仰拍体现巨无霸发动机在头顶缓缓滑过。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Right: Export configurations & download tiles -->
+          <div class="export-control-col">
+            <div class="export-banner" id="exportBanner">
+              <div class="export-icon">🎬</div>
+              <div class="export-title" id="exportTitle">已生成 3 / 17 张图像</div>
+              <div class="export-desc" id="exportDesc">孤岛豪宅谋杀案 · 14 个分镜未生成图像，导出物将使用占位图</div>
+            </div>
+            
+            <div class="export-stats">
+              <div class="estat"><div class="estat-num">17</div><div class="estat-lbl">分镜总数</div></div>
+              <div class="estat"><div class="estat-num">4<sub>角</sub></div><div class="estat-lbl">绑定角色</div></div>
+              <div class="estat"><div class="estat-num" id="exportImgCount">3<sub>张</sub></div><div class="estat-lbl">生成图像</div></div>
+              <div class="estat"><div class="estat-num" id="exportSkipCount">0<sub>跳</sub></div><div class="estat-lbl">跳过图像</div></div>
+            </div>
+            
+            <!-- Export settings panel -->
+            <div class="export-config-box">
+              <div style="font-size:var(--t-xs);font-weight:600;color:var(--txt-secondary);margin-bottom:8px">导出偏好配置</div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <div class="ctx-setting"><span>包含 LoRA 一致性权重</span><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+                <div class="ctx-setting"><span>启用高清防伪水印</span><div class="toggle" onclick="this.classList.toggle('on')"></div></div>
+                <div class="ctx-setting"><span>同时导出原片分析 metadata</span><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+                <div class="ctx-setting" style="margin-top:2px">
+                  <span>画面纵横比</span>
+                  <select class="ctx-select" style="max-width:110px"><option>16:9 宽屏</option><option>9:16 竖屏</option><option>1:1 社交媒体</option></select>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Format download links -->
+            <div class="export-fmts">
+              <div class="efmt-hdr">选择导出格式</div>
+              <div class="efmt" onclick="alert('开始下载 Markdown 剧本')"><span class="efmt-icon">📝</span><div class="efmt-info"><div class="efmt-name">Markdown 格式剧本</div><div class="efmt-desc">包含图像图床链接，适合第三方同步</div></div><span class="efmt-dl">下载 →</span></div>
+              <div class="efmt" onclick="alert('开始生成 PDF 报告')"><span class="efmt-icon">📊</span><div class="efmt-info"><div class="efmt-name">故事板 PDF 报告</div><div class="efmt-desc">双栏排版，含缩略图及对白字数，交付首选</div></div><span class="efmt-dl">下载 →</span></div>
+              <div class="efmt" onclick="alert('开始生成 ZIP 压缩包')"><span class="efmt-icon">🎞</span><div class="efmt-info"><div class="efmt-name">打包 ZIP 故事板</div><div class="efmt-desc">含 17 张无损 PNG 生成图及 JSON 分镜表</div></div><span class="efmt-dl">打包 →</span></div>
+            </div>
+            
+            <div style="display:flex;gap:7px">
+              <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="goStep(3)">← 上一步</button>
+              <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="alert('全量数据正在打包生成…')">⬇ 全部导出</button>
+            </div>
+          </div>
+          
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /wbody -->
+</main>
+</div><!-- /shell -->
+
+<script>
+/* ══════════════════════════════════════════════════════
+   CREATIVE WIZARD — FULL JS
+   P0-1: step validation gate
+   P0-2: comfyConnected global + pill
+   P0-3: three-state imageState (pending|generated|skipped)
+   P1-5: removed setMode
+   P1-6: simplified rbind-box
+   P1-7: dynamic export stats
+   P2-8: localStorage save/restore
+   ══════════════════════════════════════════════════════ */
+
+/* ── P0-2: Global ComfyUI state ── */
+let comfyConnected = false;
+
+function setComfy(connected) {
+  comfyConnected = connected;
+  renderComfyStatus();
+  renderPortraitStrip(); // portrait strip shows comfy status
+}
+
+function renderComfyStatus() {
+  const pill = document.getElementById('comfyPill');
+  const label = document.getElementById('comfyPillLabel');
+  if (!pill || !label) return;
+  pill.classList.toggle('connected', comfyConnected);
+  pill.classList.toggle('disconnected', !comfyConnected);
+  label.textContent = comfyConnected ? 'ComfyUI 已连接' : 'ComfyUI 未连接';
+}
+
+function toggleComfyPop() {
+  const pop = document.getElementById('comfyPop');
+  if (pop) pop.classList.toggle('open');
+}
+
+// Close comfy pop on click outside
+document.addEventListener('click', function(e) {
+  const pill = document.getElementById('comfyPill');
+  const pop = document.getElementById('comfyPop');
+  if (pop && pill && !pill.contains(e.target)) {
+    pop.classList.remove('open');
+  }
+});
+
+/* ── P0-3: Shot data with three-state imageState ── */
+const shots = [
+  {tc:'00:00',name:'全景航拍转倾斜翻冲',scriptConfirmed:true,imageState:'generated',moods:['震撼','壮丽']},
+  {tc:'00:07',name:'低角度擦步跟拍',scriptConfirmed:true,imageState:'generated',moods:['神秘','压迫']},
+  {tc:'00:27',name:'中景对话结构',scriptConfirmed:true,imageState:'generated',moods:['风趣','辩论']},
+  {tc:'00:46',name:'建立两人特写',scriptConfirmed:false,imageState:'pending',moods:['深邃']},
+  {tc:'00:57',name:'透透者拉伸 Dolly Zoom',scriptConfirmed:false,imageState:'pending',moods:['张力']},
+  {tc:'01:11',name:'中景大仰拍 Downtrack',scriptConfirmed:false,imageState:'pending',moods:['澎湃']},
+  {tc:'01:31',name:'第一人称POV广场',scriptConfirmed:false,imageState:'pending',moods:['沉浸']},
+  {tc:'01:43',name:'高速跑道步满幅',scriptConfirmed:false,imageState:'pending',moods:['肾上腺素']},
+  {tc:'01:53',name:'领头步幅镜头',scriptConfirmed:false,imageState:'pending',moods:['诗意']},
+  {tc:'01:58',name:'高定位扫描 Skyline',scriptConfirmed:false,imageState:'pending',moods:['宏大']},
+  {tc:'02:14',name:'极近特写·眼神',scriptConfirmed:false,imageState:'pending',moods:['情感']},
+  {tc:'02:29',name:'对话切换·正反打',scriptConfirmed:false,imageState:'pending',moods:['紧张']},
+  {tc:'02:48',name:'俯拍全景·甲板',scriptConfirmed:false,imageState:'pending',moods:['宏大']},
+  {tc:'03:05',name:'慢镜头·齿轮运转',scriptConfirmed:false,imageState:'pending',moods:['工业感']},
+  {tc:'03:22',name:'推进镜头·船头破云',scriptConfirmed:false,imageState:'pending',moods:['希望']},
+  {tc:'03:41',name:'旋转环绕·飞艇全貌',scriptConfirmed:false,imageState:'pending',moods:['壮观']},
+  {tc:'04:00',name:'大远景·日落云海',scriptConfirmed:false,imageState:'pending',moods:['史诗']},
+];
+
+/* P0-3: done = scriptConfirmed && imageState !== 'pending' */
+function shotDone(s) { return s.scriptConfirmed && s.imageState !== 'pending'; }
+function shotState(s) {
+  if (shotDone(s)) return 'done';
+  if (s.scriptConfirmed || s.imageState === 'generated') return 'active';
+  return 'pending';
+}
+
+const scripts = [
+  `艾达猛地拉动操纵杆，飞艇机头向下俯冲。镜头从广角俯瞰浩瀚云海，慢慢转向垂直下视角，展现无限深空感。
+
+蒸汽引擎轰鸣，螺旋桨激起旋涡状气流。云层在镜头周围飞速后退。
+
+→ Global Style Layer: 赛博朋克动画风格叠加，暖光边缘轮廓，冷色云层质感。`,
+  `低角度贴地拍摄艾达靴子踏过金属走廊，两侧巨大齿轮缓缓转动，营造压迫感。
+
+画面刻意压低，仰角强调走廊纵深，光影在齿轮齿间明暗交替。`,
+  `甲板中央，艾达与维克托面对面争论。中景保持两人同框，轻微手持晃动增加真实紧张感。
+
+对白节奏快，剪辑配合情绪起伏，背景为移动云层。`,
+  `镜头推近至两人面部，艾达眼中倒映维克托凝重的表情。静默三秒，目光交汇，无需语言。
+
+夕阳从右侧打入，轮廓光勾勒发丝细节，全片最安静的一幕。`,
+];
+
+let activeShot = 3;
+
+/* ── P0-3: Render shot list with split progress ── */
+function renderList() {
+  const scriptDone = shots.filter(s => s.scriptConfirmed).length;
+  const imgGenerated = shots.filter(s => s.imageState === 'generated').length;
+  const imgSkipped = shots.filter(s => s.imageState === 'skipped').length;
+  const imgResolved = imgGenerated + imgSkipped;
+  const progPct = (imgResolved / shots.length) * 100;
+
+  document.getElementById('progFill').style.width = `${progPct}%`;
+  document.getElementById('progLbl').textContent = `脚本 ${scriptDone}/${shots.length} · 图像 ${imgGenerated}/${shots.length}${imgSkipped > 0 ? ` · 跳过 ${imgSkipped}` : ''}`;
+
+  document.getElementById('slItems').innerHTML = shots.map((s, i) => {
+    const st = shotState(s);
+    const icon = st === 'done' ? '✓' : st === 'active' ? '…' : '○';
+    return `
+    <div class="slitem ${i === activeShot ? 'on' : ''}" onclick="selShot(${i})">
+      <span class="sln">${i + 1}</span>
+      <div class="sli-body">
+        <div class="sli-tc">${s.tc}</div>
+        <div class="sli-name">${s.name}</div>
+      </div>
+      <div class="sli-st ${st}">${icon}</div>
+    </div>`;
+  }).join('');
+
+  // P1-7: update export stats dynamically
+  updateExportStats();
+}
+
+/* ── Character portraits for strip ── */
+const charPortraits = [
+  {emoji:'🧑\u200d🦱', name:'黑发少女', bg:'linear-gradient(135deg,#1e0f3d,#4c1d95)', bound:true, avatarOk:true},
+  {emoji:'🧔', name:'赫伯特', bg:'linear-gradient(135deg,#1e3a5f,#1e40af)', bound:true, avatarOk:true},
+  {emoji:'👩', name:'四叶', bg:'linear-gradient(135deg,#14532d,#065f46)', bound:false, avatarOk:false},
+  {emoji:'👴', name:'伯爵', bg:'linear-gradient(135deg,#7c2d12,#9a3412)', bound:false, avatarOk:false},
+];
+
+function renderPortraitStrip() {
+  const strip = document.getElementById('charPortraitStrip');
+  if (!strip) return;
+  strip.innerHTML = `
+    <div style="font-size:var(--t-xs);color:var(--txt-tertiary);white-space:nowrap;align-self:center;flex-shrink:0">角色：</div>
+    ${charPortraits.map((c, i) => `
+      <div class="cps-item ${c.bound ? 'bound' : ''} ${!c.avatarOk && c.bound ? 'warn' : ''}" onclick="toggleChar(${i})">
+        <div class="cps-avatar" style="background:${c.bg}">
+          ${c.emoji}
+          ${!c.avatarOk ? '<div class="ava-warn">!</div>' : ''}
+        </div>
+        <div class="cps-name">${c.name}</div>
+      </div>
+    `).join('')}
+    <div class="cps-divider"></div>
+    <div class="cps-model-info">
+      <div class="cps-model-row"><div class="cps-model-dot" style="background:var(--success)"></div><span style="color:var(--txt-secondary)">LLM 脚本</span><span style="color:var(--success);margin-left:auto">就绪</span></div>
+      <div class="cps-model-row"><div class="cps-model-dot" style="background:${comfyConnected ? 'var(--success)' : 'var(--warning)'}"></div><span style="color:var(--txt-secondary)">ComfyUI</span><span style="color:${comfyConnected ? 'var(--success)' : 'var(--warning)'};margin-left:auto">${comfyConnected ? '已连接' : '未连接'}</span></div>
+    </div>
+    <button class="btn btn-ghost btn-sm cps-run-btn" onclick="alert('批量生成脚本')">▶ 批量生成脚本</button>
+  `;
+}
+
+function toggleChar(i) {
+  charPortraits[i].bound = !charPortraits[i].bound;
+  renderPortraitStrip();
+}
+
+/* ── P1-6: Render shot detail (simplified rbind-box: chips only) ── */
+const moodCls = m => {
+  if (['震撼','张力','澎湃','肾上腺素'].includes(m)) return 'tg-w';
+  if (['神秘','深邃'].includes(m)) return 'tg-b';
+  return 'tg-n';
+};
+
+function renderDetail(i) {
+  const s = shots[i];
+  const sc = scripts[Math.min(i, scripts.length - 1)];
+  const hasImg = s.imageState === 'generated';
+  const isSkipped = s.imageState === 'skipped';
+
+  document.getElementById('sdDetail').innerHTML = `
+    <div class="sd-hdr">
+      <div class="sd-num">${i + 1}</div>
+      <div class="sd-meta">
+        <div class="sd-tc">${s.tc}</div>
+        <div class="sd-title">${s.name}</div>
+        <div class="sd-moods">${s.moods.map(m => `<span class="tag ${moodCls(m)}">${m}</span>`).join('')}</div>
+      </div>
+    </div>
+
+    <!-- P1-6: Role binding — chips only, no asset detail -->
+    <div class="rbind-box">
+      <div class="rbind-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>角色绑定</span>
+      </div>
+      <div class="rbind-row" style="margin-top:8px">
+        <div class="rbchip bound" onclick="this.classList.toggle('bound')">✓ 🧑‍🦱 黑发少女</div>
+        <div class="rbchip bound" onclick="this.classList.toggle('bound')">✓ 🧔 赫伯特</div>
+        <div class="rbchip" onclick="this.classList.toggle('bound')">👩 四叶</div>
+        <div class="rbchip" onclick="this.classList.toggle('bound')">👴 伯爵</div>
+      </div>
+    </div>
+
+    <!-- AI Script -->
+    <div class="script-box">
+      <div class="script-hdr">
+        <div class="script-label"><div class="ai-pulse"></div>AI 生成脚本</div>
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-ghost btn-sm">复制</button>
+          <button class="btn btn-ghost btn-sm">全屏编辑</button>
+        </div>
+      </div>
+      <div class="script-body" id="sctxt">${sc}</div>
+      <div class="script-foot">
+        <button class="btn btn-ghost btn-sm" onclick="optimizeScript()">⚡ 立即优化</button>
+        <button class="btn btn-ghost btn-sm">🔄 重新生成</button>
+        <button class="btn btn-ghost btn-sm">✏️ 手动编辑</button>
+        ${!s.scriptConfirmed ? `<button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="confirmScript(${i})">✓ 确认脚本</button>` : `<span class="tag tg-s" style="margin-left:auto">脚本已确认</span>`}
+      </div>
+    </div>
+
+    <!-- Generated image card -->
+    <div class="gen-img-card">
+      <div class="gen-img-hdr">
+        <span class="gen-img-label">分镜图像</span>
+        <span class="gen-img-meta">${hasImg ? '已生成 · Pure Film-4E' : isSkipped ? '已跳过' : (comfyConnected ? '等待生成' : 'ComfyUI 未连接')}</span>
+      </div>
+      <div class="gen-img-preview ${hasImg ? 'has-image' : ''}">
+        ${hasImg
+          ? `<div style="width:100%;height:100%;background:linear-gradient(135deg,#1a0a2e 0%,#2d1b69 40%,#1a3a5c 80%,#0d2137 100%);display:flex;align-items:center;justify-content:center;font-size:32px;opacity:.6">🎬</div>
+             <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:2">
+               <div style="text-align:center">
+                 <div style="font-size:22px;font-weight:700;color:rgba(255,255,255,.9);text-shadow:0 2px 8px rgba(0,0,0,.8)">生成图像</div>
+                 <div style="font-size:var(--t-xs);color:rgba(255,255,255,.5)">Pure Film-4E · ${s.name}</div>
+               </div>
+             </div>`
+          : isSkipped
+          ? `<div class="gen-img-preview-placeholder">
+               <div class="gen-img-placeholder-icon">⏭</div>
+               <div>图像已跳过（角色缺 Avatar）</div>
+             </div>`
+          : `<div class="gen-img-preview-placeholder">
+               <div class="gen-img-placeholder-icon">🖼</div>
+               <div>${comfyConnected ? '点击下方按钮生成图像' : 'ComfyUI 未连接'}</div>
+             </div>`
+        }
+      </div>
+      ${hasImg
+        ? `<div class="gen-img-actions">
+            <button class="btn btn-ghost btn-sm">↗ 查看原图</button>
+            <button class="btn btn-ghost btn-sm">↻ 重新生成</button>
+            <button class="btn btn-ghost btn-sm">💾 保存</button>
+            <button class="btn btn-primary btn-sm" style="margin-left:auto">→ 导入 ComfyUI</button>
+           </div>
+           <div class="gen-img-prompt">Pure Film-4E · Stylized animation art, bold outlines, warm sunset backlighting · ${s.name} · 角色: 黑发少女, 赫伯特</div>`
+        : isSkipped
+        ? `<div class="gen-img-actions">
+            <button class="btn btn-ghost btn-sm" onclick="unskipImage(${i})">↩ 取消跳过</button>
+           </div>`
+        : `<div class="gen-img-actions">
+            ${comfyConnected
+              ? `<button class="btn btn-primary btn-sm" onclick="genImage(${i})">▶ 生成图像</button>`
+              : `<div class="comfy-inline-link" onclick="toggleComfyPop()">⚠ ComfyUI 未连接 · 去连接</div>`
+            }
+            <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="skipImage(${i})">⏭ 跳过图像</button>
+           </div>`
+      }
+    </div>
+
+    <!-- Nav -->
+    <div style="display:flex;gap:7px;margin-top:4px">
+      <button class="btn btn-ghost btn-sm" ${i === 0 ? 'disabled' : ''} onclick="selShot(${i - 1})">← 上一镜</button>
+      <button class="btn btn-ghost btn-sm" ${i === shots.length - 1 ? 'disabled' : ''} onclick="selShot(${i + 1})">下一镜 →</button>
+      ${shotDone(s) ? `<span class="tag tg-s" style="margin-left:auto;padding:5px 10px">✓ 已完成</span>` : `<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="markDone(${i})">✓ 标记完成</button>`}
+    </div>
+  `;
+}
+
+/* ── P0-3: Shot actions ── */
+function confirmScript(i) {
+  shots[i].scriptConfirmed = true;
+  selShot(i);
+}
+
+function genImage(i) {
+  shots[i].imageState = 'generated';
+  selShot(i);
+}
+
+function skipImage(i) {
+  shots[i].imageState = 'skipped';
+  selShot(i);
+}
+
+function unskipImage(i) {
+  shots[i].imageState = 'pending';
+  selShot(i);
+}
+
+function selShot(i) { activeShot = i; renderList(); renderDetail(i); }
+
+function markDone(i) {
+  shots[i].scriptConfirmed = true;
+  if (shots[i].imageState === 'pending') shots[i].imageState = 'skipped'; // explicit mark-done covers image
+  selShot(i);
+}
+
+function optimizeScript() {
+  const el = document.getElementById('sctxt');
+  if (!el) return;
+  el.style.opacity = '.4';
+  setTimeout(() => { el.style.opacity = '1'; el.textContent += '\n\n[✨ 优化] 叙述节奏更流畅，角色内心情绪层次更丰富。'; }, 900);
+}
+
+/* ── P1-7: Dynamic export stats ── */
+function updateExportStats() {
+  const generated = shots.filter(s => s.imageState === 'generated').length;
+  const skipped = shots.filter(s => s.imageState === 'skipped').length;
+  const pending = shots.length - generated - skipped;
+
+  const titleEl = document.getElementById('exportTitle');
+  const descEl = document.getElementById('exportDesc');
+  const imgCountEl = document.getElementById('exportImgCount');
+  const skipCountEl = document.getElementById('exportSkipCount');
+  const previewTag = document.getElementById('exportPreviewTag');
+
+  if (titleEl) titleEl.textContent = `已生成 ${generated} / ${shots.length} 张图像`;
+  if (descEl) {
+    if (pending > 0) {
+      descEl.textContent = `孤岛豪宅谋杀案 · ${pending} 个分镜未生成图像，导出物将使用占位图`;
+    } else if (skipped > 0) {
+      descEl.textContent = `孤岛豪宅谋杀案 · ${skipped} 个分镜已跳过图像`;
+    } else {
+      descEl.textContent = `孤岛豪宅谋杀案 · 全部 ${shots.length} 个分镜已完成`;
+    }
+  }
+  if (imgCountEl) imgCountEl.innerHTML = `${generated}<sub>张</sub>`;
+  if (skipCountEl) skipCountEl.innerHTML = `${skipped}<sub>跳</sub>`;
+  if (previewTag) {
+    previewTag.textContent = `✓ ${generated} 张已生成`;
+    previewTag.className = generated === shots.length ? 'tag tg-s' : 'tag tg-w';
+  }
+}
+
+/* ── Wizard step logic ── */
+let curStep = 3;
+const doneSt = new Set([1, 2]);
+
+function goStep(n) {
+  [1, 2, 3, 4].forEach(i => {
+    document.getElementById(`p${i}`).classList.toggle('active', i === n);
+    const ws = document.getElementById(`ws${i}`);
+    ws.classList.remove('active', 'done');
+    if (i === n) { ws.classList.add('active'); ws.querySelector('.wcircle').textContent = i; ws.querySelector('.wlabel').textContent = '进行中'; }
+    else if (doneSt.has(i)) { ws.classList.add('done'); ws.querySelector('.wcircle').textContent = '✓'; ws.querySelector('.wlabel').textContent = '已完成'; }
+    else { ws.querySelector('.wcircle').textContent = i; ws.querySelector('.wlabel').textContent = `步骤 ${i}`; ws.querySelector('.wname').style.color = ''; }
+  });
+  curStep = n;
+  const prev = document.getElementById('prevBtn');
+  const next = document.getElementById('nextBtn');
+  prev.style.visibility = n === 1 ? 'hidden' : 'visible';
+  next.textContent = n === 4 ? '导出全部 ↓' : '下一步 →';
+  next.onclick = n === 4 ? () => alert('开始导出…') : nextStep;
+  // P2-8: save progress
+  localStorage.setItem('creative_curStep', n);
+}
+
+/* ── P0-1: Step validation gate (step 2→3) ── */
+function nextStep() {
+  if (curStep >= 4) return;
+
+  // P0-1: validate step 2→3 transition
+  if (curStep === 2) {
+    const cards = document.querySelectorAll('#p2 .ccard[data-char-name]');
+    const missing = [];
+    cards.forEach(card => {
+      if (card.classList.contains('on') && card.dataset.hasAvatar === 'false') {
+        missing.push(card.dataset.charName);
+      }
+    });
+    if (missing.length > 0) {
+      showConfirmModal(missing);
+      return;
+    }
+  }
+
+  doneSt.add(curStep);
+  goStep(curStep + 1);
+}
+
+function prevStep() { if (curStep > 1) goStep(curStep - 1); }
+
+/* ── P0-1: Confirm modal ── */
+function showConfirmModal(missingNames) {
+  // Remove existing
+  const existing = document.getElementById('confirmOverlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'confirmOverlay';
+  overlay.className = 'confirm-overlay';
+  overlay.innerHTML = `
+    <div class="confirm-modal">
+      <div class="confirm-title">⚠ 角色 Avatar 缺失</div>
+      <div class="confirm-body">
+        以下 ${missingNames.length} 位已选角色缺少 Avatar，其分镜将跳过图像生成：
+        <div class="confirm-charlist">
+          ${missingNames.map(n => `<div class="confirm-charitem">⚠ ${n} — 缺少 Avatar</div>`).join('')}
+        </div>
+      </div>
+      <div class="confirm-actions">
+        <button class="btn btn-ghost btn-sm" onclick="closeConfirm(); highlightMissing()">先去补齐</button>
+        <button class="btn btn-primary btn-sm" onclick="closeConfirm(); confirmProceed()">仍然继续</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function closeConfirm() {
+  const overlay = document.getElementById('confirmOverlay');
+  if (overlay) overlay.remove();
+}
+
+function confirmProceed() {
+  doneSt.add(curStep);
+  goStep(curStep + 1);
+}
+
+function highlightMissing() {
+  // Stay on step 2 and highlight missing cards
+  const cards = document.querySelectorAll('#p2 .ccard[data-char-name]');
+  cards.forEach(card => {
+    card.classList.remove('highlight-missing');
+    if (card.classList.contains('on') && card.dataset.hasAvatar === 'false') {
+      card.classList.add('highlight-missing');
+    }
+  });
+}
+
+/* ── Style card ── */
+function selStyle(el) {
+  document.querySelectorAll('.sc').forEach(c => c.classList.remove('on'));
+  el.classList.add('on');
+}
+
+/* ── Preset select ── */
+function selPreset(el) {
+  document.querySelectorAll('.pcard').forEach(c => c.classList.remove('on'));
+  el.classList.add('on');
+}
+
+/* ── P2-8: Save progress and navigate ── */
+function saveProgressAndNav(url) {
+  localStorage.setItem('creative_curStep', curStep);
+  window.location.href = url;
+}
+
+/* ── Init ── */
+renderList();
+renderDetail(activeShot);
+renderPortraitStrip();
+renderComfyStatus();
+
+// P2-8: restore saved step from localStorage
+const savedStep = parseInt(localStorage.getItem('creative_curStep'));
+goStep(savedStep && savedStep >= 1 && savedStep <= 4 ? savedStep : 1);
+</script>
+</body>
+</html>
