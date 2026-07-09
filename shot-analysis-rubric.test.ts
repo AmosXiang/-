@@ -29,7 +29,7 @@ const T25 = { t8: 0.10, t5: 0.25 };
 const T30 = { t8: 0.10, t5: 0.30 };
 
 test('知识库 v1.3.0:四个维度全部 scoredBy: server,各带词表/few-shot/anchorThresholds', () => {
-  assert.equal(kb.replicabilityVersion, 'replicability@1.3.0');
+  assert.equal(kb.replicabilityVersion, 'replicability@1.3.1');
   assert.equal(kb.replicabilityDimensions.length, 4);
   for (const d of kb.replicabilityDimensions) {
     assert.equal(d.scoredBy, 'server', `${d.id} 应为 server-scored`);
@@ -160,6 +160,9 @@ test('叙述输出校验:priority/target 前缀/relatedPatternId 封闭域/成�
   };
   const parsed = validateReplicabilityNarrative(good, kb);
   assert.equal(parsed.improvements.length, 1);
+  // 全剧/整体级建议放行
+  assert.ok(validateReplicabilityNarrative({ ...good, improvements: [{ ...good.improvements[0], target: '全剧多角色镜头' }] }, kb));
+  assert.ok(validateReplicabilityNarrative({ ...good, improvements: [{ ...good.improvements[0], target: '整体节奏' }] }, kb));
 
   assert.throws(() => validateReplicabilityNarrative({ ...good, improvements: [{ ...good.improvements[0], priority: 'urgent' }] }, kb), /priority/);
   assert.throws(() => validateReplicabilityNarrative({ ...good, improvements: [{ ...good.improvements[0], target: '00:08-00:16' }] }, kb), /target must start with/);

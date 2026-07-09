@@ -86,8 +86,8 @@ ${JSON.stringify(serverStats, null, 1)}
 ${advisories.length ? `聚合提示:\n${advisories.map(a => `- ${a}`).join('\n')}` : ''}
 
 【输出规则(必须严格遵守)】
-1. improvements 按 priority 排序;target 必须以"镜头N"开头指向具体镜头(N 为分镜列表 1 起序号);
-   relatedPatternId 只能取自:${allIds.join(', ')}。
+1. improvements 按 priority 排序;镜头级建议的 target 必须以"镜头N"开头(N 为分镜列表 1 起序号),
+   跨镜头的整体性建议 target 以"全剧"或"整体"开头;relatedPatternId 只能取自:${allIds.join(', ')}。
 2. improvements 优先覆盖 riskLevel 高、命中数多的弱项;suggestion 基于知识库该弱项的 recommendation 针对具体镜头细化。
 3. explicitNonWeaknesses 中声明的内容(如复杂手部动作)不是弱项,禁止出现在 improvements 中。
 4. 运镜可行性维度 calibrationStatus: unverified——所有文字中禁止出现具体成功率/失败率数字。

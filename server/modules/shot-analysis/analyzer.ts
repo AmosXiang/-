@@ -125,7 +125,8 @@ export function validateReplicabilityNarrative(raw: any, kb: KnowledgeBase): { i
   const improvements: Improvement[] = raw.improvements || [];
   for (const item of improvements) {
     if (!['high', 'medium', 'low'].includes(item.priority)) throw invalidResponse(`Invalid improvement priority: ${item.priority}`);
-    if (!/^镜头\s*\d+/.test(String(item.target || ''))) throw invalidResponse(`Improvement target must start with 镜头N, got: ${item.target}`);
+    // 镜头级建议强制"镜头N"前缀(可定位);全剧/整体级建议显式放行(合法产出,不强拗编号)。
+    if (!/^(镜头\s*\d+|全剧|全片|整体)/.test(String(item.target || ''))) throw invalidResponse(`Improvement target must start with 镜头N (or 全剧/整体 for global advice), got: ${item.target}`);
     if (!legalIds.has(item.relatedPatternId)) throw invalidResponse(`Unknown relatedPatternId: ${item.relatedPatternId}`);
   }
   if (typeof raw.summary !== 'string' || !raw.summary.trim()) throw invalidResponse('Narrative output has empty summary');
