@@ -1,6 +1,9 @@
 # rubric v1.2 方案设计:服务端确定性预筛 + 模型逐候选裁决
 
-状态:**设计文档,未开始实现,等待拍板。**
+状态:**已实现并复验通过。** 实现 commit E(bee0d2f),3×3 复验结果见
+[RUBRIC-V1.2-VERIFICATION.md](./RUBRIC-V1.2-VERIFICATION.md)(2026-07-09,判定线全过)。
+第 8 节三个待确认项的拍板:1) 接受测量边界;2) 上游 analyze 增强单独排期;3) pulid 阈值 60%
+(均为知识库可调字段:metric 措辞 / aggregateThresholdRatio)。
 动机:v1.1 已消除锚点歧义(commit fa6e019 验证),残余不稳定 100% 来自模型自由扫描时的
 逐镜头计数漂移(同一视频 multi_character_interaction 计数横跨 3-28)。
 本方案把确定性的部分(候选集、分母、占比、锚点映射、算分)全部收归服务端,

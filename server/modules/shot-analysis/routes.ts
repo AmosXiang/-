@@ -101,7 +101,16 @@ async function handleAnalyze(db: DatabaseInstance, req: Request, res: Response):
       sourceRef,
       kbVersion: result.kbVersion,
       report: result.report,
-      diagnostics: { requestId: result.requestId, model: result.model, attempts: result.attempts, durationMs: result.durationMs, usage: result.usage },
+      diagnostics: {
+        requestId: result.requestId,
+        model: result.model,
+        attempts: result.attempts,
+        durationMs: result.durationMs,
+        usage: result.usage,
+        // v1.2(replicability):裁决+主报告两次调用的分项披露;narrative 为 undefined。
+        usageBreakdown: result.usageBreakdown,
+        adjudication: result.adjudication,
+      },
     });
   } catch (error: any) {
     const classified = classifyGeminiError(error);

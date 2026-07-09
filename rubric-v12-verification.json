@@ -1,0 +1,2033 @@
+{
+  "timestamp": "2026-07-09T00:27:15.353Z",
+  "protocol": "3 videos x 3 rounds, pass line: identity score zero variance per video (RUBRIC-V1.2-DESIGN.md §3)",
+  "pricingUSDPerMillionTokens": {
+    "input": 0.3,
+    "output": 2.5
+  },
+  "videoIds": [
+    "1782541753229",
+    "1783073819790",
+    "1783192167990"
+  ],
+  "runs": [
+    {
+      "event": "run_summary",
+      "round": 1,
+      "videoId": "1782541753229",
+      "reportId": "7fe6e9b8-87ab-4105-ae47-28c245bca8e1",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 5.5,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 10,
+        "postProductionDependency": 5
+      },
+      "identityEvidence": [
+        "60 个镜头中 19 个命中 multi_character_interaction,占比 31.7%(服务端确定性统计:预筛候选 30 个,模型裁决命中 19 个)",
+        "命中镜头:镜头6、镜头11、镜头17、镜头21、镜头23、镜头24、镜头25、镜头30、镜头36、镜头37、镜头39、镜头40、镜头41、镜头42、镜头47、镜头49、镜头50、镜头51、镜头58",
+        "已在最低分档(占比 > 25%)"
+      ],
+      "serverComputed": {
+        "candidateCount": 30,
+        "hitCount": 19,
+        "ratio": 0.317,
+        "hitShotIndexes": [
+          6,
+          11,
+          17,
+          21,
+          23,
+          24,
+          25,
+          30,
+          36,
+          37,
+          39,
+          40,
+          41,
+          42,
+          47,
+          49,
+          50,
+          51,
+          58
+        ],
+        "hitsToNextBand": null,
+        "verdicts": [
+          {
+            "shotIndex": 3,
+            "verdict": "no_hit",
+            "reason": "描述文本未明确指出陆远与林晓同框互动。"
+          },
+          {
+            "shotIndex": 4,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及林晓一人。"
+          },
+          {
+            "shotIndex": 5,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及林晓一人。"
+          },
+          {
+            "shotIndex": 6,
+            "verdict": "hit",
+            "reason": "描述文本明确指出林晓与陈建海同框对话。"
+          },
+          {
+            "shotIndex": 11,
+            "verdict": "hit",
+            "reason": "描述文本明确指出女同事（林晓）与陆远同框互动。"
+          },
+          {
+            "shotIndex": 14,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及林晓一人。"
+          },
+          {
+            "shotIndex": 15,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及陆远一人。"
+          },
+          {
+            "shotIndex": 16,
+            "verdict": "no_hit",
+            "reason": "描述文本未明确指出陆远与同事同框互动，且“同事”指代不明。"
+          },
+          {
+            "shotIndex": 17,
+            "verdict": "hit",
+            "reason": "描述文本明确指出林晓看着陆远，构成同框互动。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "hit",
+            "reason": "描述文本明确指出陆远与链家房产中介经理同框对话。"
+          },
+          {
+            "shotIndex": 23,
+            "verdict": "hit",
+            "reason": "描述文本明确指出陆远与中介经理同框办理手续。"
+          },
+          {
+            "shotIndex": 24,
+            "verdict": "hit",
+            "reason": "描述文本明确指出陆远与中介经理同框握手。"
+          },
+          {
+            "shotIndex": 25,
+            "verdict": "hit",
+            "reason": "描述文本明确指出中介经理向陆远挥手告别，构成同框互动。"
+          },
+          {
+            "shotIndex": 30,
+            "verdict": "hit",
+            "reason": "描述文本明确指出两名幸存者同框大打出手。"
+          },
+          {
+            "shotIndex": 31,
+            "verdict": "no_hit",
+            "reason": "描述文本中洛卡为动物，不属于人物指称。"
+          },
+          {
+            "shotIndex": 32,
+            "verdict": "no_hit",
+            "reason": "描述文本中洛卡为动物，不属于人物指称。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "no_hit",
+            "reason": "描述文本中洛卡为动物，不属于人物指称。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述文本明确指出陆远与房东同框对话。"
+          },
+          {
+            "shotIndex": 37,
+            "verdict": "hit",
+            "reason": "描述文本明确指出陆远递给房东名片，构成同框互动。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及房东一人。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "hit",
+            "reason": "描述文本明确指出陆远与房东同框握手。"
+          },
+          {
+            "shotIndex": 40,
+            "verdict": "hit",
+            "reason": "描述文本明确指出房东递给陆远钥匙，构成同框互动。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述文本明确指出房东与陆远同框交接钥匙并握手。"
+          },
+          {
+            "shotIndex": 42,
+            "verdict": "hit",
+            "reason": "描述文本明确指出房东向陆远挥手告别，构成同框互动。"
+          },
+          {
+            "shotIndex": 47,
+            "verdict": "hit",
+            "reason": "描述文本明确指出陆远与工头老周同框讨论。"
+          },
+          {
+            "shotIndex": 49,
+            "verdict": "hit",
+            "reason": "描述文本明确指出陆远与老周同框互动。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "hit",
+            "reason": "描述文本明确指出老周质疑改造造价，陆远保持沉默，构成同框互动。"
+          },
+          {
+            "shotIndex": 51,
+            "verdict": "hit",
+            "reason": "描述文本明确指出老周表达担忧，陆远看着他，构成同框互动。"
+          },
+          {
+            "shotIndex": 54,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及老周一人。"
+          },
+          {
+            "shotIndex": 58,
+            "verdict": "hit",
+            "reason": "描述文本明确指出多名工人同框合力搬运。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [
+        {
+          "weaknessId": "pulid_latency",
+          "ratio": 0.8
+        }
+      ],
+      "shotRiskCount": 42,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 10837,
+        "candidatesTokenCount": 6319,
+        "totalTokenCount": 31742,
+        "billedOutputTokens": 20905
+      },
+      "costUSD": {
+        "input": 0.003251,
+        "output": 0.052263,
+        "total": 0.055514
+      },
+      "durationMs": 85521
+    },
+    {
+      "event": "run_summary",
+      "round": 1,
+      "videoId": "1783073819790",
+      "reportId": "386f0216-c00d-4658-beb4-0cb263e1aa6c",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 6.25,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 10,
+        "postProductionDependency": 5
+      },
+      "identityEvidence": [
+        "61 个镜头中 12 个命中 multi_character_interaction,占比 19.7%(服务端确定性统计:预筛候选 20 个,模型裁决命中 12 个)",
+        "命中镜头:镜头21、镜头22、镜头26、镜头29、镜头32、镜头33、镜头34、镜头36、镜头41、镜头45、镜头52、镜头54",
+        "边界邻近披露:再多 4 个命中镜头即跨入下一分数区间(不做迟滞/平滑,仅披露)"
+      ],
+      "serverComputed": {
+        "candidateCount": 20,
+        "hitCount": 12,
+        "ratio": 0.197,
+        "hitShotIndexes": [
+          21,
+          22,
+          26,
+          29,
+          32,
+          33,
+          34,
+          36,
+          41,
+          45,
+          52,
+          54
+        ],
+        "hitsToNextBand": 4,
+        "verdicts": [
+          {
+            "shotIndex": 16,
+            "verdict": "no_hit",
+            "reason": "描述未明确指出三人同框互动，主要描述地图定位。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "hit",
+            "reason": "描述中张杰对着郑吒说话，两人同框且有互动。"
+          },
+          {
+            "shotIndex": 22,
+            "verdict": "hit",
+            "reason": "描述中两人在金属走廊中对峙，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 23,
+            "verdict": "no_hit",
+            "reason": "描述为张杰的特写，属于单人画面。"
+          },
+          {
+            "shotIndex": 26,
+            "verdict": "hit",
+            "reason": "描述中张杰向郑吒解释，两人同框且有互动。"
+          },
+          {
+            "shotIndex": 29,
+            "verdict": "hit",
+            "reason": "描述中更多新人同框，共同表现出惊慌失措。"
+          },
+          {
+            "shotIndex": 30,
+            "verdict": "no_hit",
+            "reason": "描述中只提及张杰一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 32,
+            "verdict": "hit",
+            "reason": "描述中张杰告诉胖子，两人同框且有互动。"
+          },
+          {
+            "shotIndex": 33,
+            "verdict": "hit",
+            "reason": "描述中胖子质疑张杰，两人同框且有互动。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "hit",
+            "reason": "描述中张杰把枪塞进胖子嘴里，两人同框且有肢体互动。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述中张杰把枪从胖子嘴里拿开，两人同框且有肢体互动。"
+          },
+          {
+            "shotIndex": 37,
+            "verdict": "no_hit",
+            "reason": "描述中只提及詹岚一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "no_hit",
+            "reason": "描述中只提及张杰一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "no_hit",
+            "reason": "描述中只提及詹岚一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述中郑吒转向詹岚，两人同框且有互动。"
+          },
+          {
+            "shotIndex": 44,
+            "verdict": "no_hit",
+            "reason": "描述中只提及詹岚一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 45,
+            "verdict": "hit",
+            "reason": "描述中张杰肯定詹岚的理解，两人同框且有互动。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "no_hit",
+            "reason": "描述中只提及张杰一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 52,
+            "verdict": "hit",
+            "reason": "描述中郑吒、老头和老太太三人同框，共同看手表。"
+          },
+          {
+            "shotIndex": 54,
+            "verdict": "hit",
+            "reason": "描述中一队士兵和黑人队长同框，队长对“你们”说话，构成多人同框互动。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [
+        {
+          "weaknessId": "pulid_latency",
+          "ratio": 0.656
+        }
+      ],
+      "shotRiskCount": 34,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 10382,
+        "candidatesTokenCount": 5791,
+        "totalTokenCount": 27823,
+        "billedOutputTokens": 17441
+      },
+      "costUSD": {
+        "input": 0.003115,
+        "output": 0.043603,
+        "total": 0.046717
+      },
+      "durationMs": 72416
+    },
+    {
+      "event": "run_summary",
+      "round": 1,
+      "videoId": "1783192167990",
+      "reportId": "eca2945d-5099-49bc-98ce-28a5cda489ae",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 5.45,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 8
+      },
+      "identityEvidence": [
+        "74 个镜头中 26 个命中 multi_character_interaction,占比 35.1%(服务端确定性统计:预筛候选 35 个,模型裁决命中 26 个)",
+        "命中镜头:镜头5、镜头8、镜头12、镜头15、镜头16、镜头17、镜头18、镜头19、镜头31、镜头34、镜头36、镜头38、镜头39、镜头40、镜头41、镜头43、镜头44、镜头45、镜头52、镜头57、镜头58、镜头59、镜头60、镜头61、镜头64、镜头73",
+        "已在最低分档(占比 > 25%)"
+      ],
+      "serverComputed": {
+        "candidateCount": 35,
+        "hitCount": 26,
+        "ratio": 0.351,
+        "hitShotIndexes": [
+          5,
+          8,
+          12,
+          15,
+          16,
+          17,
+          18,
+          19,
+          31,
+          34,
+          36,
+          38,
+          39,
+          40,
+          41,
+          43,
+          44,
+          45,
+          52,
+          57,
+          58,
+          59,
+          60,
+          61,
+          64,
+          73
+        ],
+        "hitsToNextBand": null,
+        "verdicts": [
+          {
+            "shotIndex": 5,
+            "verdict": "hit",
+            "reason": "描述文本中“多名士兵”同框且共同“前进”。"
+          },
+          {
+            "shotIndex": 8,
+            "verdict": "hit",
+            "reason": "描述文本中“女性士兵”和“黑人男性士兵”同框且共同“瞄准前方”。"
+          },
+          {
+            "shotIndex": 12,
+            "verdict": "hit",
+            "reason": "描述文本中“士兵和几名平民”同框且“站在地下隧道中”。"
+          },
+          {
+            "shotIndex": 15,
+            "verdict": "hit",
+            "reason": "描述文本中“士兵们”同框，其中“两人搀扶着一个穿着蓝色衣服的人”。"
+          },
+          {
+            "shotIndex": 16,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“快速移动”。"
+          },
+          {
+            "shotIndex": 17,
+            "verdict": "hit",
+            "reason": "描述文本中“几名士兵”同框且共同“靠近一扇带有“Umbrella Corp”标志的厚重金属门”。"
+          },
+          {
+            "shotIndex": 18,
+            "verdict": "hit",
+            "reason": "描述文本中“一群士兵和几名平民”同框且“聚集在一个房间里”。"
+          },
+          {
+            "shotIndex": 19,
+            "verdict": "hit",
+            "reason": "描述文本中“金发女子”同框“质问黑人队长”。"
+          },
+          {
+            "shotIndex": 20,
+            "verdict": "no_hit",
+            "reason": "描述文本中画面只出现“黑人队长”一人，属正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "no_hit",
+            "reason": "描述文本中画面只出现“黑人队长”一人，属正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 24,
+            "verdict": "no_hit",
+            "reason": "描述文本中画面只出现“黑人队长”一人，属正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 26,
+            "verdict": "no_hit",
+            "reason": "描述文本中未提及画面内有可辨识人物。"
+          },
+          {
+            "shotIndex": 29,
+            "verdict": "no_hit",
+            "reason": "描述文本中画面只出现“金发女子”一人，属正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 31,
+            "verdict": "hit",
+            "reason": "描述文本中“几名平民”同框，包括“穿动漫T恤的男性和老年女性”，且共同“看着黑人队长”。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "hit",
+            "reason": "描述文本中“三名士兵”同框且共同“靠近一扇敞开的黑色大门”。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且共同“进入黑暗的房间”。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "hit",
+            "reason": "描述文本中“一群士兵和几名平民”同框且“站在光线较亮的走廊中”。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "hit",
+            "reason": "描述文本中“一行人，包括士兵和女性”同框且共同“走进一个由蓝色灯光照亮的玻璃走廊”。"
+          },
+          {
+            "shotIndex": 40,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“合力推开一扇厚重的金属门”。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且共同“趴在洞口，向下张望”。"
+          },
+          {
+            "shotIndex": 43,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框，其中“一人说”话。"
+          },
+          {
+            "shotIndex": 44,
+            "verdict": "hit",
+            "reason": "描述文本中“士兵们和几名平民”同框且共同“沿着金属楼梯快速奔跑”。"
+          },
+          {
+            "shotIndex": 45,
+            "verdict": "hit",
+            "reason": "描述文本中“一名士兵”同框“协助身穿动漫T恤的胖子男性下楼梯”。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "no_hit",
+            "reason": "描述文本中画面只出现“男性士兵”一人，属正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 52,
+            "verdict": "hit",
+            "reason": "描述文本中“女性角色和两名男性”同框且共同“小心翼翼地前进”。"
+          },
+          {
+            "shotIndex": 56,
+            "verdict": "no_hit",
+            "reason": "描述文本中画面只出现“黑人队长”一人，属正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 57,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且共同“转身，表情严肃地离开”。"
+          },
+          {
+            "shotIndex": 58,
+            "verdict": "hit",
+            "reason": "描述文本中“一名士兵”同框“疑惑地问”，且“黑人队长解释”。"
+          },
+          {
+            "shotIndex": 59,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”同框“解释”，且“另一名士兵面露震惊”。"
+          },
+          {
+            "shotIndex": 60,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”同框“描述”，且“另一名士兵听后面露恐惧”。"
+          },
+          {
+            "shotIndex": 61,
+            "verdict": "hit",
+            "reason": "描述文本中“男性士兵”同框“疑惑地问”，且“黑人队长回答”。"
+          },
+          {
+            "shotIndex": 64,
+            "verdict": "hit",
+            "reason": "描述文本中“张兰”同框“摸了摸男子的肩膀”，并“提议”。"
+          },
+          {
+            "shotIndex": 65,
+            "verdict": "no_hit",
+            "reason": "描述文本中画面只出现“男性士兵”一人，属正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 69,
+            "verdict": "no_hit",
+            "reason": "描述文本中画面只出现“穆钢”一人，属正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 73,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框“奋力顶住一扇即将关闭的大门”，且“其中一人喊话”。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [],
+      "shotRiskCount": 38,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 12799,
+        "candidatesTokenCount": 4356,
+        "totalTokenCount": 27174,
+        "billedOutputTokens": 14375
+      },
+      "costUSD": {
+        "input": 0.00384,
+        "output": 0.035938,
+        "total": 0.039777
+      },
+      "durationMs": 60091
+    },
+    {
+      "event": "run_summary",
+      "round": 2,
+      "videoId": "1782541753229",
+      "reportId": "b16f15da-d414-4e2a-8923-e96b7e31e8ec",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 5.75,
+      "scores": {
+        "stillFrameGenerability": 8,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 5,
+        "postProductionDependency": 8
+      },
+      "identityEvidence": [
+        "60 个镜头中 20 个命中 multi_character_interaction,占比 33.3%(服务端确定性统计:预筛候选 30 个,模型裁决命中 20 个)",
+        "命中镜头:镜头6、镜头11、镜头17、镜头21、镜头23、镜头24、镜头25、镜头30、镜头36、镜头37、镜头39、镜头40、镜头41、镜头42、镜头47、镜头49、镜头50、镜头51、镜头54、镜头58",
+        "已在最低分档(占比 > 25%)"
+      ],
+      "serverComputed": {
+        "candidateCount": 30,
+        "hitCount": 20,
+        "ratio": 0.333,
+        "hitShotIndexes": [
+          6,
+          11,
+          17,
+          21,
+          23,
+          24,
+          25,
+          30,
+          36,
+          37,
+          39,
+          40,
+          41,
+          42,
+          47,
+          49,
+          50,
+          51,
+          54,
+          58
+        ],
+        "hitsToNextBand": null,
+        "verdicts": [
+          {
+            "shotIndex": 3,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有陆远一人在画面内，林晓仅在台词中提及。"
+          },
+          {
+            "shotIndex": 4,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有林晓一人在画面内。"
+          },
+          {
+            "shotIndex": 5,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有林晓一人在画面内，陆远仅在台词中提及。"
+          },
+          {
+            "shotIndex": 6,
+            "verdict": "hit",
+            "reason": "描述文本中林晓与陈建海在一个冷库内对话，两人同框互动。"
+          },
+          {
+            "shotIndex": 11,
+            "verdict": "hit",
+            "reason": "描述文本中女同事（林晓）坐在陆远身后，关切地询问并递纸巾，陆远回头看她，两人同框互动。"
+          },
+          {
+            "shotIndex": 14,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有林晓一人在画面内。"
+          },
+          {
+            "shotIndex": 15,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有陆远一人在画面内。"
+          },
+          {
+            "shotIndex": 16,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有陆远一人在画面内，同事未明确同框。"
+          },
+          {
+            "shotIndex": 17,
+            "verdict": "hit",
+            "reason": "描述文本中林晓看着陆远离去的背影，两人同框。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与链家房产中介经理对话，两人同框互动。"
+          },
+          {
+            "shotIndex": 23,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与中介经理继续办理手续，两人同框互动。"
+          },
+          {
+            "shotIndex": 24,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与中介经理握手，两人同框互动。"
+          },
+          {
+            "shotIndex": 25,
+            "verdict": "hit",
+            "reason": "描述文本中中介经理向陆远挥手告别，陆远转身离开，两人同框。"
+          },
+          {
+            "shotIndex": 30,
+            "verdict": "hit",
+            "reason": "描述文本中两名幸存者在下水道里大打出手，两人同框互动。"
+          },
+          {
+            "shotIndex": 31,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有陆远一人，狗狗洛卡不属于人物指称。"
+          },
+          {
+            "shotIndex": 32,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有陆远一人，洛卡不属于人物指称。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有陆远一人，洛卡不属于人物指称。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与房东在室内对话，两人同框互动。"
+          },
+          {
+            "shotIndex": 37,
+            "verdict": "hit",
+            "reason": "描述文本中陆远递给房东一张名片，两人同框互动。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有房东一人在画面内。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与房东握手，两人同框互动。"
+          },
+          {
+            "shotIndex": 40,
+            "verdict": "hit",
+            "reason": "描述文本中房东从公文包里拿出钥匙，递给陆远，两人同框互动。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述文本中房东将钥匙交到陆远手中，两人再次握手，两人同框互动。"
+          },
+          {
+            "shotIndex": 42,
+            "verdict": "hit",
+            "reason": "描述文本中房东心满意足地向陆远挥手告别，两人同框。"
+          },
+          {
+            "shotIndex": 47,
+            "verdict": "hit",
+            "reason": "描述文本中陆远和工头老周在地下室，对着图纸讨论改造方案，两人同框互动。"
+          },
+          {
+            "shotIndex": 49,
+            "verdict": "hit",
+            "reason": "描述文本中陆远和老周俯视着摊开的图纸，老周指着图纸，陆远认真听取，两人同框互动。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "hit",
+            "reason": "描述文本中老周质疑改造的造价，陆远保持沉默，两人同框互动。"
+          },
+          {
+            "shotIndex": 51,
+            "verdict": "hit",
+            "reason": "描述文本中老周继续表达担忧，陆远冷静地看着他，两人同框互动。"
+          },
+          {
+            "shotIndex": 54,
+            "verdict": "hit",
+            "reason": "描述文本中老周表示会听从陆远的所有安排，两人同框互动。"
+          },
+          {
+            "shotIndex": 58,
+            "verdict": "hit",
+            "reason": "描述文本中多名工人合力搬运巨大的钢梁，多人同框互动。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [
+        {
+          "weaknessId": "pulid_latency",
+          "ratio": 0.8
+        }
+      ],
+      "shotRiskCount": 39,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 10837,
+        "candidatesTokenCount": 6088,
+        "totalTokenCount": 27671,
+        "billedOutputTokens": 16834
+      },
+      "costUSD": {
+        "input": 0.003251,
+        "output": 0.042085,
+        "total": 0.045336
+      },
+      "durationMs": 67794
+    },
+    {
+      "event": "run_summary",
+      "round": 2,
+      "videoId": "1783073819790",
+      "reportId": "152fc37f-a0cc-4d28-85d5-c867ca6e0fe8",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 6.25,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 10,
+        "postProductionDependency": 5
+      },
+      "identityEvidence": [
+        "61 个镜头中 8 个命中 multi_character_interaction,占比 13.1%(服务端确定性统计:预筛候选 20 个,模型裁决命中 8 个)",
+        "命中镜头:镜头21、镜头22、镜头29、镜头34、镜头36、镜头41、镜头52、镜头54",
+        "边界邻近披露:再多 8 个命中镜头即跨入下一分数区间(不做迟滞/平滑,仅披露)"
+      ],
+      "serverComputed": {
+        "candidateCount": 20,
+        "hitCount": 8,
+        "ratio": 0.131,
+        "hitShotIndexes": [
+          21,
+          22,
+          29,
+          34,
+          36,
+          41,
+          52,
+          54
+        ],
+        "hitsToNextBand": 8,
+        "verdicts": [
+          {
+            "shotIndex": 16,
+            "verdict": "no_hit",
+            "reason": "描述未明确指出三人同框互动，仅提及“将三人重新定位在一起”。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "hit",
+            "reason": "描述明确指出“张杰对着郑吒说话”，两人同框且有对话互动。"
+          },
+          {
+            "shotIndex": 22,
+            "verdict": "hit",
+            "reason": "描述明确指出“两人在金属走廊中对峙”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 23,
+            "verdict": "no_hit",
+            "reason": "描述为“张杰的特写”，未明确指出郑吒同框。"
+          },
+          {
+            "shotIndex": 26,
+            "verdict": "no_hit",
+            "reason": "描述未明确指出郑吒同框，可能为张杰的单人画面。"
+          },
+          {
+            "shotIndex": 29,
+            "verdict": "hit",
+            "reason": "描述明确指出“更多新人”同框，并表现出共同的“惊慌失措”。"
+          },
+          {
+            "shotIndex": 30,
+            "verdict": "no_hit",
+            "reason": "描述只提及张杰一人，未指出其他人同框。"
+          },
+          {
+            "shotIndex": 32,
+            "verdict": "no_hit",
+            "reason": "描述未明确指出胖子同框，可能为张杰的单人画面。"
+          },
+          {
+            "shotIndex": 33,
+            "verdict": "no_hit",
+            "reason": "描述只提及胖子一人，未指出其他人同框。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "hit",
+            "reason": "描述明确指出“张杰把枪塞进胖子嘴里”，两人同框且有肢体互动。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述明确指出“张杰把枪从胖子嘴里拿开”，两人同框且有肢体互动。"
+          },
+          {
+            "shotIndex": 37,
+            "verdict": "no_hit",
+            "reason": "描述只提及詹岚一人，未指出其他人同框。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "no_hit",
+            "reason": "描述只提及张杰一人，未指出其他人同框。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "no_hit",
+            "reason": "描述只提及詹岚一人，未指出其他人同框。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述明确指出“郑吒转向詹岚”，两人同框且有眼神互动。"
+          },
+          {
+            "shotIndex": 44,
+            "verdict": "no_hit",
+            "reason": "描述只提及詹岚一人，未指出其他人同框。"
+          },
+          {
+            "shotIndex": 45,
+            "verdict": "no_hit",
+            "reason": "描述只提及张杰一人，未明确指出詹岚同框。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "no_hit",
+            "reason": "描述只提及张杰一人，未明确指出新人同框。"
+          },
+          {
+            "shotIndex": 52,
+            "verdict": "hit",
+            "reason": "描述明确指出“郑吒、老头和老太太”三人同框，并共同进行“低头看手表”的动作。"
+          },
+          {
+            "shotIndex": 54,
+            "verdict": "hit",
+            "reason": "描述明确指出“一队全副武装的士兵”和“领队黑人队长”同框，且队长对“你们”说话，构成多人同框互动。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [
+        {
+          "weaknessId": "pulid_latency",
+          "ratio": 0.656
+        }
+      ],
+      "shotRiskCount": 30,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 10382,
+        "candidatesTokenCount": 4757,
+        "totalTokenCount": 27409,
+        "billedOutputTokens": 17027
+      },
+      "costUSD": {
+        "input": 0.003115,
+        "output": 0.042568,
+        "total": 0.045682
+      },
+      "durationMs": 78962
+    },
+    {
+      "event": "run_summary",
+      "round": 2,
+      "videoId": "1783192167990",
+      "reportId": "9ca9da97-dc66-4680-8615-985bab66ab8e",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 6.5,
+      "scores": {
+        "stillFrameGenerability": 8,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 8
+      },
+      "identityEvidence": [
+        "74 个镜头中 26 个命中 multi_character_interaction,占比 35.1%(服务端确定性统计:预筛候选 35 个,模型裁决命中 26 个)",
+        "命中镜头:镜头5、镜头8、镜头12、镜头15、镜头16、镜头17、镜头18、镜头19、镜头31、镜头34、镜头36、镜头38、镜头39、镜头40、镜头41、镜头43、镜头44、镜头45、镜头52、镜头57、镜头58、镜头59、镜头60、镜头61、镜头64、镜头73",
+        "已在最低分档(占比 > 25%)"
+      ],
+      "serverComputed": {
+        "candidateCount": 35,
+        "hitCount": 26,
+        "ratio": 0.351,
+        "hitShotIndexes": [
+          5,
+          8,
+          12,
+          15,
+          16,
+          17,
+          18,
+          19,
+          31,
+          34,
+          36,
+          38,
+          39,
+          40,
+          41,
+          43,
+          44,
+          45,
+          52,
+          57,
+          58,
+          59,
+          60,
+          61,
+          64,
+          73
+        ],
+        "hitsToNextBand": null,
+        "verdicts": [
+          {
+            "shotIndex": 5,
+            "verdict": "hit",
+            "reason": "描述文本中“多名士兵”同框且“前进”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 8,
+            "verdict": "hit",
+            "reason": "描述文本中“一名长发编辫子的女性士兵和一名黑人男性士兵”同框且“警惕地瞄准前方”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 12,
+            "verdict": "hit",
+            "reason": "描述文本中“士兵和几名平民”同框且“警惕地环顾四周”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 15,
+            "verdict": "hit",
+            "reason": "描述文本中“两人搀扶着一个穿着蓝色衣服的人”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 16,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“快速移动”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 17,
+            "verdict": "hit",
+            "reason": "描述文本中“几名士兵”同框且“小心翼翼地靠近”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 18,
+            "verdict": "hit",
+            "reason": "描述文本中“一群士兵和几名平民聚集在一个房间里，准备对话”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 19,
+            "verdict": "hit",
+            "reason": "描述文本中“金发女子”质问“黑人队长”，构成对话互动。"
+          },
+          {
+            "shotIndex": 20,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及“黑人队长”一人在画面中，属于正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及“黑人队长”一人在画面中，属于正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 24,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及“黑人队长”一人在画面中，且“手下”未明确描述为同框互动。"
+          },
+          {
+            "shotIndex": 26,
+            "verdict": "no_hit",
+            "reason": "描述文本中未提及任何人物，不构成多人同框互动。"
+          },
+          {
+            "shotIndex": 29,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及“金发女子”一人在画面中，属于正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 31,
+            "verdict": "hit",
+            "reason": "描述文本中“几名平民”同框且“面露困惑和不安”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "hit",
+            "reason": "描述文本中“三名士兵”同框且“小心翼翼地靠近”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“小心地进入”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "hit",
+            "reason": "描述文本中“一群士兵和几名平民”同框且“站在走廊中”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "hit",
+            "reason": "描述文本中“一行人，包括士兵和女性”同框且“走进”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 40,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“合力推开”门，构成肢体互动。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“趴在洞口，向下张望”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 43,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“其中一人说”，构成对话互动。"
+          },
+          {
+            "shotIndex": 44,
+            "verdict": "hit",
+            "reason": "描述文本中“士兵们和几名平民”同框且“快速奔跑”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 45,
+            "verdict": "hit",
+            "reason": "描述文本中“一名士兵”协助“胖子男性”下楼梯，构成肢体互动。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及“男性士兵”一人在画面中，属于正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 52,
+            "verdict": "hit",
+            "reason": "描述文本中“女性角色和两名男性”同框且“小心翼翼地前进”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 56,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及“黑人队长”一人在画面中，属于正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 57,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“转身，表情严肃地离开”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 58,
+            "verdict": "hit",
+            "reason": "描述文本中“一名士兵”提问，“黑人队长”解释，构成对话互动。"
+          },
+          {
+            "shotIndex": 59,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”解释，“另一名士兵”面露震惊，构成互动。"
+          },
+          {
+            "shotIndex": 60,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”描述，“另一名士兵”听后面露恐惧，构成互动。"
+          },
+          {
+            "shotIndex": 61,
+            "verdict": "hit",
+            "reason": "描述文本中“男性士兵”提问，“黑人队长”回答，构成对话互动。"
+          },
+          {
+            "shotIndex": 64,
+            "verdict": "hit",
+            "reason": "描述文本中“张兰”摸了摸“男子的肩膀”并提议，构成肢体和对话互动。"
+          },
+          {
+            "shotIndex": 65,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及“男性士兵”一人在画面中，属于正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 69,
+            "verdict": "no_hit",
+            "reason": "描述文本只提及“穆钢”一人在画面中，属于正反打中的单人画面。"
+          },
+          {
+            "shotIndex": 73,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“奋力顶住”大门并“其中一人喊”，构成肢体和对话互动。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [],
+      "shotRiskCount": 38,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 12799,
+        "candidatesTokenCount": 5034,
+        "totalTokenCount": 29873,
+        "billedOutputTokens": 17074
+      },
+      "costUSD": {
+        "input": 0.00384,
+        "output": 0.042685,
+        "total": 0.046525
+      },
+      "durationMs": 69176
+    },
+    {
+      "event": "run_summary",
+      "round": 3,
+      "videoId": "1782541753229",
+      "reportId": "5d050445-f0cd-43ec-8620-944de28d2df5",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 6.5,
+      "scores": {
+        "stillFrameGenerability": 8,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 8
+      },
+      "identityEvidence": [
+        "60 个镜头中 19 个命中 multi_character_interaction,占比 31.7%(服务端确定性统计:预筛候选 30 个,模型裁决命中 19 个)",
+        "命中镜头:镜头6、镜头11、镜头17、镜头21、镜头23、镜头24、镜头25、镜头30、镜头36、镜头37、镜头39、镜头40、镜头41、镜头42、镜头47、镜头49、镜头50、镜头51、镜头58",
+        "已在最低分档(占比 > 25%)"
+      ],
+      "serverComputed": {
+        "candidateCount": 30,
+        "hitCount": 19,
+        "ratio": 0.317,
+        "hitShotIndexes": [
+          6,
+          11,
+          17,
+          21,
+          23,
+          24,
+          25,
+          30,
+          36,
+          37,
+          39,
+          40,
+          41,
+          42,
+          47,
+          49,
+          50,
+          51,
+          58
+        ],
+        "hitsToNextBand": null,
+        "verdicts": [
+          {
+            "shotIndex": 3,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有陆远一人在画面内，林晓仅在台词中提及。"
+          },
+          {
+            "shotIndex": 4,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有林晓一人在画面内。"
+          },
+          {
+            "shotIndex": 5,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有林晓一人在画面内，陆远仅在台词中提及。"
+          },
+          {
+            "shotIndex": 6,
+            "verdict": "hit",
+            "reason": "描述文本中林晓与陈建海在一个冷库内对话，两人同框互动。"
+          },
+          {
+            "shotIndex": 11,
+            "verdict": "hit",
+            "reason": "描述文本中女同事（林晓）坐在陆远身后，陆远回头看她，两人同框互动。"
+          },
+          {
+            "shotIndex": 14,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有林晓一人在画面内。"
+          },
+          {
+            "shotIndex": 15,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有陆远一人在画面内。"
+          },
+          {
+            "shotIndex": 16,
+            "verdict": "no_hit",
+            "reason": "描述文本中未明确指出同事与陆远同框。"
+          },
+          {
+            "shotIndex": 17,
+            "verdict": "hit",
+            "reason": "描述文本中林晓看着陆远离去的背影，两人同框。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与链家房产中介经理对话，两人同框互动。"
+          },
+          {
+            "shotIndex": 23,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与中介经理继续办理手续，两人同框互动。"
+          },
+          {
+            "shotIndex": 24,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与中介经理握手，两人同框互动。"
+          },
+          {
+            "shotIndex": 25,
+            "verdict": "hit",
+            "reason": "描述文本中中介经理向陆远挥手告别，两人同框互动。"
+          },
+          {
+            "shotIndex": 30,
+            "verdict": "hit",
+            "reason": "描述文本中两名幸存者大打出手，两人同框互动。"
+          },
+          {
+            "shotIndex": 31,
+            "verdict": "no_hit",
+            "reason": "描述文本中洛卡是动物，不属于可辨识人物指称。"
+          },
+          {
+            "shotIndex": 32,
+            "verdict": "no_hit",
+            "reason": "描述文本中洛卡是动物，不属于可辨识人物指称。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "no_hit",
+            "reason": "描述文本中洛卡是动物，不属于可辨识人物指称。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与房东在室内对话，两人同框互动。"
+          },
+          {
+            "shotIndex": 37,
+            "verdict": "hit",
+            "reason": "描述文本中陆远递给房东一张名片，两人同框互动。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有房东一人在画面内。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "hit",
+            "reason": "描述文本中陆远与房东握手，两人同框互动。"
+          },
+          {
+            "shotIndex": 40,
+            "verdict": "hit",
+            "reason": "描述文本中房东拿出钥匙递给陆远，两人同框互动。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述文本中房东将钥匙交到陆远手中，两人再次握手，同框互动。"
+          },
+          {
+            "shotIndex": 42,
+            "verdict": "hit",
+            "reason": "描述文本中房东向陆远挥手告别，两人同框互动。"
+          },
+          {
+            "shotIndex": 47,
+            "verdict": "hit",
+            "reason": "描述文本中陆远和工头老周对着图纸讨论改造方案，两人同框互动。"
+          },
+          {
+            "shotIndex": 49,
+            "verdict": "hit",
+            "reason": "描述文本中陆远和老周俯视着图纸，老周指着图纸，陆远认真听取，两人同框互动。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "hit",
+            "reason": "描述文本中老周质疑改造造价，陆远保持沉默，两人同框互动。"
+          },
+          {
+            "shotIndex": 51,
+            "verdict": "hit",
+            "reason": "描述文本中老周表达担忧，陆远冷静地看着他，两人同框互动。"
+          },
+          {
+            "shotIndex": 54,
+            "verdict": "no_hit",
+            "reason": "描述文本中只有老周一人在画面内。"
+          },
+          {
+            "shotIndex": 58,
+            "verdict": "hit",
+            "reason": "描述文本中多名工人合力搬运巨大的钢梁，多人同框互动。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [
+        {
+          "weaknessId": "pulid_latency",
+          "ratio": 0.8
+        }
+      ],
+      "shotRiskCount": 35,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 10837,
+        "candidatesTokenCount": 5587,
+        "totalTokenCount": 28022,
+        "billedOutputTokens": 17185
+      },
+      "costUSD": {
+        "input": 0.003251,
+        "output": 0.042963,
+        "total": 0.046214
+      },
+      "durationMs": 69924
+    },
+    {
+      "event": "run_summary",
+      "round": 3,
+      "videoId": "1783073819790",
+      "reportId": "544ad3ea-8688-4f51-bd02-5a1c652715da",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 6.25,
+      "scores": {
+        "stillFrameGenerability": 5,
+        "identityConsistencyPressure": 5,
+        "cameraMotionFeasibility": 10,
+        "postProductionDependency": 5
+      },
+      "identityEvidence": [
+        "61 个镜头中 12 个命中 multi_character_interaction,占比 19.7%(服务端确定性统计:预筛候选 20 个,模型裁决命中 12 个)",
+        "命中镜头:镜头21、镜头22、镜头26、镜头29、镜头32、镜头33、镜头34、镜头36、镜头41、镜头45、镜头52、镜头54",
+        "边界邻近披露:再多 4 个命中镜头即跨入下一分数区间(不做迟滞/平滑,仅披露)"
+      ],
+      "serverComputed": {
+        "candidateCount": 20,
+        "hitCount": 12,
+        "ratio": 0.197,
+        "hitShotIndexes": [
+          21,
+          22,
+          26,
+          29,
+          32,
+          33,
+          34,
+          36,
+          41,
+          45,
+          52,
+          54
+        ],
+        "hitsToNextBand": 4,
+        "verdicts": [
+          {
+            "shotIndex": 16,
+            "verdict": "no_hit",
+            "reason": "描述未明确指出三人同框互动，主要描述地图定位和重新定位。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "hit",
+            "reason": "描述指出“张杰对着郑吒说话”，两人同框且存在互动。"
+          },
+          {
+            "shotIndex": 22,
+            "verdict": "hit",
+            "reason": "描述指出“两人在金属走廊中对峙”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 23,
+            "verdict": "no_hit",
+            "reason": "描述为“张杰的特写”，属于单人画面。"
+          },
+          {
+            "shotIndex": 26,
+            "verdict": "hit",
+            "reason": "描述指出“张杰吸烟，向郑吒解释”，两人同框且存在互动。"
+          },
+          {
+            "shotIndex": 29,
+            "verdict": "hit",
+            "reason": "描述指出“更多新人”同框，并集体“惊慌失措”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 30,
+            "verdict": "no_hit",
+            "reason": "描述只提及“张杰”一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 32,
+            "verdict": "hit",
+            "reason": "描述指出“张杰...告诉胖子”，两人同框且存在互动。"
+          },
+          {
+            "shotIndex": 33,
+            "verdict": "hit",
+            "reason": "描述指出“胖子质疑张杰”，两人同框且存在互动。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "hit",
+            "reason": "描述指出“张杰把枪塞进胖子嘴里”，两人同框且存在肢体互动。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述指出“张杰把枪从胖子嘴里拿开”，两人同框且存在肢体互动。"
+          },
+          {
+            "shotIndex": 37,
+            "verdict": "no_hit",
+            "reason": "描述只提及“詹岚”一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "no_hit",
+            "reason": "描述只提及“张杰”一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "no_hit",
+            "reason": "描述只提及“詹岚”一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述指出“郑吒转向詹岚”，两人同框且存在互动。"
+          },
+          {
+            "shotIndex": 44,
+            "verdict": "no_hit",
+            "reason": "描述只提及“詹岚”一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 45,
+            "verdict": "hit",
+            "reason": "描述指出“张杰肯定詹岚的理解”，两人同框且存在互动。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "no_hit",
+            "reason": "描述只提及“张杰”一人，属于单人画面。"
+          },
+          {
+            "shotIndex": 52,
+            "verdict": "hit",
+            "reason": "描述指出“郑吒、老头和老太太”同框，并集体“低头看自己的手表”，构成多人同框互动。"
+          },
+          {
+            "shotIndex": 54,
+            "verdict": "hit",
+            "reason": "描述指出“一队全副武装的士兵”和“领队黑人队长”同框，并与“你们”互动，构成多人同框互动。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [
+        {
+          "weaknessId": "pulid_latency",
+          "ratio": 0.656
+        }
+      ],
+      "shotRiskCount": 30,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 10382,
+        "candidatesTokenCount": 4628,
+        "totalTokenCount": 26934,
+        "billedOutputTokens": 16552
+      },
+      "costUSD": {
+        "input": 0.003115,
+        "output": 0.04138,
+        "total": 0.044495
+      },
+      "durationMs": 92317
+    },
+    {
+      "event": "run_summary",
+      "round": 3,
+      "videoId": "1783192167990",
+      "reportId": "b9306627-676b-4281-a589-540be93a937a",
+      "kbVersion": "replicability@1.2.0",
+      "overallScore": 6.05,
+      "scores": {
+        "stillFrameGenerability": 8,
+        "identityConsistencyPressure": 2,
+        "cameraMotionFeasibility": 8,
+        "postProductionDependency": 5
+      },
+      "identityEvidence": [
+        "74 个镜头中 31 个命中 multi_character_interaction,占比 41.9%(服务端确定性统计:预筛候选 35 个,模型裁决命中 31 个)",
+        "命中镜头:镜头5、镜头8、镜头12、镜头15、镜头16、镜头17、镜头18、镜头19、镜头20、镜头21、镜头24、镜头29、镜头31、镜头34、镜头36、镜头38、镜头39、镜头40、镜头41、镜头43、镜头44、镜头45、镜头52、镜头56、镜头57、镜头58、镜头59、镜头60、镜头61、镜头64、镜头73",
+        "已在最低分档(占比 > 25%)"
+      ],
+      "serverComputed": {
+        "candidateCount": 35,
+        "hitCount": 31,
+        "ratio": 0.419,
+        "hitShotIndexes": [
+          5,
+          8,
+          12,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          24,
+          29,
+          31,
+          34,
+          36,
+          38,
+          39,
+          40,
+          41,
+          43,
+          44,
+          45,
+          52,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          64,
+          73
+        ],
+        "hitsToNextBand": null,
+        "verdicts": [
+          {
+            "shotIndex": 5,
+            "verdict": "hit",
+            "reason": "描述文本中“多名士兵”同框且“前进”。"
+          },
+          {
+            "shotIndex": 8,
+            "verdict": "hit",
+            "reason": "描述文本中“女性士兵和黑人男性士兵”同框且“准备战斗”。"
+          },
+          {
+            "shotIndex": 12,
+            "verdict": "hit",
+            "reason": "描述文本中“士兵和几名平民”同框且“警惕地环顾四周”。"
+          },
+          {
+            "shotIndex": 15,
+            "verdict": "hit",
+            "reason": "描述文本中“士兵们”同框且“两人搀扶着一个穿着蓝色衣服的人”。"
+          },
+          {
+            "shotIndex": 16,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“快速移动”。"
+          },
+          {
+            "shotIndex": 17,
+            "verdict": "hit",
+            "reason": "描述文本中“几名士兵”同框且“小心翼翼地靠近”。"
+          },
+          {
+            "shotIndex": 18,
+            "verdict": "hit",
+            "reason": "描述文本中“一群士兵和几名平民”同框且“准备对话”。"
+          },
+          {
+            "shotIndex": 19,
+            "verdict": "hit",
+            "reason": "描述文本中“金发女子”质问“黑人队长”。"
+          },
+          {
+            "shotIndex": 20,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”回应“金发女子的问题”。"
+          },
+          {
+            "shotIndex": 21,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”解释并指出“对方”。"
+          },
+          {
+            "shotIndex": 24,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”解释“金发女子”并“示意手下”。"
+          },
+          {
+            "shotIndex": 26,
+            "verdict": "no_hit",
+            "reason": "描述文本中只提及屏幕内容，未出现可辨识人物同框互动。"
+          },
+          {
+            "shotIndex": 29,
+            "verdict": "hit",
+            "reason": "描述文本中“金发女子”质问“黑人队长”。"
+          },
+          {
+            "shotIndex": 31,
+            "verdict": "hit",
+            "reason": "描述文本中“几名平民”同框且“看着黑人队长”。"
+          },
+          {
+            "shotIndex": 34,
+            "verdict": "hit",
+            "reason": "描述文本中“三名士兵”同框且“小心翼翼地靠近”。"
+          },
+          {
+            "shotIndex": 36,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“小心地进入”。"
+          },
+          {
+            "shotIndex": 38,
+            "verdict": "hit",
+            "reason": "描述文本中“一群士兵和几名平民”同框且“站在走廊中”。"
+          },
+          {
+            "shotIndex": 39,
+            "verdict": "hit",
+            "reason": "描述文本中“一行人，包括士兵和女性”同框且“走进走廊”。"
+          },
+          {
+            "shotIndex": 40,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“合力推开”。"
+          },
+          {
+            "shotIndex": 41,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“趴在洞口，向下张望”。"
+          },
+          {
+            "shotIndex": 43,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“其中一人说”。"
+          },
+          {
+            "shotIndex": 44,
+            "verdict": "hit",
+            "reason": "描述文本中“士兵们和几名平民”同框且“快速奔跑”。"
+          },
+          {
+            "shotIndex": 45,
+            "verdict": "hit",
+            "reason": "描述文本中“一名士兵”同框且“协助身穿动漫T恤的胖子男性”。"
+          },
+          {
+            "shotIndex": 50,
+            "verdict": "no_hit",
+            "reason": "描述文本中只提及“男性士兵”一人，对话中的“他们”未在画面中出现。"
+          },
+          {
+            "shotIndex": 52,
+            "verdict": "hit",
+            "reason": "描述文本中“女性角色和两名男性”同框且“小心翼翼地前进”。"
+          },
+          {
+            "shotIndex": 56,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”下达命令给“卡普拉和张杰”及“其他人”。"
+          },
+          {
+            "shotIndex": 57,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“转身，表情严肃地离开”。"
+          },
+          {
+            "shotIndex": 58,
+            "verdict": "hit",
+            "reason": "描述文本中“一名士兵”提问，“黑人队长”解释。"
+          },
+          {
+            "shotIndex": 59,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”解释，“另一名士兵”面露震惊。"
+          },
+          {
+            "shotIndex": 60,
+            "verdict": "hit",
+            "reason": "描述文本中“黑人队长”描述，“另一名士兵”听后面露恐惧。"
+          },
+          {
+            "shotIndex": 61,
+            "verdict": "hit",
+            "reason": "描述文本中“男性士兵”提问，“黑人队长”回答。"
+          },
+          {
+            "shotIndex": 64,
+            "verdict": "hit",
+            "reason": "描述文本中“张兰”摸了摸“男子的肩膀”并提议。"
+          },
+          {
+            "shotIndex": 65,
+            "verdict": "no_hit",
+            "reason": "描述文本中只提及“男性士兵”一人，属正反打单人画面。"
+          },
+          {
+            "shotIndex": 69,
+            "verdict": "no_hit",
+            "reason": "描述文本中只提及“穆钢”一人，未出现可辨识人物同框互动。"
+          },
+          {
+            "shotIndex": 73,
+            "verdict": "hit",
+            "reason": "描述文本中“两名士兵”同框且“奋力顶住”并“其中一人喊”。"
+          }
+        ]
+      },
+      "aggregateAdvisories": [],
+      "shotRiskCount": 50,
+      "adjudication": null,
+      "usageBreakdown": null,
+      "usage": {
+        "promptTokenCount": 12799,
+        "candidatesTokenCount": 6235,
+        "totalTokenCount": 36451,
+        "billedOutputTokens": 23652
+      },
+      "costUSD": {
+        "input": 0.00384,
+        "output": 0.05913,
+        "total": 0.06297
+      },
+      "durationMs": 97962
+    }
+  ],
+  "perVideo": [
+    {
+      "videoId": "1782541753229",
+      "identityScores": "2→2→2",
+      "identityStable": true,
+      "overallScores": "5.5→5.75→6.5",
+      "candidateCounts": "30→30→30",
+      "candidateCountStable": true,
+      "hitCounts": "19→20→19",
+      "hitsToNextBand": "→→",
+      "candidateTotal": 30,
+      "flippedCandidates": [
+        {
+          "shotIndex": 54,
+          "verdicts": [
+            "no_hit",
+            "hit",
+            "no_hit"
+          ]
+        }
+      ],
+      "flipRate": "3.3%"
+    },
+    {
+      "videoId": "1783073819790",
+      "identityScores": "5→5→5",
+      "identityStable": true,
+      "overallScores": "6.25→6.25→6.25",
+      "candidateCounts": "20→20→20",
+      "candidateCountStable": true,
+      "hitCounts": "12→8→12",
+      "hitsToNextBand": "4→8→4",
+      "candidateTotal": 20,
+      "flippedCandidates": [
+        {
+          "shotIndex": 26,
+          "verdicts": [
+            "hit",
+            "no_hit",
+            "hit"
+          ]
+        },
+        {
+          "shotIndex": 32,
+          "verdicts": [
+            "hit",
+            "no_hit",
+            "hit"
+          ]
+        },
+        {
+          "shotIndex": 33,
+          "verdicts": [
+            "hit",
+            "no_hit",
+            "hit"
+          ]
+        },
+        {
+          "shotIndex": 45,
+          "verdicts": [
+            "hit",
+            "no_hit",
+            "hit"
+          ]
+        }
+      ],
+      "flipRate": "20.0%"
+    },
+    {
+      "videoId": "1783192167990",
+      "identityScores": "2→2→2",
+      "identityStable": true,
+      "overallScores": "5.45→6.5→6.05",
+      "candidateCounts": "35→35→35",
+      "candidateCountStable": true,
+      "hitCounts": "26→26→31",
+      "hitsToNextBand": "→→",
+      "candidateTotal": 35,
+      "flippedCandidates": [
+        {
+          "shotIndex": 20,
+          "verdicts": [
+            "no_hit",
+            "no_hit",
+            "hit"
+          ]
+        },
+        {
+          "shotIndex": 21,
+          "verdicts": [
+            "no_hit",
+            "no_hit",
+            "hit"
+          ]
+        },
+        {
+          "shotIndex": 24,
+          "verdicts": [
+            "no_hit",
+            "no_hit",
+            "hit"
+          ]
+        },
+        {
+          "shotIndex": 29,
+          "verdicts": [
+            "no_hit",
+            "no_hit",
+            "hit"
+          ]
+        },
+        {
+          "shotIndex": 56,
+          "verdicts": [
+            "no_hit",
+            "no_hit",
+            "hit"
+          ]
+        }
+      ],
+      "flipRate": "14.3%"
+    }
+  ],
+  "checks": {
+    "identityScoreZeroVarianceEveryVideo": true,
+    "candidateSetDeterministic": true,
+    "allKbVersionsV120": true,
+    "allRuns": true
+  },
+  "totals": {
+    "promptTokens": 102054,
+    "billedOutputTokens": 161045,
+    "costUSD": 0.43323
+  }
+}
