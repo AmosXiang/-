@@ -2,6 +2,11 @@
 // A 组 = 当前默认(不设 thinkingConfig);B 组 = thinkingBudget: 0(关闭思考)。
 // 直接复用模块的知识库/prompt/schema 与 server/lib/gemini.ts 客户端,绕过 HTTP。
 // 用法: npx tsx scripts/thinking-budget-experiment.ts
+//
+// 【已存档】本实验绑定 rubric v1.1 的单调用架构(模型自由扫描+评分),结论见
+// docs/shot-analysis/THINKING-BUDGET-EXPERIMENT.md。v1.3 起主调用已瘦身
+// (buildReplicabilityPrompt 签名与 schema 都已变化),本脚本不可再运行,
+// 仅保留为实验记录;运行时会在下方版本守卫处明确退出。
 
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
@@ -65,6 +70,11 @@ function complianceIssues(report: any, kb: ReturnType<typeof loadKnowledgeBase>)
 }
 
 const kb = loadKnowledgeBase();
+// 版本守卫:实验绑定 v1.1 单调用架构,知识库升级后不可复跑(见文件头【已存档】说明)。
+if (!kb.replicabilityVersion.startsWith('replicability@1.1')) {
+  console.error(JSON.stringify({ event: 'archived_experiment', message: `本实验仅适用于 rubric v1.1 单调用架构,当前知识库为 ${kb.replicabilityVersion},不可复跑。结论见 docs/shot-analysis/THINKING-BUDGET-EXPERIMENT.md。` }));
+  process.exit(1);
+}
 const ai = createGeminiClient();
 const runs: any[] = [];
 
@@ -76,7 +86,8 @@ for (const arm of ARMS) {
     try {
       const response = await withGeminiTimeout(ai.models.generateContent({
         model: MODEL,
-        contents: [{ text: buildReplicabilityPrompt(kb, input) }],
+        // 存档脚本:v1.1 单调用 prompt 的调用形态,v1.3 签名已变,any 断言仅为保持可编译。
+        contents: [{ text: (buildReplicabilityPrompt as any)(kb, input) }],
         config: {
           temperature: 0.1,
           responseMimeType: 'application/json',

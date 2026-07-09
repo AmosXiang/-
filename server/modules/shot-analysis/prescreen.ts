@@ -11,6 +11,7 @@ export type PrescreenLexicons = {
 export type PrescreenShot = {
   timestamp: string;
   description: string;
+  movement?: string;
 };
 
 export type ShotCandidate = {
@@ -122,6 +123,29 @@ export function prescreenMultiCharacterShots(
   return { totalShots: shots.length, candidates, aliases: aliases.map(a => a.alias) };
 }
 
+// v1.3 通用词表预筛:词表命中指定字段即入候选(宁多勿漏,裁决过滤);
+// multiSegmentMovement 时 movement 字段含 ≥2 个分隔段(逗号/顿号)也入候选(多段机位变化信号)。
+export function prescreenLexiconShots(
+  shots: PrescreenShot[],
+  config: { fields?: string[]; words?: string[]; multiSegmentMovement?: boolean },
+): PrescreenResult {
+  const fields = config.fields?.length ? config.fields : ['description'];
+  const words = config.words || [];
+  const candidates: ShotCandidate[] = [];
+  shots.forEach((shot, i) => {
+    const haystack = fields.map(f => String((shot as any)[f] || '')).join(' ').toLowerCase();
+    const matched = words.filter(w => haystack.includes(w.toLowerCase()));
+    if (config.multiSegmentMovement) {
+      const segments = String(shot.movement || '').split(/[,，、;；]/).map(s => s.trim()).filter(Boolean);
+      if (segments.length >= 2) matched.push('<多段运镜>');
+    }
+    if (matched.length > 0) {
+      candidates.push({ shotIndex: i + 1, timestamp: String(shot.timestamp || ''), description: String(shot.description || ''), referents: [], cues: matched });
+    }
+  });
+  return { totalShots: shots.length, candidates, aliases: [] };
+}
+
 // pulid_latency 聚合统计(v1.2 第 4 节):身份锁定镜头 = description 含 ≥1 个注册角色别名。
 // 纯字符串判定,不涉及模型。
 export function countIdentityLockedShots(shots: PrescreenShot[], characters: Array<{ name: string }>): number {
@@ -134,20 +158,23 @@ export function countIdentityLockedShots(shots: PrescreenShot[], characters: Arr
   return count;
 }
 
-// 占比 → 锚点分映射。区间边界严格按知识库 anchors 的 ≤/< 记号:
-// 0% → 10;0 < r ≤ 10% → 8;10% < r ≤ 25% → 5;r > 25% → 2。
-export function ratioToAnchorScore(ratio: number): 2 | 5 | 8 | 10 {
+export type AnchorThresholds = { t8: number; t5: number };
+
+// 占比 → 锚点分映射。区间边界严格按知识库 anchors 的 ≤/< 记号,阈值按维度
+// anchorThresholds 驱动(v1.3:still/post 为 0.10/0.30,identity/camera 为 0.10/0.25):
+// 0% → 10;0 < r ≤ t8 → 8;t8 < r ≤ t5 → 5;r > t5 → 2。
+export function ratioToAnchorScore(ratio: number, thresholds: AnchorThresholds): 2 | 5 | 8 | 10 {
   if (ratio <= 0) return 10;
-  if (ratio <= 0.10) return 8;
-  if (ratio <= 0.25) return 5;
+  if (ratio <= thresholds.t8) return 8;
+  if (ratio <= thresholds.t5) return 5;
   return 2;
 }
 
 // 距区间边界的镜头数披露(v1.2 第 3 节:不做迟滞,只做披露)。
 // 返回当前占比距最近锚点边界还差几个 hit(向上跨带所需的最小新增命中数;已在 2 分档时为 null)。
-export function hitsToNextBand(hits: number, totalShots: number): number | null {
+export function hitsToNextBand(hits: number, totalShots: number, thresholds: AnchorThresholds): number | null {
   if (totalShots <= 0) return null;
-  const boundaries = [0, 0.10, 0.25];
+  const boundaries = [0, thresholds.t8, thresholds.t5];
   const ratio = hits / totalShots;
   for (const b of boundaries) {
     if (ratio <= b) {
@@ -156,5 +183,5 @@ export function hitsToNextBand(hits: number, totalShots: number): number | null 
       return Math.max(needed, 1);
     }
   }
-  return null; // 已在最低档(>25%),不存在再向下跨带
+  return null; // 已在最低档(>t5),不存在再向下跨带
 }

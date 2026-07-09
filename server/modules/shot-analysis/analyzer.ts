@@ -17,16 +17,17 @@ import {
   withGeminiTimeout,
 } from '../../lib/gemini.ts';
 import { loadKnowledgeBase, type KnowledgeBase, type ReplicabilityDimension } from './knowledge.ts';
-import { buildAnalysisJsonPrompt, buildReplicabilityPrompt, buildVideoPrompt, type AnalysisJsonInput } from './prompt.ts';
-import { adjudicationResponseSchema, buildAdjudicationPrompt, validateVerdicts, type AdjudicationVerdict } from './adjudicator.ts';
+import { buildAnalysisJsonPrompt, buildReplicabilityPrompt, buildVideoPrompt, type AnalysisJsonInput, type ServerStatsForNarrative } from './prompt.ts';
+import { adjudicationResponseSchema, buildAdjudicationPrompt, validateVerdicts, type AdjudicationGroup, type AdjudicationVerdict } from './adjudicator.ts';
 import {
   countIdentityLockedShots,
   hitsToNextBand,
+  prescreenLexiconShots,
   prescreenMultiCharacterShots,
   ratioToAnchorScore,
   type PrescreenResult,
 } from './prescreen.ts';
-import { replicabilityResponseSchema, shotAnalysisResponseSchema, type DimensionScore, type ReplicabilityReport, type ShotAnalysisReport } from './schema.ts';
+import { replicabilityResponseSchema, shotAnalysisResponseSchema, type AggregateAdvisory, type DimensionScore, type Improvement, type ReplicabilityReport, type ServerComputedDimension, type ShotAnalysisReport } from './schema.ts';
 
 export const SHOT_ANALYSIS_MODEL = 'gemini-2.5-flash';
 export const ANALYSIS_TYPES = ['narrative', 'replicability'] as const;
@@ -115,129 +116,143 @@ function validateReport(raw: any, kb: KnowledgeBase): ShotAnalysisReport {
   return raw as ShotAnalysisReport;
 }
 
-// 可生产性主报告校验(v1.2):模型只负责非 server 维度。
-// - scores 必须且只能覆盖 scoredBy !== 'server' 的维度;发射 server 维度分数判无效响应;
-// - shotRisks 禁止出现 server 维度的弱项(multi_character_interaction/pulid_latency);
-// - shotRef 强制 "镜头N" 前缀(历史 12 轮出现过 1 轮纯时间戳导致不可解析);
-// - overallScore 不在此处计算(等服务端注入 identity 维度分后统一重算)。
-export function validateReplicabilityModelReport(raw: any, kb: KnowledgeBase): ReplicabilityReport {
-  if (!raw || typeof raw !== 'object') throw invalidResponse('Report is not an object');
-  const modelDims = kb.replicabilityDimensions.filter(d => d.scoredBy !== 'server');
-  const serverDims = kb.replicabilityDimensions.filter(d => d.scoredBy === 'server');
-  const modelDimIds = new Set(modelDims.map(d => d.id));
-  const modelWeaknessIds = new Set(modelDims.flatMap(d => d.knownWeaknesses.map(w => w.id)));
-  const serverWeaknessIds = new Set(serverDims.flatMap(d => d.knownWeaknesses.map(w => w.id)));
-
-  for (const risk of raw.shotRisks || []) {
-    if (serverWeaknessIds.has(risk.weaknessId)) throw invalidResponse(`Model must not emit server-computed weakness in shotRisks: ${risk.weaknessId}`);
-    if (!modelWeaknessIds.has(risk.weaknessId)) throw invalidResponse(`Unknown weaknessId: ${risk.weaknessId}`);
-    if (!modelDimIds.has(risk.dimensionId)) throw invalidResponse(`Unknown replicability dimensionId in shotRisks: ${risk.dimensionId}`);
-    if (!['high', 'medium', 'low'].includes(risk.severity)) throw invalidResponse(`Invalid shotRisk severity: ${risk.severity}`);
-    if (!Array.isArray(risk.evidence) || !risk.evidence.length) throw invalidResponse(`ShotRisk ${risk.weaknessId}@${risk.shotRef} has no evidence`);
-    if (!/^镜头\s*\d+/.test(String(risk.shotRef || ''))) throw invalidResponse(`ShotRisk shotRef must start with 镜头N, got: ${risk.shotRef}`);
-  }
-  const scores: DimensionScore[] = raw.scores || [];
-  const covered = new Set<string>();
-  for (const item of scores) {
-    if (!modelDimIds.has(item.dimensionId)) throw invalidResponse(`Model must not score server-computed or unknown dimension: ${item.dimensionId}`);
-    if (typeof item.score !== 'number' || ![2, 5, 8, 10].includes(item.score)) throw invalidResponse(`Invalid anchor score for ${item.dimensionId}: ${item.score}; expected one of 2, 5, 8, 10`);
-    if (!Array.isArray(item.evidence) || !item.evidence.length) throw invalidResponse(`Dimension ${item.dimensionId} has no evidence`);
-    covered.add(item.dimensionId);
-  }
-  for (const id of modelDimIds) {
-    if (!covered.has(id)) throw invalidResponse(`Replicability dimension not scored: ${id}`);
-  }
-  for (const item of raw.improvements || []) {
+// 可生产性主调用输出校验(v1.3 瘦身版):模型只产 improvements + summary。
+// target 强制"镜头N"前缀;relatedPatternId 封闭 id 域;运镜 unverified 约束
+// (禁止成功率/失败率数字)升级为服务端校验。
+export function validateReplicabilityNarrative(raw: any, kb: KnowledgeBase): { improvements: Improvement[]; summary: string } {
+  if (!raw || typeof raw !== 'object') throw invalidResponse('Narrative output is not an object');
+  const legalIds = new Set(kb.replicabilityDimensions.flatMap(d => [d.id, ...d.knownWeaknesses.map(w => w.id)]));
+  const improvements: Improvement[] = raw.improvements || [];
+  for (const item of improvements) {
     if (!['high', 'medium', 'low'].includes(item.priority)) throw invalidResponse(`Invalid improvement priority: ${item.priority}`);
+    if (!/^镜头\s*\d+/.test(String(item.target || ''))) throw invalidResponse(`Improvement target must start with 镜头N, got: ${item.target}`);
+    if (!legalIds.has(item.relatedPatternId)) throw invalidResponse(`Unknown relatedPatternId: ${item.relatedPatternId}`);
   }
-  return raw as ReplicabilityReport;
+  if (typeof raw.summary !== 'string' || !raw.summary.trim()) throw invalidResponse('Narrative output has empty summary');
+  const banned = /(成功率|失败率)[^。;,]{0,8}\d/;
+  for (const text of [raw.summary, ...improvements.flatMap(i => [i.issue, i.suggestion])]) {
+    if (banned.test(String(text || ''))) throw invalidResponse('Narrative output contains success/failure-rate numbers for unverified dimension');
+  }
+  return { improvements, summary: raw.summary.trim() };
 }
 
-// 服务端合成 identity 维度(v1.2 第 2/4 节):维度分、evidence、shotRisks、pulid 聚合 advisory
-// 与总分重算,全部确定性,模型不参与任何计数或算分。
-export function synthesizeServerScoredDimension(
-  report: ReplicabilityReport,
+export type ServerSynthesis = {
+  scores: DimensionScore[];
+  shotRisks: ReplicabilityReport['shotRisks'];
+  aggregateAdvisories: AggregateAdvisory[];
+  serverComputed: Record<string, ServerComputedDimension>;
+  overallScore: number;
+  serverStats: ServerStatsForNarrative;
+};
+
+// 服务端合成(v1.3):全部 server-scored 维度的维度分、evidence、shotRisks、聚合 advisory
+// 与总分,全部确定性,模型不参与任何计数或算分。
+// 占比口径:命中镜头数(同一镜头命中同维度多个弱项只计一次)÷ 总镜头数。
+export function synthesizeServerScoredDimensions(
   kb: KnowledgeBase,
-  dim: ReplicabilityDimension,
-  prescreen: PrescreenResult,
-  verdicts: AdjudicationVerdict[],
   input: AnalysisJsonInput,
-): void {
-  const hits = verdicts.filter(v => v.verdict === 'hit');
-  const total = prescreen.totalShots;
-  const ratio = total > 0 ? hits.length / total : 0;
-  const score = ratioToAnchorScore(ratio);
-  const nextBand = hitsToNextBand(hits.length, total);
-  const pct = (ratio * 100).toFixed(1);
-  const candidateByIndex = new Map(prescreen.candidates.map(c => [c.shotIndex, c]));
-  const mci = dim.knownWeaknesses.find(w => w.reportLevel !== 'aggregate');
-  if (!mci) throw new Error(`Server-scored dimension ${dim.id} has no per-shot weakness to synthesize`);
+  perDim: Array<{ dim: ReplicabilityDimension; prescreen: PrescreenResult }>,
+  verdicts: AdjudicationVerdict[],
+): ServerSynthesis {
+  const scores: DimensionScore[] = [];
+  const shotRisks: ReplicabilityReport['shotRisks'] = [];
+  const aggregateAdvisories: AggregateAdvisory[] = [];
+  const serverComputed: Record<string, ServerComputedDimension> = {};
+  const serverStats: ServerStatsForNarrative = [];
 
-  report.scores.push({
-    dimensionId: dim.id,
-    score,
-    evidence: [
-      `${total} 个镜头中 ${hits.length} 个命中 ${mci.id},占比 ${pct}%(服务端确定性统计:预筛候选 ${prescreen.candidates.length} 个,模型裁决命中 ${hits.length} 个)`,
-      hits.length ? `命中镜头:${hits.map(h => `镜头${h.shotIndex}`).join('、')}` : '无命中镜头',
-      nextBand !== null
-        ? `边界邻近披露:再多 ${nextBand} 个命中镜头即跨入下一分数区间(不做迟滞/平滑,仅披露)`
-        : '已在最低分档(占比 > 25%)',
-    ],
-    reasoning: '服务端确定性计算:候选集、分母、占比、锚点映射与维度分零模型参与;模型仅对封闭候选集逐镜头裁决 hit/no_hit。',
-  });
+  for (const { dim, prescreen } of perDim) {
+    const judged = dim.knownWeaknesses.filter(w => w.reportLevel !== 'aggregate');
+    if (!judged.length) throw new Error(`Server-scored dimension ${dim.id} has no per-shot weakness to synthesize`);
+    const judgedIds = new Set(judged.map(w => w.id));
+    const weaknessById = new Map(judged.map(w => [w.id, w]));
+    const thresholds = dim.anchorThresholds;
+    if (!thresholds) throw new Error(`Server-scored dimension ${dim.id} missing anchorThresholds`);
 
-  for (const h of hits) {
-    const candidate = candidateByIndex.get(h.shotIndex);
-    if (!candidate) continue; // validateVerdicts 已保证封闭域,此分支不可达,仅作类型收窄
-    report.shotRisks.push({
-      shotRef: `镜头${h.shotIndex} ${candidate.timestamp}`.trim(),
+    const dimVerdicts = verdicts.filter(v => judgedIds.has(v.weaknessId));
+    const hitPairs = dimVerdicts.filter(v => v.verdict === 'hit');
+    const hitShotIndexes = [...new Set(hitPairs.map(h => h.shotIndex))].sort((a, b) => a - b);
+    const total = prescreen.totalShots;
+    const ratio = total > 0 ? hitShotIndexes.length / total : 0;
+    const score = ratioToAnchorScore(ratio, thresholds);
+    const nextBand = hitsToNextBand(hitShotIndexes.length, total, thresholds);
+    const pct = (ratio * 100).toFixed(1);
+    const candidateByIndex = new Map(prescreen.candidates.map(c => [c.shotIndex, c]));
+    const perWeaknessCounts = judged
+      .map(w => `${w.id} ${hitPairs.filter(h => h.weaknessId === w.id).length} 个`)
+      .join('、');
+
+    scores.push({
       dimensionId: dim.id,
-      weaknessId: mci.id,
-      severity: mci.riskLevel,
-      evidence: [candidate.description, `裁决依据:${h.reason}`],
-      recommendation: mci.recommendation,
+      score,
+      evidence: [
+        `${total} 个镜头中 ${hitShotIndexes.length} 个命中本维度弱项(${perWeaknessCounts};同镜头多弱项只计一次),占比 ${pct}%(服务端确定性统计:预筛候选 ${prescreen.candidates.length} 个)`,
+        hitShotIndexes.length ? `命中镜头:${hitShotIndexes.map(i => `镜头${i}`).join('、')}` : '无命中镜头',
+        nextBand !== null
+          ? `边界邻近披露:再多 ${nextBand} 个命中镜头即跨入下一分数区间(不做迟滞/平滑,仅披露)`
+          : `已在最低分档(占比 > ${(thresholds.t5 * 100).toFixed(0)}%)`,
+      ],
+      reasoning: '服务端确定性计算:候选集、分母、占比、锚点映射与维度分零模型参与;模型仅对封闭 (镜头, 弱项) 对逐一裁决 hit/no_hit。',
     });
-  }
 
-  const pulid = dim.knownWeaknesses.find(w => w.reportLevel === 'aggregate');
-  if (pulid && total > 0) {
-    const locked = countIdentityLockedShots(input.shots, input.characters);
-    const lockedRatio = locked / total;
-    const threshold = Number(pulid.aggregateThresholdRatio);
-    if (lockedRatio > threshold) {
-      report.aggregateAdvisories = [
-        ...(report.aggregateAdvisories || []),
-        {
+    for (const h of hitPairs) {
+      const candidate = candidateByIndex.get(h.shotIndex);
+      const weakness = weaknessById.get(h.weaknessId);
+      if (!candidate || !weakness) continue; // validateVerdicts 已保证封闭域,此分支不可达,仅作类型收窄
+      shotRisks.push({
+        shotRef: `镜头${h.shotIndex} ${candidate.timestamp}`.trim(),
+        dimensionId: dim.id,
+        weaknessId: h.weaknessId,
+        severity: weakness.riskLevel,
+        evidence: [candidate.description, `裁决依据:${h.reason}`],
+        recommendation: weakness.recommendation,
+      });
+    }
+
+    // aggregate 级弱项(当前仅 pulid_latency):服务端聚合统计,超阈值出报告顶层 advisory。
+    const aggregate = dim.knownWeaknesses.find(w => w.reportLevel === 'aggregate');
+    if (aggregate && total > 0 && aggregate.id === 'pulid_latency') {
+      const locked = countIdentityLockedShots(input.shots, input.characters);
+      const lockedRatio = locked / total;
+      const threshold = Number(aggregate.aggregateThresholdRatio);
+      if (lockedRatio > threshold) {
+        aggregateAdvisories.push({
           dimensionId: dim.id,
-          weaknessId: pulid.id,
+          weaknessId: aggregate.id,
           numerator: locked,
           denominator: total,
           ratio: Math.round(lockedRatio * 1000) / 1000,
           thresholdRatio: threshold,
           message: `${total} 个镜头中 ${locked} 个为身份锁定镜头(分镜描述含注册角色),占比 ${(lockedRatio * 100).toFixed(1)}% 超过阈值 ${(threshold * 100).toFixed(0)}%,批量生成存在 PuLID 超时/排队风险(服务端聚合统计,不计入维度占比)。`,
-          recommendation: pulid.recommendation,
-        },
-      ];
+          recommendation: aggregate.recommendation,
+        });
+      }
     }
-  }
 
-  report.serverComputed = {
-    identityConsistencyPressure: {
+    serverComputed[dim.id] = {
       kbLexiconsVersion: kb.replicabilityVersion,
       candidateCount: prescreen.candidates.length,
       totalShots: total,
-      hitCount: hits.length,
+      hitCount: hitShotIndexes.length,
       ratio: Math.round(ratio * 1000) / 1000,
-      hitShotIndexes: hits.map(h => h.shotIndex),
+      hitShotIndexes,
       hitsToNextBand: nextBand,
-      verdicts,
-    },
-  };
+      verdicts: dimVerdicts,
+    };
+    serverStats.push({
+      dimensionId: dim.id,
+      dimensionName: dim.name,
+      score,
+      hitCount: hitShotIndexes.length,
+      totalShots: total,
+      ratioPercent: `${pct}%`,
+      hitShots: hitPairs.map(h => ({ shotIndex: h.shotIndex, weaknessId: h.weaknessId, reason: h.reason })),
+    });
+  }
 
-  // 总分:identity 分注入后按权重确定性重算。
   const weightById = new Map(kb.replicabilityDimensions.map(d => [d.id, d.weight]));
-  const computed = report.scores.reduce((sum, item) => sum + item.score * (weightById.get(item.dimensionId) || 0), 0);
-  report.overallScore = Math.round(computed * 100) / 100;
+  const computed = scores.reduce((sum, item) => sum + item.score * (weightById.get(item.dimensionId) || 0), 0);
+  const overallScore = Math.round(computed * 100) / 100;
+  return { scores, shotRisks, aggregateAdvisories, serverComputed, overallScore, serverStats };
 }
 
 type StructuredCallOptions<T> = {
@@ -314,48 +329,94 @@ export async function runShotAnalysis(input: ShotAnalysisInput, analysisType: An
   const kbVersion = analysisType === 'replicability' ? kb.replicabilityVersion : kb.version;
   const ai = createGeminiClient();
 
-  // --- replicability(v1.2):预筛 → 裁决调用 → 主报告调用 → 服务端合成 ---
+  // --- replicability(v1.3):四维度预筛 → 单次 pair 裁决 → 服务端合成 → 瘦身主调用 ---
   if (analysisType === 'replicability' && input.sourceType === 'analysis_json') {
-    const serverDim = kb.replicabilityDimensions.find(d => d.scoredBy === 'server');
-    if (!serverDim?.prescreen) throw new Error('replicability rubric has no server-scored dimension; expected identityConsistencyPressure with prescreen config');
+    const serverDims = kb.replicabilityDimensions.filter(d => d.scoredBy === 'server');
+    const nonServer = kb.replicabilityDimensions.filter(d => d.scoredBy !== 'server');
+    // v1.3 全维度服务端算分;混合模式已随对照组使命结束而移除,残留配置明确报错不静默降级。
+    if (!serverDims.length || nonServer.length) {
+      throw new Error(`replicability rubric v1.3 expects all dimensions scoredBy: server; got ${nonServer.map(d => d.id).join(', ') || 'none server-scored'}`);
+    }
 
-    const prescreen = prescreenMultiCharacterShots(input.input.shots, input.input.characters, serverDim.prescreen);
-    console.log('[ShotAnalysis]', JSON.stringify({ requestId, event: 'prescreen_done', analysisType, kbVersion, totalShots: prescreen.totalShots, candidateCount: prescreen.candidates.length }));
+    const perDim = serverDims.map(dim => {
+      if (!dim.prescreen) throw new Error(`Server-scored dimension ${dim.id} missing prescreen config`);
+      const prescreen = dim.prescreen.words?.length
+        ? prescreenLexiconShots(input.input.shots, dim.prescreen)
+        : prescreenMultiCharacterShots(input.input.shots, input.input.characters, {
+            roleFunctionWords: dim.prescreen.roleFunctionWords || [],
+            pluralInteractionCues: dim.prescreen.pluralInteractionCues || [],
+          });
+      return { dim, prescreen };
+    });
 
-    // 候选集为空时零裁决调用:hit 数确定为 0,不为空集付一次模型调用。
+    const groups: AdjudicationGroup[] = perDim
+      .map(({ dim, prescreen }) => ({
+        dim,
+        pairs: dim.knownWeaknesses
+          .filter(w => w.reportLevel !== 'aggregate')
+          .flatMap(w => prescreen.candidates.map(c => ({
+            shotIndex: c.shotIndex,
+            weaknessId: w.id,
+            timestamp: c.timestamp,
+            movement: String(input.input.shots[c.shotIndex - 1]?.movement || '') || undefined,
+            description: c.description,
+          }))),
+      }))
+      .filter(g => g.pairs.length > 0);
+    const allPairs = groups.flatMap(g => g.pairs);
+    console.log('[ShotAnalysis]', JSON.stringify({
+      requestId, event: 'prescreen_done', analysisType, kbVersion, totalShots: input.input.shots.length,
+      candidateCounts: Object.fromEntries(perDim.map(({ dim, prescreen }) => [dim.id, prescreen.candidates.length])),
+      pairCount: allPairs.length,
+    }));
+
+    // 候选对为空时零裁决调用:hit 数确定为 0,不为空集付一次模型调用。
     let verdicts: AdjudicationVerdict[] = [];
     let adjudicationUsage: GeminiUsage | null = null;
     let adjudicationAttempts = 0;
-    if (prescreen.candidates.length > 0) {
+    if (allPairs.length > 0) {
       const adjudication = await callGeminiStructured(ai, {
         requestId,
         label: 'adjudication',
-        contents: [{ text: buildAdjudicationPrompt(serverDim, prescreen.candidates, input.input.title) }],
+        contents: [{ text: buildAdjudicationPrompt(groups, input.input.title) }],
         responseSchema: adjudicationResponseSchema,
         timeoutMs,
-        validate: parsed => validateVerdicts(parsed, prescreen.candidates),
+        validate: parsed => validateVerdicts(parsed, allPairs),
       });
       verdicts = adjudication.result;
       adjudicationUsage = adjudication.usage;
       adjudicationAttempts = adjudication.attempts;
     }
 
+    const synthesis = synthesizeServerScoredDimensions(kb, input.input, perDim, verdicts);
+
+    // 主调用瘦身(v1.3):只产 improvements + summary,输入附服务端统计保证叙述与数字一致。
     const main = await callGeminiStructured(ai, {
       requestId,
       label: 'main_report',
-      contents: [{ text: buildReplicabilityPrompt(kb, input.input) }],
+      contents: [{
+        text: buildReplicabilityPrompt(kb, input.input, synthesis.serverStats, synthesis.overallScore,
+          synthesis.aggregateAdvisories.map(a => a.message)),
+      }],
       responseSchema: replicabilityResponseSchema,
       timeoutMs,
-      validate: parsed => validateReplicabilityModelReport(parsed, kb),
+      validate: parsed => validateReplicabilityNarrative(parsed, kb),
     });
 
-    const report = main.result;
-    synthesizeServerScoredDimension(report, kb, serverDim, prescreen, verdicts, input.input);
+    const report: ReplicabilityReport = {
+      shotRisks: synthesis.shotRisks,
+      scores: synthesis.scores,
+      overallScore: synthesis.overallScore,
+      improvements: main.result.improvements,
+      summary: main.result.summary,
+      ...(synthesis.aggregateAdvisories.length ? { aggregateAdvisories: synthesis.aggregateAdvisories } : {}),
+      serverComputed: synthesis.serverComputed,
+    };
 
     const durationMs = Date.now() - startedAt;
     const usage = sumUsage(main.usage, adjudicationUsage);
     const hitCount = verdicts.filter(v => v.verdict === 'hit').length;
-    console.log('[ShotAnalysis]', JSON.stringify({ requestId, event: 'success', analysisType, kbVersion, totalDurationMs: durationMs, overallScore: report.overallScore, candidateCount: prescreen.candidates.length, hitCount, usage }));
+    console.log('[ShotAnalysis]', JSON.stringify({ requestId, event: 'success', analysisType, kbVersion, totalDurationMs: durationMs, overallScore: report.overallScore, pairCount: allPairs.length, hitPairCount: hitCount, usage }));
     return {
       report,
       analysisType,
@@ -366,7 +427,7 @@ export async function runShotAnalysis(input: ShotAnalysisInput, analysisType: An
       durationMs,
       usage,
       usageBreakdown: { main: main.usage, adjudication: adjudicationUsage },
-      adjudication: { candidateCount: prescreen.candidates.length, hitCount, attempts: adjudicationAttempts },
+      adjudication: { candidateCount: allPairs.length, hitCount, attempts: adjudicationAttempts },
     };
   }
 

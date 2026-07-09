@@ -75,8 +75,9 @@ export type AggregateAdvisory = {
   recommendation: string;
 };
 
-// v1.2:服务端确定性计算的过程数据,随报告落库,供消费方核查与复验对账。
-export type ServerComputedIdentity = {
+// v1.2/v1.3:服务端确定性计算的过程数据,随报告落库,供消费方核查与复验对账。
+// v1.3 起 serverComputed 覆盖全部四个维度(键为 dimensionId);verdicts 按 (镜头, 弱项) 对。
+export type ServerComputedDimension = {
   kbLexiconsVersion: string;
   candidateCount: number;
   totalShots: number;
@@ -84,7 +85,7 @@ export type ServerComputedIdentity = {
   ratio: number;
   hitShotIndexes: number[];
   hitsToNextBand: number | null;
-  verdicts: Array<{ shotIndex: number; verdict: 'hit' | 'no_hit'; reason: string }>;
+  verdicts: Array<{ shotIndex: number; weaknessId?: string; verdict: 'hit' | 'no_hit'; reason: string }>;
 };
 
 export type ReplicabilityReport = {
@@ -94,7 +95,7 @@ export type ReplicabilityReport = {
   improvements: Improvement[];
   summary: string;
   aggregateAdvisories?: AggregateAdvisory[];
-  serverComputed?: { identityConsistencyPressure: ServerComputedIdentity };
+  serverComputed?: Record<string, ServerComputedDimension>;
 };
 
 export type ShotAnalysisReportRow = {
@@ -205,46 +206,18 @@ export const shotAnalysisResponseSchema = {
   required: ['hookAnalysis', 'structureAnalysis', 'scores', 'overallScore', 'improvements', 'summary'],
 } as const;
 
-// 可生产性报告的 Gemini 结构化输出 schema。与 ReplicabilityReport 一一对应。
+// 可生产性主调用的 Gemini 结构化输出 schema(v1.3 瘦身版):
+// scores/shotRisks/overallScore 全部由服务端产出,模型只输出 improvements + summary。
 export const replicabilityResponseSchema = {
   type: 'OBJECT',
   properties: {
-    shotRisks: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          shotRef: { type: 'STRING', description: '指向具体镜头,如 "镜头12 01:23-01:31"' },
-          dimensionId: { type: 'STRING', description: '必须是 replicability-rubric 中的 dimension id' },
-          weaknessId: { type: 'STRING', description: '必须是该维度 knownWeaknesses 中的 weakness id' },
-          severity: { type: 'STRING', description: 'high | medium | low' },
-          evidence: { type: 'ARRAY', items: { type: 'STRING' }, description: '引用分镜描述原文片段作为证据' },
-          recommendation: { type: 'STRING', description: '按知识库该弱项的 recommendation 给出针对本镜头的具体建议' },
-        },
-        required: ['shotRef', 'dimensionId', 'weaknessId', 'severity', 'evidence', 'recommendation'],
-      },
-    },
-    scores: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          dimensionId: { type: 'STRING', description: '必须是 replicability-rubric 中的 dimension id' },
-          score: { type: 'NUMBER', description: '0-10,必须依据该维度 anchors 定标,高分=易生产' },
-          evidence: { type: 'ARRAY', items: { type: 'STRING' }, description: '必须先列证据(镜头引用/占比统计)再给分' },
-          reasoning: { type: 'STRING' },
-        },
-        required: ['dimensionId', 'score', 'evidence', 'reasoning'],
-      },
-    },
-    overallScore: { type: 'NUMBER', description: '按 rubric 权重的加权平均,0-10(服务端会重算)' },
     improvements: {
       type: 'ARRAY',
       items: {
         type: 'OBJECT',
         properties: {
           priority: { type: 'STRING', description: 'high | medium | low' },
-          target: { type: 'STRING', description: '指向具体镜头或镜头范围' },
+          target: { type: 'STRING', description: '必须以"镜头N"开头指向具体镜头或镜头范围' },
           issue: { type: 'STRING' },
           suggestion: { type: 'STRING' },
           relatedPatternId: { type: 'STRING', description: '关联的 dimension/weakness id,便于追溯' },
@@ -252,7 +225,7 @@ export const replicabilityResponseSchema = {
         required: ['priority', 'target', 'issue', 'suggestion', 'relatedPatternId'],
       },
     },
-    summary: { type: 'STRING', description: '一段中文总评:整体可生产性结论与最需要处理的风险' },
+    summary: { type: 'STRING', description: '一段中文总评:整体可生产性结论与最需要处理的风险,须与服务端分数一致' },
   },
-  required: ['shotRisks', 'scores', 'overallScore', 'improvements', 'summary'],
+  required: ['improvements', 'summary'],
 } as const;

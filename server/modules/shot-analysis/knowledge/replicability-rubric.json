@@ -1,10 +1,10 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "analysisType": "replicability",
   "provenance": "参考自公开方法论描述(非代码项目,未阅读任何源码),自行设计实现。评估对象是本项目自有生产链路(ComfyUI 静帧 + 8 秒视频片段 + 后期合成),不是通用制作考古。各已知弱项的证据来源逐条标注于 evidenceBasis 字段。",
-  "description": "本链路可生产性评分。回答的问题是:这套分镜交给我们的 ComfyUI + 视频片段生成链路,能不能做出来、哪里会翻车。高分 = 易生产。每个维度使用 0-10 锚定量表,判定必须引用具体镜头/时间戳作为证据。v1.1 将四个维度的锚点数值化,消除 v1.0 实测出现的跨锚点摆动。v1.2 将 identityConsistencyPressure 维度改为服务端确定性预筛 + 模型逐候选裁决(scoredBy: server),消除模型自由扫描的逐镜头计数漂移;pulid_latency 改为服务端聚合统计(reportLevel: aggregate)。设计与审计见 docs/shot-analysis/RUBRIC-V1.2-DESIGN.md。",
+  "description": "本链路可生产性评分。回答的问题是:这套分镜交给我们的 ComfyUI + 视频片段生成链路,能不能做出来、哪里会翻车。高分 = 易生产。每个维度使用 0-10 锚定量表,判定必须引用具体镜头/时间戳作为证据。v1.1 将四个维度的锚点数值化;v1.2 将 identityConsistencyPressure 改为服务端确定性预筛 + 模型逐候选裁决并复验通过;v1.3 将该模式推广到全部四个维度(scoredBy: server)——候选集、分母、占比、锚点映射、维度分、shotRisks 全部服务端确定性产出,模型只承担两件事:对封闭 (镜头, 弱项) 对逐一裁决 hit/no_hit,以及基于服务端统计撰写 improvements 与 summary。设计与审计:docs/shot-analysis/RUBRIC-V1.2-DESIGN.md、RUBRIC-V1.3-DESIGN.md。",
   "aggregation": "weighted_mean",
-  "scoringRule": "每个维度的评分流程,必须严格执行:1) 按该维度 metric 定义统计分子/分母,并把统计结果写进 evidence(格式示例:'74 个镜头中 15 个命中 text_in_frame,占比 20.3%');2) 按占比落入 anchors 的数值区间,分数取该锚点值——只允许 2/5/8/10 四个取值,禁止其他分数;3) 区间边界严格按锚点中的 ≤/< 记号判定(例:占比恰为 25% 时,落入 '10% < 占比 ≤ 25%' 的 5 分档,而非 2 分档);4) 禁止在区间映射之外做任何主观加减分。overallScore 由服务端按权重重算,模型给出的值仅作参考。v1.2 起,标注 scoredBy: server 的维度(identityConsistencyPressure)的分子、分母、占比、锚点映射与维度分全部由服务端确定性计算,模型不为该维度输出任何分数或 shotRisks。",
+  "scoringRule": "v1.3 起全部四个维度 scoredBy: server:1) 服务端按各维度 prescreen 词表产出封闭候选集;2) 模型对每个 (shotIndex, weaknessId) 对恰好表态一次(hit/no_hit),缺一、多一、重复均判无效响应;3) 维度占比 = 命中镜头数(同一镜头命中同维度多个弱项只计一次)÷ 总镜头数;4) 占比按 anchorThresholds 映射锚点分(0% → 10;0 < r ≤ t8 → 8;t8 < r ≤ t5 → 5;r > t5 → 2),分数只有 2/5/8/10 四个取值;5) overallScore 由服务端按权重重算。模型不输出任何分数或 shotRisks。",
   "evidenceBasisLegend": {
     "production-data": "comfyui_tasks 历史生产记录(可复查的真实计数)",
     "user-experience": "用户实测经验(2026-07 确认)",
@@ -17,21 +17,42 @@
       "id": "stillFrameGenerability",
       "name": "静帧可生成性",
       "weight": 0.35,
+      "scoredBy": "server",
       "question": "分镜静帧是否落在 ComfyUI 预设能力圈内,有多少镜头踩中已知弱项?",
       "knownWeaknesses": [
         {
           "id": "text_in_frame",
           "riskLevel": "high",
           "evidenceBasis": "user-experience",
-          "description": "需要清晰可辨认文字的画面(招牌、字幕卡、信件/文档、手机屏幕内容、报纸标题等),生成时经常出现文字模糊、笔画错乱、无法辨认。",
-          "detectionRule": "分镜描述包含招牌/字幕/文档/屏幕/报纸/信件等需要文字清晰可读的元素时,标记为高风险。",
+          "description": "需要清晰可辨认文字的画面(招牌、字幕卡、信件/文档、手机屏幕内容、报纸标题、名片、图纸等),生成时经常出现文字模糊、笔画错乱、无法辨认。",
+          "detectionRule": "v1.3:服务端按本维度 prescreen 词表预筛候选,模型逐候选裁决「该镜头是否需要画面内文字清晰可读」。画面含屏幕/文档等物件但无需辨认其内容的不算(如黑屏、合上的信封)。",
           "recommendation": "后期贴字幕层;或虚化处理;或调整构图/运镜角度避免文字正面入镜。"
         }
       ],
       "explicitNonWeaknesses": [
         "复杂手部动作:实测可接受,不作为扣分项,不得因画面含手部特写/手部动作而降低本维度分数(user-experience,2026-07 确认)。"
       ],
-      "metric": "命中本维度任一 knownWeakness 的镜头数 ÷ 总镜头数(同一镜头命中多个弱项只计一次)",
+      "metric": "命中本维度任一 knownWeakness 的镜头数 ÷ 总镜头数(同一镜头命中多个弱项只计一次)。判定对象操作化为「分镜描述文本中可辨识的需清晰可读文字」——描述未提及但画面可能出现的文字不计(测量边界,与 v1.2 identity 维度同口径:以分镜描述文本为唯一证据源)。",
+      "prescreen": {
+        "description": "词表命中即入候选(宁多勿漏,候选集是封闭域,由裁决过滤)。召回审计(22 份历史报告多数标记基准):有效召回 100%(名义 93.8%/93.3%/100%,漏检项均核实为历史报告的模型编号错位),见 RUBRIC-V1.3-DESIGN.md 第 1 节。",
+        "fields": ["description"],
+        "words": ["招牌", "字幕", "文档", "文件", "屏幕", "手机", "电脑", "笔记本", "报纸", "信件", "信封", "标题", "文字", "写着", "显示", "海报", "标语", "横幅", "菜单", "合同", "证件", "证书", "钞票", "价格", "价签", "短信", "消息", "弹出", "界面", "地图", "定位", "标志", "logo", "铭牌", "门牌", "名片", "图纸", "手表", "警戒线", "清单", "单据", "告示", "看板"]
+      },
+      "adjudicationFewShots": [
+        {
+          "weaknessId": "text_in_frame",
+          "description": "电脑屏幕上弹出窗口,显示\"想明白生命的意义吗?想真正的活着吗?\",屏幕背景是数据表格。",
+          "verdict": "hit",
+          "reason": "画面要求弹窗文字与数据表格清晰可读,直接踩中文字生成弱项。"
+        },
+        {
+          "weaknessId": "text_in_frame",
+          "description": "电脑显示屏特写,屏幕是黑的,右下角的电源指示灯发出红色光芒,暗示即将发生的异变。",
+          "verdict": "no_hit",
+          "reason": "屏幕是黑的,画面不要求任何可辨认文字;含屏幕物件但无需读出内容的不算。"
+        }
+      ],
+      "anchorThresholds": { "t8": 0.10, "t5": 0.30 },
       "anchors": {
         "2": "命中弱项的镜头占比 > 30%",
         "5": "10% < 占比 ≤ 30%",
@@ -69,27 +90,31 @@
       ],
       "metric": "多人同框互动镜头数 ÷ 总镜头数。判定对象操作化为「分镜描述文本中可辨识的多人同框互动」:描述文本中两个及以上可辨识人物指称(注册角色,或'中介经理/房东/老太太'等功能词指称)出现在同一画面内且存在互动(对话、肢体接触、对峙均算);正反打中的单人画面不计;仅背景出现的无名路人不计;台词提及但画面中未出现的人物不计。测量边界(v1.2 显式声明):描述文本只写了一个人、但画面实际可能有多人的镜头,任何纯文本方法都无法可靠判定,不计入本 metric——本维度以分镜描述文本为唯一证据源。",
       "prescreen": {
-        "description": "服务端确定性候选筛选:三类信号取并集——注册别名(按 / 与括号拆分归一化)、角色功能词、复数/互动线索。独立人物指称 ≥2 或命中任一复数/互动线索即为候选。指称跨度仅在重叠/紧邻(gap=0)时合并。召回审计(13 份历史报告,多数标记基准):视频1 100%、视频2 80%、视频3 100%,漏检项均为测量边界外或历史过标,见设计文档第 0 节。",
+        "description": "服务端确定性候选筛选:三类信号取并集——注册别名(按 / 与括号拆分归一化)、角色功能词、复数/互动线索。独立人物指称 ≥2 或命中任一复数/互动线索即为候选。指称跨度仅在重叠/紧邻(gap=0)时合并。召回审计(13 份历史报告,多数标记基准):视频1 100%、视频2 80%、视频3 100%,漏检项均为测量边界外或历史过标,见 v1.2 设计文档第 0 节。",
         "roleFunctionWords": ["队长", "士兵", "军官", "经理", "中介", "房东", "老板", "老板娘", "店员", "服务员", "老太太", "老妇", "老头", "老者", "胖子", "男子", "女子", "男人", "女人", "男性", "女性", "少年", "少女", "小孩", "孩子", "路人", "保安", "医生", "护士", "警察", "守卫", "教授", "新人", "幸存者", "黑人", "白人", "同事", "朋友", "乘客", "司机"],
         "pluralInteractionCues": ["两人", "二人", "三人", "四人", "众人", "一行人", "人群", "队伍", "彼此", "互相", "对视", "相拥", "拥抱", "扭打", "对峙", "争执", "争吵", "交谈", "对话", "他们", "她们", "双方", "两名", "三名", "四名", "五名", "几名", "数名", "多名", "两位", "三位", "几位", "数位", "多位"]
       },
       "adjudicationFewShots": [
         {
+          "weaknessId": "multi_character_interaction",
           "description": "陆远与中介经理握手,两人都面带笑容,中介经理的笑容显得有些贪婪。",
           "verdict": "hit",
           "reason": "注册角色(陆远)与功能词指称(中介经理)同框且有肢体接触(握手),构成多人同框互动。功能词指称的人物同样计入。"
         },
         {
+          "weaknessId": "multi_character_interaction",
           "description": "张杰微笑着说\"没错,确实有回去的希望\",解释每活过一次恐怖片可以获得1000奖励点。",
           "verdict": "no_hit",
           "reason": "画面描述只有张杰一人在讲解,属正反打/单人画面,即使他在对他人说话也不计——对话对象未在本镜头画面中出现。"
         },
         {
+          "weaknessId": "multi_character_interaction",
           "description": "张杰解释电影属于特定地区恐怖片,超出\"艾迪生100米以外,我们就会'轰'\",暗示手表有追踪和爆炸功能。",
           "verdict": "no_hit",
           "reason": "艾迪生仅出现在台词引用中,画面描述可辨识的只有张杰一人。台词提及但画面中未出现的人物不计。"
         }
       ],
+      "anchorThresholds": { "t8": 0.10, "t5": 0.25 },
       "anchors": {
         "2": "多人同框互动镜头占比 > 25%",
         "5": "10% < 占比 ≤ 25%",
@@ -102,8 +127,9 @@
       "id": "cameraMotionFeasibility",
       "name": "运镜可行性",
       "weight": 0.25,
+      "scoredBy": "server",
       "calibrationStatus": "unverified",
-      "calibrationNote": "本维度所有弱项均为公开文档已知限制推导的初始假设,无本地实测数据,禁止在报告中给出任何具体成功率/失败率数字;待 Seedance/Veo POC 实测后校准。",
+      "calibrationNote": "本维度所有弱项均为公开文档已知限制推导的初始假设,无本地实测数据,禁止在报告中给出任何具体成功率/失败率数字;待 Seedance/Veo POC 实测后校准。占比与锚点分的确定性计算不受此限(它们只描述分镜特征,不是成功率断言)。",
       "question": "分镜要求的运镜能否被 8 秒视频片段可靠实现?(初始假设,未校准)",
       "knownWeaknesses": [
         {
@@ -111,7 +137,7 @@
           "riskLevel": "high",
           "evidenceBasis": "public-doc-assumption",
           "description": "长距离跟踪镜头在 8 秒片段内保持主体与场景稳定性存在挑战(公开文档已知限制,无本地实测数据)。",
-          "detectionRule": "movement 描述包含长距离跟拍/跟随/追逐运镜时标记。",
+          "detectionRule": "v1.3:服务端按本维度 prescreen 词表(movement + description)预筛候选,模型裁决「该镜头是否要求长距离/持续跟踪运镜」。短促的单一手持摇摄、普通平移不算。",
           "recommendation": "拆分为多个短镜头;或改为固定机位 + 主体运动。"
         },
         {
@@ -119,11 +145,41 @@
           "riskLevel": "medium",
           "evidenceBasis": "public-doc-assumption",
           "description": "复杂机位切换、旋转环绕、多段变速运镜在单一 8 秒片段内的稳定性存在挑战(同上,未实测)。",
-          "detectionRule": "movement 描述包含环绕/急推急拉组合/多段机位变化时标记。",
+          "detectionRule": "v1.3:服务端预筛(词表 + movement 字段含多段值即入候选),模型裁决「该镜头是否要求多段机位变化/环绕/急推急拉组合」。单一运动矢量不算。",
           "recommendation": "简化为单一运动矢量;复杂调度拆分为多镜头。"
         }
       ],
-      "metric": "命中 long_tracking_shot 或 complex_camera_transition 的镜头数 ÷ 总镜头数",
+      "metric": "命中 long_tracking_shot 或 complex_camera_transition 的镜头数 ÷ 总镜头数(同一镜头命中两项只计一次)。判定以 movement 与 description 文本为唯一证据源。",
+      "prescreen": {
+        "description": "词表扫 movement + description;另有确定性规则:movement 字段含多段值(逗号/顿号分隔 ≥2 段)直接入候选(多段机位变化信号)。召回审计:有效召回 100%(名义 100%/100%/33.3%,视频3 漏检两项经核实为多段 movement 未入候选,已由多段规则覆盖),见 RUBRIC-V1.3-DESIGN.md 第 1 节。",
+        "fields": ["movement", "description"],
+        "words": ["跟拍", "跟随", "追逐", "追踪", "跟踪", "环绕", "绕", "旋转", "急推", "急拉", "推拉", "变速", "穿越", "长镜头", "一镜到底", "甩", "手持", "摇摄", "快速移动", "移动跟", "跟着", "尾随"],
+        "multiSegmentMovement": true
+      },
+      "adjudicationFewShots": [
+        {
+          "weaknessId": "long_tracking_shot",
+          "movement": "跟踪镜头",
+          "description": "多名工人合力搬运巨大的钢梁,地下钢筋堡垒正在迅速成型,外面拉起了剧组拍摄的警戒线,以掩人耳目。",
+          "verdict": "hit",
+          "reason": "movement 明确为跟踪镜头且场面调度大(搬运钢梁的持续移动主体),要求长距离跟踪。"
+        },
+        {
+          "weaknessId": "complex_camera_transition",
+          "movement": "主观视角, 垂直下落",
+          "description": "从高处扔下一枚信号弹,绿色的光芒照亮了垂直深井,露出破损的金属梯,暗示前路艰难。",
+          "verdict": "hit",
+          "reason": "movement 含两段机位变化(主观视角切垂直下落),属多段运镜组合。"
+        },
+        {
+          "weaknessId": "long_tracking_shot",
+          "movement": "手持摇摄",
+          "description": "郑吒面部特写,眼神惊恐地环顾四周,面部表情紧绷,背景快速移动,表现出空间转换后的混乱感。",
+          "verdict": "no_hit",
+          "reason": "单一手持摇摄的面部特写,无长距离位移,不构成长距离跟踪;背景快速移动是画面内容而非运镜要求。"
+        }
+      ],
+      "anchorThresholds": { "t8": 0.10, "t5": 0.25 },
       "anchors": {
         "2": "命中运镜弱项的镜头占比 > 25%",
         "5": "10% < 占比 ≤ 25%",
@@ -136,18 +192,39 @@
       "id": "postProductionDependency",
       "name": "后期依赖度",
       "weight": 0.15,
+      "scoredBy": "server",
       "question": "有多少镜头必须依赖生成链路之外的后期(图形层/贴字/特效叠加)才成立?(高分 = 依赖少)",
       "knownWeaknesses": [
         {
           "id": "graphics_overlay_dependency",
           "riskLevel": "medium",
           "evidenceBasis": "design",
-          "description": "依赖图形层动效(UI 弹窗、特效字、界面元素、屏幕内容)的镜头,生成链路不产出这些元素,必须后期制作。",
-          "detectionRule": "分镜描述要求画面内出现 UI/图形动效/需精确呈现的屏幕内容时标记。",
+          "description": "依赖图形层动效(UI 弹窗、特效字、界面元素、需精确呈现的屏幕内容、片头动画)的镜头,生成链路不产出这些元素,必须后期制作。",
+          "detectionRule": "v1.3:服务端按本维度 prescreen 词表预筛候选,模型裁决「该镜头是否必须由后期图形层才能成立」。画面元素可由生成链路直接产出的不算(如普通光影、黑屏)。",
           "recommendation": "明确标注为后期项并列入清单;或改写画面以纯实拍感呈现。"
         }
       ],
-      "metric": "命中 graphics_overlay_dependency 的镜头数 ÷ 总镜头数",
+      "metric": "命中 graphics_overlay_dependency 的镜头数 ÷ 总镜头数。判定以分镜描述文本为唯一证据源。",
+      "prescreen": {
+        "description": "词表命中即入候选(含'效果/光芒/激光'等泛化词,宁多勿漏取向已拍板接受)。召回审计:有效召回 100%(名义 90%/91.7%/100%,漏检项均核实为历史编号错位),见 RUBRIC-V1.3-DESIGN.md 第 1 节。",
+        "fields": ["description"],
+        "words": ["UI", "界面", "弹窗", "弹出", "特效", "图形", "数据", "表格", "地图", "定位", "全息", "投影", "屏幕", "显示", "虚拟", "面板", "菜单", "进度条", "倒计时", "字幕", "标记", "光效", "电脑", "笔记本", "名片", "图纸", "文字", "手表", "动画", "片头", "标志", "激光", "光芒", "效果"]
+      },
+      "adjudicationFewShots": [
+        {
+          "weaknessId": "graphics_overlay_dependency",
+          "description": "地图定位,显示\"NAME: LU REN JIA, ID: LR-09721, STATUS: GUIDE\"(胖子路人甲)。",
+          "verdict": "hit",
+          "reason": "全屏地图定位 UI 与精确字符内容必须由后期图形层制作,生成链路不产出。"
+        },
+        {
+          "weaknessId": "graphics_overlay_dependency",
+          "description": "电脑显示屏特写,屏幕是黑的,右下角的电源指示灯发出红色光芒,暗示即将发生的异变。",
+          "verdict": "no_hit",
+          "reason": "黑屏与指示灯红光可由生成链路直接产出,不需要后期图形层。"
+        }
+      ],
+      "anchorThresholds": { "t8": 0.10, "t5": 0.30 },
       "anchors": {
         "2": "命中后期依赖的镜头占比 > 30%",
         "5": "10% < 占比 ≤ 30%",

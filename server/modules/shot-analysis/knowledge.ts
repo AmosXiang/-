@@ -49,9 +49,22 @@ export type KnownWeakness = {
 };
 
 export type AdjudicationFewShot = {
+  weaknessId: string;
   description: string;
+  movement?: string;
   verdict: 'hit' | 'no_hit';
   reason: string;
+};
+
+// v1.3:两种预筛配置。identity 用人物指称逻辑(roleFunctionWords+pluralInteractionCues),
+// 其余维度用通用词表(fields+words,可选 movement 多段规则)。
+export type PrescreenConfig = {
+  description: string;
+  roleFunctionWords?: string[];
+  pluralInteractionCues?: string[];
+  fields?: string[];
+  words?: string[];
+  multiSegmentMovement?: boolean;
 };
 
 export type ReplicabilityDimension = RubricDimension & {
@@ -60,15 +73,13 @@ export type ReplicabilityDimension = RubricDimension & {
   explicitNonWeaknesses?: string[];
   calibrationStatus?: string;
   calibrationNote?: string;
-  // v1.2:scoredBy === 'server' 的维度由服务端确定性预筛+裁决算分,
+  // v1.2/v1.3:scoredBy === 'server' 的维度由服务端确定性预筛+裁决算分,
   // 主报告调用不再承担其扫描/评分职责(模型输出该维度分数判无效响应)。
   scoredBy?: 'server';
-  prescreen?: {
-    description: string;
-    roleFunctionWords: string[];
-    pluralInteractionCues: string[];
-  };
+  prescreen?: PrescreenConfig;
   adjudicationFewShots?: AdjudicationFewShot[];
+  // 占比 → 锚点分映射阈值:0 → 10;(0,t8] → 8;(t8,t5] → 5;>t5 → 2。
+  anchorThresholds?: { t8: number; t5: number };
 };
 
 export type KnowledgeBase = {
@@ -134,14 +145,21 @@ export function loadKnowledgeBase(): KnowledgeBase {
     }
     // scoredBy: server 的维度必须带齐服务端预筛与裁决所需的全部字段,缺失即启动失败,不静默降级。
     if (d.scoredBy === 'server') {
-      if (!d.prescreen?.roleFunctionWords?.length || !d.prescreen?.pluralInteractionCues?.length) {
+      const hasReferentLexicons = d.prescreen?.roleFunctionWords?.length && d.prescreen?.pluralInteractionCues?.length;
+      const hasWordLexicon = d.prescreen?.fields?.length && d.prescreen?.words?.length;
+      if (!hasReferentLexicons && !hasWordLexicon) {
         throw new Error(`replicability-rubric.json: server-scored dimension ${d.id} missing prescreen lexicons`);
+      }
+      const t = d.anchorThresholds;
+      if (!(Number(t?.t8) > 0 && Number(t?.t8) < Number(t?.t5) && Number(t?.t5) < 1)) {
+        throw new Error(`replicability-rubric.json: server-scored dimension ${d.id} needs anchorThresholds with 0 < t8 < t5 < 1`);
       }
       if (!Array.isArray(d.adjudicationFewShots) || !d.adjudicationFewShots.length) {
         throw new Error(`replicability-rubric.json: server-scored dimension ${d.id} missing adjudicationFewShots`);
       }
+      const dimWeaknessIds = new Set(d.knownWeaknesses.map((w: any) => w.id));
       for (const ex of d.adjudicationFewShots) {
-        if (!ex.description || !['hit', 'no_hit'].includes(ex.verdict) || !ex.reason) {
+        if (!ex.description || !['hit', 'no_hit'].includes(ex.verdict) || !ex.reason || !dimWeaknessIds.has(ex.weaknessId)) {
           throw new Error(`replicability-rubric.json: invalid adjudication few-shot in ${d.id}`);
         }
       }
