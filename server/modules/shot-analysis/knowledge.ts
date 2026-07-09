@@ -42,13 +42,33 @@ export type KnownWeakness = {
   description: string;
   detectionRule: string;
   recommendation: string;
+  // v1.2:aggregate 级弱项由服务端聚合统计,不进 shotRisks,模型不得发射。
+  reportLevel?: 'aggregate';
+  aggregateThresholdRatio?: number;
+  aggregateThresholdBasis?: string;
+};
+
+export type AdjudicationFewShot = {
+  description: string;
+  verdict: 'hit' | 'no_hit';
+  reason: string;
 };
 
 export type ReplicabilityDimension = RubricDimension & {
+  metric: string;
   knownWeaknesses: KnownWeakness[];
   explicitNonWeaknesses?: string[];
   calibrationStatus?: string;
   calibrationNote?: string;
+  // v1.2:scoredBy === 'server' 的维度由服务端确定性预筛+裁决算分,
+  // 主报告调用不再承担其扫描/评分职责(模型输出该维度分数判无效响应)。
+  scoredBy?: 'server';
+  prescreen?: {
+    description: string;
+    roleFunctionWords: string[];
+    pluralInteractionCues: string[];
+  };
+  adjudicationFewShots?: AdjudicationFewShot[];
 };
 
 export type KnowledgeBase = {
@@ -108,6 +128,23 @@ export function loadKnowledgeBase(): KnowledgeBase {
       if (!w.id || !w.evidenceBasis || !w.detectionRule) throw new Error(`replicability-rubric.json: invalid weakness in ${d.id}: ${JSON.stringify(w.id)}`);
       if (weaknessIds.has(w.id)) throw new Error(`replicability-rubric.json: duplicate weakness id ${w.id}`);
       weaknessIds.add(w.id);
+      if (w.reportLevel === 'aggregate' && !(Number(w.aggregateThresholdRatio) > 0 && Number(w.aggregateThresholdRatio) < 1)) {
+        throw new Error(`replicability-rubric.json: aggregate weakness ${w.id} needs aggregateThresholdRatio in (0,1)`);
+      }
+    }
+    // scoredBy: server 的维度必须带齐服务端预筛与裁决所需的全部字段,缺失即启动失败,不静默降级。
+    if (d.scoredBy === 'server') {
+      if (!d.prescreen?.roleFunctionWords?.length || !d.prescreen?.pluralInteractionCues?.length) {
+        throw new Error(`replicability-rubric.json: server-scored dimension ${d.id} missing prescreen lexicons`);
+      }
+      if (!Array.isArray(d.adjudicationFewShots) || !d.adjudicationFewShots.length) {
+        throw new Error(`replicability-rubric.json: server-scored dimension ${d.id} missing adjudicationFewShots`);
+      }
+      for (const ex of d.adjudicationFewShots) {
+        if (!ex.description || !['hit', 'no_hit'].includes(ex.verdict) || !ex.reason) {
+          throw new Error(`replicability-rubric.json: invalid adjudication few-shot in ${d.id}`);
+        }
+      }
     }
   }
 

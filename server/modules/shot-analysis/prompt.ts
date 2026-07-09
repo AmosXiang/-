@@ -59,23 +59,30 @@ ${JSON.stringify(input.shots, null, 1)}`;
 }
 
 export function buildReplicabilityPrompt(kb: KnowledgeBase, input: AnalysisJsonInput): string {
+  // v1.2:scoredBy === 'server' 的维度(identityConsistencyPressure)由服务端预筛+裁决算分,
+  // 主调用不再承担其扫描/评分职责,知识库嵌入与合法 id 域都只保留模型侧维度。
+  const modelDims = kb.replicabilityDimensions.filter(d => d.scoredBy !== 'server');
+  const modelDimIds = modelDims.map(d => d.id);
+  const modelWeaknessIds = modelDims.flatMap(d => d.knownWeaknesses.map(w => w.id));
   return `你是本项目 AI 短剧生产链路(ComfyUI 静帧生成 + 8 秒视频片段生成 + 后期合成)的可生产性评估专家。
 下面提供:(1) 可生产性评估知识库;(2) 一部短剧的结构化分镜数据。
 请评估这套分镜在本链路上的可生产性,严格按照提供的 JSON Schema 输出报告。
 
 【知识库:可生产性评分维度(replicabilityRubric)】
-${JSON.stringify(kb.replicabilityDimensions, null, 1)}
+${JSON.stringify(modelDims, null, 1)}
 
 【评估规则(必须严格遵守)】
 1. dimensionId 只能取自知识库中列出的维度 id,weaknessId 只能取自对应维度 knownWeaknesses 中的 id。禁止发明新 id。
-   合法 dimensionId:${[...kb.replicabilityDimensionIds].join(', ')}
-   合法 weaknessId:${[...kb.replicabilityWeaknessIds].join(', ')}
+   合法 dimensionId:${modelDimIds.join(', ')}
+   合法 weaknessId:${modelWeaknessIds.join(', ')}
 2. shotRisks:逐镜头对照每个弱项的 detectionRule 检查,命中才输出,证据必须引用分镜描述原文片段与镜头时间戳。
    没有命中任何弱项的镜头不要输出。recommendation 必须基于该弱项知识库中的 recommendation 并针对具体镜头细化。
+   每条 shotRisk 的 shotRef 必须以"镜头N"开头(N 为分镜列表中的序号,从 1 计),如 "镜头12 01:23-01:31"。
 3. 评分必须严格执行以下四步流程:先按该维度 metric 统计分子/分母并写入 evidence(格式:"74 个镜头中 6 个命中 text_in_frame,占比 8.1%"),再按占比落入 anchors 数值区间取对应锚点分。分数只允许 2/5/8/10 四个取值;区间边界严格按 ≤/< 记号判定;禁止区间映射之外的加减分。高分 = 易生产。
 4. explicitNonWeaknesses 中声明的内容(如复杂手部动作)不是弱项,禁止据此标记风险或扣分。
 5. 标注了 calibrationStatus: unverified 的维度(运镜可行性)只能给出定性判断与拆分建议,禁止在任何文字中出现具体成功率/失败率数字。
-6. scores 必须覆盖知识库全部 ${kb.replicabilityDimensions.length} 个维度。
+6. scores 必须且只能覆盖上述 ${modelDims.length} 个维度。角色一致性压力(identityConsistencyPressure)维度及其弱项
+   (multi_character_interaction、pulid_latency)由服务端独立计算,禁止为它们输出任何分数或 shotRisks。
 7. improvements 按 priority 排序,target 指向具体镜头,relatedPatternId 填关联的 dimension/weakness id。
 8. 全部输出使用中文。
 

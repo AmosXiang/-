@@ -63,12 +63,38 @@ export type ShotRisk = {
   recommendation: string;
 };
 
+// v1.2:aggregate 级弱项(pulid_latency)的报告顶层提示,由服务端聚合统计产出,不进 shotRisks。
+export type AggregateAdvisory = {
+  dimensionId: string;
+  weaknessId: string;
+  numerator: number;
+  denominator: number;
+  ratio: number;
+  thresholdRatio: number;
+  message: string;
+  recommendation: string;
+};
+
+// v1.2:服务端确定性计算的过程数据,随报告落库,供消费方核查与复验对账。
+export type ServerComputedIdentity = {
+  kbLexiconsVersion: string;
+  candidateCount: number;
+  totalShots: number;
+  hitCount: number;
+  ratio: number;
+  hitShotIndexes: number[];
+  hitsToNextBand: number | null;
+  verdicts: Array<{ shotIndex: number; verdict: 'hit' | 'no_hit'; reason: string }>;
+};
+
 export type ReplicabilityReport = {
   shotRisks: ShotRisk[];
   scores: DimensionScore[];
   overallScore: number;
   improvements: Improvement[];
   summary: string;
+  aggregateAdvisories?: AggregateAdvisory[];
+  serverComputed?: { identityConsistencyPressure: ServerComputedIdentity };
 };
 
 export type ShotAnalysisReportRow = {
