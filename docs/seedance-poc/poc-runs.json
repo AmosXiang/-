@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-07-07T11:12:34.690Z",
+  "channel": "HNLINK relay (token.hnlink.net, THIRD-PARTY, http-only) — Ark-shaped requests (Seedance 原厂路径)",
+  "base": "http://token.hnlink.net/api/gateway",
+  "modelCandidates": [
+    "seedance2.0"
+  ],
+  "workingModel": null,
+  "params": {
+    "duration": 5,
+    "resolution": "480p",
+    "ratio": "9:16"
+  },
+  "runs": [
+    {
+      "tag": "a_baseline_shot9__text__480p",
+      "mode": "text",
+      "shotId": "a_baseline_shot9",
+      "ok": false,
+      "stage": "create",
+      "httpStatus": 403,
+      "error": "gateway code 403: 模型 seedance2.0 未分配给当前租户，请联系管理员开通后再调用",
+      "durationMs": 1009
+    }
+  ],
+  "rawFinals": {}
+}
