@@ -370,6 +370,192 @@ async function mutateDb(mutator: (db: any) => void | Promise<void>) {
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+const AGNES_POLL_INTERVAL_MS = 5_000;
+const AGNES_MAX_POLL_ATTEMPTS = 120;
+const VIDEO_DURATION_FRAMES: Record<number, number> = { 3: 81, 5: 121, 10: 241, 18: 441 };
+const activeVideoPolls = new Set<string>();
+const videoTaskQueue = new PQueue({ concurrency: 1 });
+
+function videoTaskRow(id: string) {
+  return dbSqlite.prepare('SELECT * FROM video_tasks WHERE id = ?').get(id) as Record<string, any> | undefined;
+}
+
+function normalizedSize(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function validateVideoTaskBody(body: any): { request: VideoTaskRequest; shotId: string | null } {
+  const prompt = String(body?.prompt || '').trim();
+  if (!prompt) throw new Error('prompt is required.');
+  const seed = Number(body?.seed);
+  if (!Number.isSafeInteger(seed)) throw new Error('seed must be a safe integer.');
+  const durationSeconds = Number(body?.duration_seconds ?? body?.durationSeconds ?? body?.duration);
+  const numFrames = VIDEO_DURATION_FRAMES[durationSeconds];
+  if (!numFrames) throw new Error('duration must be one of 3, 5, 10, or 18 seconds.');
+  const frameRate = body?.frame_rate === undefined ? 24 : Number(body.frame_rate);
+  if (!Number.isInteger(frameRate) || frameRate < 1 || frameRate > 60) throw new Error('frame_rate must be an integer from 1 to 60.');
+  if (numFrames > 441 || (numFrames - 1) % 8 !== 0) throw new Error('num_frames must be <= 441 and satisfy 8n + 1.');
+  return {
+    request: {
+      prompt,
+      negativePrompt: body?.negative_prompt ? String(body.negative_prompt).trim() : undefined,
+      seed,
+      width: 1152,
+      height: 768,
+      numFrames,
+      frameRate,
+    },
+    shotId: body?.shot_id === null || body?.shot_id === undefined ? null : String(body.shot_id),
+  };
+}
+
+async function downloadCompletedVideo(localTaskId: string, videoUrl: string): Promise<void> {
+  const startedAt = Date.now();
+  const parsed = new URL(videoUrl);
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(`Unsupported video URL protocol: ${parsed.protocol}`);
+  const videosDir = path.join(UPLOADS_DIR, 'videos');
+  await fs.promises.mkdir(videosDir, { recursive: true });
+  const finalPath = path.join(videosDir, `${localTaskId}.mp4`);
+  const temporaryPath = `${finalPath}.part`;
+  agnesLog('download_request', { local_task_id: localTaskId, provider_task_id: videoTaskRow(localTaskId)?.provider_video_id || null, url: videoUrl });
+  const response = await fetch(videoUrl);
+  agnesLog('download_response', {
+    local_task_id: localTaskId,
+    provider_task_id: videoTaskRow(localTaskId)?.provider_video_id || null,
+    status_code: response.status,
+    duration_ms: Date.now() - startedAt,
+    content_type: response.headers.get('content-type'),
+    content_length: response.headers.get('content-length'),
+  });
+  if (!response.ok) throw new Error(`Video download failed with HTTP ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw new Error('Video download returned an empty file.');
+  await fs.promises.writeFile(temporaryPath, bytes);
+  await fs.promises.rename(temporaryPath, finalPath);
+  dbSqlite.prepare(`UPDATE video_tasks SET local_path = ?, download_error = NULL, updated_at = ? WHERE id = ?`)
+    .run(`/uploads/videos/${localTaskId}.mp4`, new Date().toISOString(), localTaskId);
+  agnesLog('download_completed', { local_task_id: localTaskId, bytes: bytes.length, local_path: finalPath, duration_ms: Date.now() - startedAt });
+}
+
+async function executeVideoPoll(localTaskId: string): Promise<void> {
+  if (activeVideoPolls.has(localTaskId)) return;
+  activeVideoPolls.add(localTaskId);
+  try {
+    const apiKey = String(process.env.AGNES_API_KEY || '').trim();
+    if (!apiKey) throw new Error('AGNES_API_KEY environment variable is not configured.');
+    const provider = new AgnesVideoProvider(apiKey);
+    for (let attempt = 1; attempt <= AGNES_MAX_POLL_ATTEMPTS; attempt += 1) {
+      const row = videoTaskRow(localTaskId);
+      if (!row || !['pending', 'in_progress'].includes(row.status)) return;
+      if (attempt > 1) await new Promise(resolve => setTimeout(resolve, AGNES_POLL_INTERVAL_MS));
+      const state = await provider.pollTask(String(row.provider_video_id || row.provider_task_id));
+      const now = new Date().toISOString();
+      if (state.status === 'pending') {
+        dbSqlite.prepare(`UPDATE video_tasks SET status = 'in_progress', progress = ?, updated_at = ? WHERE id = ?`)
+          .run(state.progress ?? row.progress ?? null, now, localTaskId);
+        continue;
+      }
+      if (state.status === 'failed') {
+        dbSqlite.prepare(`UPDATE video_tasks SET status = 'failed', error = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
+          .run(state.error, now, now, localTaskId);
+        agnesLog('task_failed', { local_task_id: localTaskId, provider_task_id: row.provider_task_id, provider_video_id: row.provider_video_id, error: state.error });
+        return;
+      }
+      dbSqlite.prepare(`UPDATE video_tasks SET status = 'completed', progress = 100, video_url = ?, error = NULL, completed_at = ?, updated_at = ? WHERE id = ?`)
+        .run(state.videoUrl, now, now, localTaskId);
+      try {
+        await downloadCompletedVideo(localTaskId, state.videoUrl);
+      } catch (error: any) {
+        const message = String(error?.message || error);
+        dbSqlite.prepare(`UPDATE video_tasks SET download_error = ?, updated_at = ? WHERE id = ?`).run(message, new Date().toISOString(), localTaskId);
+        console.error('[VideoProvider]', JSON.stringify({ timestamp: new Date().toISOString(), provider: 'agnes', event: 'download_failed', local_task_id: localTaskId, video_url: state.videoUrl, error: message }));
+      }
+      return;
+    }
+    const now = new Date().toISOString();
+    dbSqlite.prepare(`UPDATE video_tasks SET status = 'failed', error = 'timeout', completed_at = ?, updated_at = ? WHERE id = ?`)
+      .run(now, now, localTaskId);
+    console.error('[VideoProvider]', JSON.stringify({ timestamp: now, provider: 'agnes', event: 'task_timeout', local_task_id: localTaskId, attempts: AGNES_MAX_POLL_ATTEMPTS, error: 'timeout' }));
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    const now = new Date().toISOString();
+    dbSqlite.prepare(`UPDATE video_tasks SET status = 'failed', error = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
+      .run(message, now, now, localTaskId);
+    console.error('[VideoProvider]', JSON.stringify({ timestamp: now, provider: 'agnes', event: 'poll_worker_failed', local_task_id: localTaskId, error: message }));
+  } finally {
+    activeVideoPolls.delete(localTaskId);
+  }
+}
+
+function enqueueVideoPoll(localTaskId: string) {
+  void videoTaskQueue.add(() => executeVideoPoll(localTaskId));
+}
+
+app.post('/api/video-tasks', async (req, res) => {
+  const id = crypto.randomUUID();
+  let parsed: ReturnType<typeof validateVideoTaskBody>;
+  try {
+    parsed = validateVideoTaskBody(req.body);
+  } catch (error: any) {
+    return res.status(400).json({ error: String(error?.message || error) });
+  }
+  const now = new Date().toISOString();
+  const request = parsed.request;
+  dbSqlite.prepare(`
+    INSERT INTO video_tasks (
+      id, shot_id, provider, prompt, negative_prompt, seed, num_frames, frame_rate,
+      status, progress, created_at, updated_at
+    ) VALUES (?, ?, 'agnes', ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+  `).run(id, parsed.shotId, request.prompt, request.negativePrompt || null, request.seed, request.numFrames, request.frameRate, now, now);
+
+  try {
+    const provider = new AgnesVideoProvider(String(process.env.AGNES_API_KEY || ''));
+    const created = await provider.createTask(request);
+    const raw = asRecord(created.raw);
+    const providerTaskId = String(raw.task_id || '');
+    const providerVideoId = String(raw.video_id || created.providerTaskId || '');
+    const normalizedSeconds = Number(raw.seconds);
+    dbSqlite.prepare(`
+      UPDATE video_tasks SET provider_task_id = ?, provider_video_id = ?, normalized_size = ?,
+        normalized_seconds = ?, status = ?, progress = ?, updated_at = ? WHERE id = ?
+    `).run(
+      providerTaskId || null,
+      providerVideoId || null,
+      normalizedSize(raw.size),
+      Number.isFinite(normalizedSeconds) ? normalizedSeconds : null,
+      ['queued', 'in_progress'].includes(String(raw.status)) ? String(raw.status).replace('queued', 'pending') : 'pending',
+      Number.isFinite(Number(raw.progress)) ? Number(raw.progress) : 0,
+      new Date().toISOString(),
+      id,
+    );
+    enqueueVideoPoll(id);
+    return res.status(202).json(videoTaskRow(id));
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    const completedAt = new Date().toISOString();
+    dbSqlite.prepare(`UPDATE video_tasks SET status = 'failed', error = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
+      .run(message, completedAt, completedAt, id);
+    console.error('[VideoProvider]', JSON.stringify({ timestamp: completedAt, provider: 'agnes', event: 'create_failed', local_task_id: id, status_code: error instanceof VideoProviderHttpError ? error.status : null, error: message, response: error instanceof VideoProviderHttpError ? error.responseBody : null }));
+    return res.status(502).json(videoTaskRow(id));
+  }
+});
+
+app.get('/api/video-tasks', (_req, res) => {
+  const rows = dbSqlite.prepare('SELECT * FROM video_tasks ORDER BY created_at DESC').all();
+  res.json(rows);
+});
+
+app.get('/api/video-tasks/:id', (req, res) => {
+  const row = videoTaskRow(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Video task not found.' });
+  res.json(row);
+});
+
+for (const row of dbSqlite.prepare(`SELECT id FROM video_tasks WHERE status IN ('pending', 'in_progress') ORDER BY created_at`).all() as Array<{ id: string }>) {
+  enqueueVideoPoll(row.id);
+}
+
 // Setup multer for local file uploading
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
