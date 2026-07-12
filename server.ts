@@ -269,6 +269,34 @@ dbSqlite.exec(`
 `);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_shot_batch_items_batch_order ON comfyui_shot_batch_items (batchId, batchOrder)`);
 
+dbSqlite.exec(`
+  CREATE TABLE IF NOT EXISTS video_tasks (
+    id TEXT PRIMARY KEY,
+    shot_id TEXT,
+    provider TEXT NOT NULL,
+    provider_task_id TEXT,
+    provider_video_id TEXT,
+    prompt TEXT NOT NULL,
+    negative_prompt TEXT,
+    seed INTEGER NOT NULL,
+    num_frames INTEGER NOT NULL,
+    frame_rate INTEGER NOT NULL,
+    normalized_size TEXT,
+    normalized_seconds REAL,
+    status TEXT NOT NULL,
+    progress REAL,
+    error TEXT,
+    video_url TEXT,
+    local_path TEXT,
+    download_error TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL
+  )
+`);
+dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_tasks_status_created ON video_tasks (status, created_at)`);
+dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_tasks_shot_created ON video_tasks (shot_id, created_at)`);
+
 // Backward-compatible ComfyUI manual-import migration. Existing rows remain queue-originated.
 const comfyTaskColumns = new Set(
   (dbSqlite.prepare('PRAGMA table_info(comfyui_tasks)').all() as Array<{ name: string }>).map(column => column.name)
