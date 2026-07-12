@@ -32,6 +32,27 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+export type VideoTaskRequest = {
+  prompt: string;
+  negativePrompt?: string;
+  seed: number;
+  width: number;
+  height: number;
+  numFrames: number;
+  frameRate: number;
+};
+
+export type VideoTaskState =
+  | { status: 'pending'; progress?: number }
+  | { status: 'completed'; videoUrl: string }
+  | { status: 'failed'; error: string };
+
+export interface VideoProvider {
+  readonly name: 'agnes' | 'seedance';
+  createTask(req: VideoTaskRequest): Promise<{ providerTaskId: string; raw: unknown }>;
+  pollTask(providerTaskId: string): Promise<VideoTaskState>;
+}
+
 // Ensure directories exist
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
