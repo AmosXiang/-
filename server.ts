@@ -53,6 +53,132 @@ export interface VideoProvider {
   pollTask(providerTaskId: string): Promise<VideoTaskState>;
 }
 
+class VideoProviderHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number | null,
+    readonly responseBody: unknown,
+  ) {
+    super(message);
+    this.name = 'VideoProviderHttpError';
+  }
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' ? value as Record<string, any> : {};
+}
+
+function agnesLog(event: string, details: Record<string, unknown>) {
+  console.log('[VideoProvider]', JSON.stringify({
+    timestamp: new Date().toISOString(),
+    provider: 'agnes',
+    event,
+    ...details,
+  }));
+}
+
+export class AgnesVideoProvider implements VideoProvider {
+  readonly name = 'agnes' as const;
+  private readonly baseUrl: string;
+
+  constructor(
+    private readonly apiKey: string,
+    baseUrl = 'https://apihub.agnes-ai.com',
+  ) {
+    if (!apiKey.trim()) throw new Error('AGNES_API_KEY environment variable is not configured.');
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+  }
+
+  async createTask(req: VideoTaskRequest): Promise<{ providerTaskId: string; raw: unknown }> {
+    const body = {
+      model: 'agnes-video-v2.0',
+      prompt: req.prompt,
+      height: req.height,
+      width: req.width,
+      num_frames: req.numFrames,
+      frame_rate: req.frameRate,
+      seed: req.seed,
+      ...(req.negativePrompt ? { negative_prompt: req.negativePrompt } : {}),
+    };
+    const startedAt = Date.now();
+    agnesLog('create_request', { provider_task_id: null, method: 'POST', path: '/v1/videos', request: body });
+    const response = await fetch(`${this.baseUrl}/v1/videos`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const raw = await this.readResponse(response);
+    const payload = asRecord(raw);
+    const providerTaskId = String(payload.video_id || payload.task_id || '');
+    agnesLog('create_response', {
+      provider_task_id: payload.task_id || null,
+      provider_video_id: payload.video_id || null,
+      status_code: response.status,
+      duration_ms: Date.now() - startedAt,
+      response: raw,
+    });
+    if (!response.ok) throw new VideoProviderHttpError(this.errorMessage(raw, response.status), response.status, raw);
+    if (!providerTaskId) throw new VideoProviderHttpError('Agnes response did not include video_id or task_id.', response.status, raw);
+    return { providerTaskId, raw };
+  }
+
+  async pollTask(providerTaskId: string): Promise<VideoTaskState> {
+    const startedAt = Date.now();
+    const pathAndQuery = `/agnesapi?video_id=${encodeURIComponent(providerTaskId)}`;
+    agnesLog('poll_request', { provider_task_id: providerTaskId, method: 'GET', path: pathAndQuery });
+    const response = await fetch(`${this.baseUrl}${pathAndQuery}`, {
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+    const raw = await this.readResponse(response);
+    const payload = asRecord(raw);
+    agnesLog('poll_response', {
+      provider_task_id: providerTaskId,
+      status_code: response.status,
+      duration_ms: Date.now() - startedAt,
+      provider_status: payload.status || null,
+      response: raw,
+    });
+
+    if (response.status === 503 || response.status >= 500) return { status: 'pending', progress: this.progress(payload.progress) };
+    if (!response.ok) return { status: 'failed', error: this.errorMessage(raw, response.status) };
+
+    const status = String(payload.status || '').toLowerCase();
+    if (status === 'failed') return { status: 'failed', error: this.errorMessage(payload.error || raw, response.status) };
+    if (status === 'completed') {
+      // UNVERIFIED: Agnes currently exposes the final MP4 in the misleading
+      // remixed_from_video_id field. Alternative fields are tolerated because
+      // the provider documentation warns that this response shape may change.
+      const videoUrl = payload.remixed_from_video_id
+        || payload.video_url
+        || payload.url
+        || payload.output?.video_url
+        || payload.output?.url;
+      if (!videoUrl || typeof videoUrl !== 'string') {
+        return { status: 'failed', error: 'Agnes completed response did not include a recognized video URL.' };
+      }
+      return { status: 'completed', videoUrl };
+    }
+    return { status: 'pending', progress: this.progress(payload.progress) };
+  }
+
+  private async readResponse(response: Response): Promise<unknown> {
+    const text = await response.text();
+    if (!text) return null;
+    try { return JSON.parse(text); } catch { return { raw_text: text }; }
+  }
+
+  private errorMessage(raw: unknown, status: number): string {
+    const payload = asRecord(raw);
+    const error = asRecord(payload.error);
+    return String(error.message || error.detail || payload.message || payload.detail || `Agnes request failed with HTTP ${status}`);
+  }
+
+  private progress(value: unknown): number | undefined {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+}
+
 // Ensure directories exist
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
