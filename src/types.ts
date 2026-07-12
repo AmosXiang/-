@@ -16,6 +16,15 @@ export interface Shot {
   characterIds?: string[];
   characterNames?: string[];
   matchedCharacterIds?: string[];
+  // 机位派生(camera derive):结构化机位参数与主帧派生关系。
+  // A1 确认:shots 存于 SQLite store 表的 generated_scripts JSON 文档内,
+  // 因此这些字段是 JSON 字段而非表列;全部可选,旧记录天然兼容。
+  cameraH?: 'front' | 'front_right' | 'right' | 'back_right' | 'back' | 'back_left' | 'left' | 'front_left';
+  cameraV?: 'low' | 'eye' | 'elevated' | 'high';
+  cameraZoom?: 'close_up' | 'medium_cu' | 'medium' | 'full' | 'wide';
+  isMaster?: boolean;                 // 本场(项目)主帧,项目内至多一个
+  derivedFromShotId?: string;         // 派生来源镜头 id;无 = 非派生
+  cameraPromptUsed?: string;          // 实际注入的完整英文机位指令(审计/复现)
 }
 
 export interface Character {
