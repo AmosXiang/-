@@ -14,6 +14,8 @@ import PQueue from 'p-queue';
 import sharp, { type Metadata } from 'sharp';
 import { registerShotAnalysisModule } from './server/modules/shot-analysis/index.ts';
 import { registerCameraDeriveModule, cameraDeriveTaskNodeMappings, CAMERA_DERIVE_PRESET_ID } from './server/modules/camera-derive/index.ts';
+import { migrateImageProviderAudit } from './server/providers/imageGen/migrate.ts';
+import { registerImageGenRouting } from './server/providers/imageGen/routes.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -297,6 +299,7 @@ dbSqlite.exec(`
 `);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_tasks_status_created ON video_tasks (status, created_at)`);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_tasks_shot_created ON video_tasks (shot_id, created_at)`);
+migrateImageProviderAudit(dbSqlite, path.join(__dirname, 'migrations', '001_add_image_provider_audit.sql'));
 
 // Backward-compatible ComfyUI manual-import migration. Existing rows remain queue-originated.
 const comfyTaskColumns = new Set(
@@ -6510,6 +6513,14 @@ async function prepareComfyTaskData(reqBody: any) {
       : undefined
   };
 }
+
+registerImageGenRouting({
+  app,
+  db: dbSqlite,
+  uploadsDir: UPLOADS_DIR,
+  configPath: path.join(__dirname, 'config', 'imageGenRouting.json'),
+  optimizePrompt,
+});
 
 // 11. POST /api/generate-image - Generate image using Pollinations AI, Kling AI, or local ComfyUI
 app.post('/api/generate-image', async (req, res) => {

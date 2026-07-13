@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { type ImageGenProvider, type ImageGenProviderName } from './types.ts';
+import { type ImageGenProviderName } from './types.ts';
 
 type RuleCondition = { isMaster?: boolean; hasCharacter?: boolean };
 type RoutingRule = { name: string; if: RuleCondition; provider: ImageGenProviderName };
@@ -12,7 +12,7 @@ export interface ImageRouteContext {
 }
 
 export interface ImageRouteDecision {
-  provider: ImageGenProvider;
+  provider: ImageGenProviderName;
   reason: string;
 }
 
@@ -23,20 +23,18 @@ export class ImageGenRouter {
 
   constructor(
     configPath: string,
-    private readonly providers: Record<ImageGenProviderName, ImageGenProvider>,
   ) {
     this.config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as RoutingConfig;
     if (!Array.isArray(this.config.rules) || !this.config.rules.length) throw new Error('imageGenRouting.json must contain at least one rule.');
     for (const rule of this.config.rules) {
-      if (!rule.name || !this.providers[rule.provider]) throw new Error(`Invalid image routing rule '${rule.name || '<unnamed>'}'.`);
+      if (!rule.name || !['comfyui_local', 'agnes'].includes(rule.provider)) throw new Error(`Invalid image routing rule '${rule.name || '<unnamed>'}'.`);
     }
   }
 
   route(context: ImageRouteContext): ImageRouteDecision {
     if (context.forceProvider) {
-      const provider = this.providers[context.forceProvider];
-      if (!provider) throw new Error(`Unsupported forced image provider '${context.forceProvider}'.`);
-      return { provider, reason: 'forced' };
+      if (!['comfyui_local', 'agnes'].includes(context.forceProvider)) throw new Error(`Unsupported forced image provider '${context.forceProvider}'.`);
+      return { provider: context.forceProvider, reason: 'forced' };
     }
     if (context.isMaster === undefined && !warnedMissingIsMaster) {
       warnedMissingIsMaster = true;
@@ -45,7 +43,7 @@ export class ImageGenRouter {
     const facts = { isMaster: context.isMaster === true, hasCharacter: context.hasCharacter };
     for (const rule of this.config.rules) {
       const matches = Object.entries(rule.if || {}).every(([key, expected]) => facts[key as keyof typeof facts] === expected);
-      if (matches) return { provider: this.providers[rule.provider], reason: rule.name };
+      if (matches) return { provider: rule.provider, reason: rule.name };
     }
     throw new Error('No image generation routing rule matched.');
   }
