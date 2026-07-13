@@ -39,7 +39,7 @@ export class AgnesClient {
 
   constructor(
     private readonly apiKey: string,
-    baseUrl = process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com',
+    baseUrl = process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1',
   ) {
     if (!apiKey.trim()) throw new Error('AGNES_API_KEY environment variable is not configured.');
     this.baseUrl = baseUrl.replace(/\/$/, '');
@@ -50,14 +50,10 @@ export class AgnesClient {
       model: req.model,
       prompt: req.prompt,
       size: `${req.width}x${req.height}`,
-      n: 1,
-      ...(req.seed === undefined ? {} : { seed: req.seed }),
     };
     if (req.referenceDataUrls?.length) {
-      // UNVERIFIED: Agnes documentation specifies that image belongs under
-      // extra_body, but does not state whether multiple references use a scalar
-      // or array. This implementation sends an array only when there are >1.
-      body.extra_body = { image: req.referenceDataUrls.length === 1 ? req.referenceDataUrls[0] : req.referenceDataUrls };
+      body.tags = ['img2img'];
+      body.extra_body = { image: req.referenceDataUrls, response_format: 'url' };
     }
 
     let lastError: unknown;
@@ -66,7 +62,7 @@ export class AgnesClient {
       const permit = await agnesImageRateLimiter.acquire(req.width, req.height, 120_000);
       log('image_rate_limit_acquired', { tier: permit.tier, queued_ahead: permit.queuedAhead, queue_ms: Date.now() - queuedAt, attempt });
       const startedAt = Date.now();
-      log('image_request', { method: 'POST', path: '/images/generations', model: req.model, size: body.size, seed: req.seed ?? null, reference_count: req.referenceDataUrls?.length || 0, attempt });
+      log('image_request', { method: 'POST', path: '/images/generations', model: req.model, size: body.size, seed_requested: req.seed ?? null, seed_forwarded: false, reference_count: req.referenceDataUrls?.length || 0, attempt });
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 120_000);
       try {

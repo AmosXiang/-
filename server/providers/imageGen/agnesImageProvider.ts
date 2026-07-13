@@ -76,8 +76,8 @@ export class AgnesImageProvider implements ImageGenProvider {
       provider: 'agnes',
       requestId: created.requestId,
       imagePath: `/uploads/${relativePath.replace(/\\/g, '/')}`,
-      seedUsed: req.seed,
-      rawMeta: { response: created.raw, remote_url: remoteUrl },
+      seedUsed: undefined,
+      rawMeta: { response: created.raw, remote_url: remoteUrl, seed_requested: req.seed ?? null, seed_forwarded: false },
     };
   }
 }
