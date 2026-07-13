@@ -35,6 +35,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { videoAnalysisData } from "./data";
 import { Shot, Character, VideoRecord, GeneratedScriptRecord } from "./types";
+import CameraDerivePanel from "./components/CameraDerivePanel";
 
 type ComfyProjectPreferences = {
   shotPresetId: string;
@@ -4898,6 +4899,16 @@ export default function App() {
                                               {shot.description || <span className="text-slate-650 italic">双击编辑描述词...</span>}
                                             </div>
                                           )}
+                                          <CameraDerivePanel
+                                            projectId={String(generatedScript.id)}
+                                            shots={generatedScript.newShots}
+                                            shotIndex={idx}
+                                            onShotsChange={(nextShots) => {
+                                              const updatedScript = { ...generatedScript, newShots: nextShots };
+                                              setGeneratedScript(updatedScript);
+                                              setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
+                                            }}
+                                          />
                                           <div className="mt-2 flex flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
                                             <span className="text-[10px] font-semibold text-slate-500">本镜角色</span>
                                             {(generatedScript.newCharacters || []).map((character: Character) => {
