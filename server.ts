@@ -13,6 +13,7 @@ import Database from 'better-sqlite3';
 import PQueue from 'p-queue';
 import sharp, { type Metadata } from 'sharp';
 import { registerShotAnalysisModule } from './server/modules/shot-analysis/index.ts';
+import { registerCameraDeriveModule, cameraDeriveTaskNodeMappings, CAMERA_DERIVE_PRESET_ID } from './server/modules/camera-derive/index.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -3312,9 +3313,12 @@ async function submitComfyTask(task: any) {
 
     if (task.workflowPresetId) {
       const manifestPath = resolvePresetManifestPath(task.workflowPresetId);
-      if (manifestPath && fs.existsSync(manifestPath)) {
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        const mappings = manifest.nodeMappings || {};
+      // camera-derive 预设无 manifest:注入点映射在任务创建时按节点 title 解析并存于任务行(A2)。
+      const cameraDeriveMappings = cameraDeriveTaskNodeMappings(task);
+      if (cameraDeriveMappings || (manifestPath && fs.existsSync(manifestPath))) {
+        const mappings = cameraDeriveMappings
+          || JSON.parse(fs.readFileSync(manifestPath!, 'utf8')).nodeMappings
+          || {};
 
         console.log('[CharacterConsistency:WorkerMapping]', JSON.stringify({
           taskId: task.id,
@@ -4514,6 +4518,11 @@ function exportedUiWorkflow(task: any): any {
 
   // Preset tasks already contain their exact UI workflow snapshot. Export a decorated copy only;
   // never rebuild it from the global SDXL template and never mutate the stored task JSON.
+  // camera-derive 预设没有 manifest/UI 模板;uiWorkflowJson 存的是 API 快照,原样导出。
+  if (task.workflowPresetId === CAMERA_DERIVE_PRESET_ID) {
+    return workflow;
+  }
+
   if (task.workflowPresetId && task.workflowPresetId !== 'sdxl_legacy') {
     const manifestPath = resolvePresetManifestPath(task.workflowPresetId);
     if (!manifestPath || !fs.existsSync(manifestPath)) {
@@ -6912,6 +6921,17 @@ try {
 }
 
 registerShotAnalysisModule(app, dbSqlite);
+registerCameraDeriveModule(app, dbSqlite, {
+  mutateDb,
+  checkComfyOnline: async () => {
+    try {
+      const response = await comfyFetch('/queue', {}, 5_000);
+      return { online: response.ok, error: response.ok ? undefined : `ComfyUI HTTP ${response.status}` };
+    } catch (error: any) {
+      return { online: false, error: error.message };
+    }
+  },
+});
 
 // Start Server
 app.listen(PORT, () => {
