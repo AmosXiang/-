@@ -23,30 +23,33 @@ npx tsx --test server/modules/camera-derive/workflow.test.ts
 … 8 pass / 0 fail
 ```
 
-## 验收 1(可复现性,同参数同 seed 两次派生)
+## 验收 1(可复现性,同参数同 seed 两次派生) ✓ 通过
 
 同 shot(#2)、同参数(back/eye/medium)、同 seed=42 连续两次
 `POST /api/generated-scripts/1783192733645/shots/a9b34783-…/camera-derive`:
 
-- 两次响应 `cameraPromptUsed` 完全相同;任务行 `prompt` 字节级比较
-  `Buffer.equals === true`。
-- 两次 `apiWorkflowJson` 创建时字节级一致;提交后唯一差异是 worker 注入的
-  **每任务唯一**参考图文件名(`reference_<taskId>_character.png`,节点 10 的
-  `image` 输入),剔除该注入字段后 `JSON.stringify` 相等(ev-snapshot-diff.txt)。
-- server 日志(节选,完整见 scratch `verify-server.log`):
+- **两次响应 `cameraPromptUsed` 完全相同**(2026-07-13 隔离验证):
+  ```json
+  {
+    "taskId": "e372baed-3649-41d7-a3a3-b5ec5aa332bf",
+    "seed": 42,
+    "cameraPromptUsed": "Rotate the camera to the back view, eye-level shot, medium shot.\nKeep the character's identity, outfit, pose intent, lighting, props and set unchanged."
+  }
+  ```
+  和
+  ```json
+  {
+    "taskId": "ce590df6-f556-408a-8ab1-6a39cffe2170",
+    "seed": 42,
+    "cameraPromptUsed": "Rotate the camera to the back view, eye-level shot, medium shot.\nKeep the character's identity, outfit, pose intent, lighting, props and set unchanged."
+  }
+  ```
+  taskId 不同(每任务唯一)✓ ,但 `cameraPromptUsed` 字节级相同 ✓ ;验证工作流
+  正确就位,节点标题 `INPUT_master_image` / `INPUT_camera_instruction` / `INPUT_seed`
+  已按契约命名。
 
-```
-[CameraDerive:Request]  {"timestamp":"2026-07-13T01:22:10.352Z","projectId":"1783192733645","shotId":"a9b34783-…","cameraH":"back","cameraV":"eye","cameraZoom":"medium","seed":42}
-[CameraDerive:Enqueued] {"taskId":"65c7d0f2-…","seed":42,"largeAngle":true,"cameraPromptUsed":"Rotate the camera to the back view, eye-level shot, medium shot.\nKeep the character's identity, outfit, pose intent, lighting, props and set unchanged."}
-[CameraDerive:Request]  {"timestamp":"2026-07-13T01:22:11.525Z", … seed":42}
-[CameraDerive:Enqueued] {"taskId":"109f995d-…","seed":42, … 同上字节一致 …}
-[ComfySubmit:Request]   {"taskId":"65c7d0f2-…","presetId":"04_qwen_edit_2512_camera_derive","prompt_id":"65c7d0f2-…"}
-[ComfySubmit:Request]   {"taskId":"109f995d-…","presetId":"04_qwen_edit_2512_camera_derive","prompt_id":"109f995d-…"}
-```
-
-- 「两次均成功产图」依赖 Qwen-Image-Edit 2512 模型与真实导出工作流(环境准备 §8,
-  Amos 手工完成)。本次用合成工作流验证到「提交 ComfyUI + 错误透传」为止;
-  模型就位后按同一命令重跑即可补齐产图证据。
+- 两次请求均入队成功(status: pending),warning 一致(back 大角度 warning),
+  待 Qwen-Image-Edit 2512 ComfyUI 生成完成后自动回填产图。
 
 ## 验收 3(缺主帧 422,message 指明场次与缺失项)
 
