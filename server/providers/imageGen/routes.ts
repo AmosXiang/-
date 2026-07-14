@@ -4,9 +4,18 @@ import type Database from 'better-sqlite3';
 import { AgnesClient } from '../agnesClient.ts';
 import { AgnesImageProvider } from './agnesImageProvider.ts';
 import { ImageGenRouter } from './router.ts';
-import { ImageGenValidationError, type ImageGenProviderName } from './types.ts';
+import { ImageGenValidationError, type ImageGenProvider, type ImageGenProviderName } from './types.ts';
 
 type OptimizePrompt = (prompt: string, isCharacter: boolean, style?: string) => Promise<string>;
+
+// 判定"对已有图片的操作":这类请求(放大、基于源图的重绘)不产生新的分镜构图,
+// 前端也依赖原有 ComfyUI 契约,必须无条件绕过 provider 路由。
+function isExistingImageOperation(body: any): boolean {
+  if (body?.sourceImageUrl) return true;
+  if (typeof body?.presetId === 'string' && /upscale/i.test(body.presetId)) return true;
+  if (body?.presetRole === 'upscale') return true;
+  return false;
+}
 
 function rawMeta8k(value: unknown): string {
   const json = JSON.stringify(value ?? null);
@@ -75,11 +84,22 @@ export function registerImageGenRouting(options: {
   uploadsDir: string;
   configPath: string;
   optimizePrompt: OptimizePrompt;
+  createAgnesProvider?: () => ImageGenProvider;
 }) {
   const router = new ImageGenRouter(options.configPath);
+  const createAgnesProvider = options.createAgnesProvider
+    ?? (() => new AgnesImageProvider(new AgnesClient(String(process.env.AGNES_API_KEY || '')), options.uploadsDir));
+  const inFlightAgnes = new Set<string>();
 
   options.app.use('/api/generate-image', async (req: Request, res: Response, next: NextFunction) => {
     if (req.method !== 'POST' || req.body?.targetType !== 'shot') return next();
+    // 基于已有图片的操作(放大、重绘等)不是"生成新分镜图",必须留在原有 ComfyUI 管线,任何情况下不进入 provider 路由。
+    if (isExistingImageOperation(req.body)) return next();
+    const forceProvider = req.body?.forceProvider as ImageGenProviderName | undefined;
+    // autoRoute 关闭时不接管现有 UI 请求(前端仍按 taskId+轮询契约编写);仅显式 forceProvider 走新路由。
+    if (!forceProvider && !router.autoRoute) return next();
+    // 没有 prompt 的请求无法用于任何文生图 provider,交回原有管线处理。
+    if (!forceProvider && !String(req.body?.prompt || '').trim()) return next();
     const projectId = String(req.body?.projectId || '');
     const shotIndex = Number.isInteger(req.body?.shotIndex) ? Number(req.body.shotIndex) : undefined;
     const requestedTargetId = String(req.body?.targetId || (shotIndex === undefined ? '' : `shot_${shotIndex}`));
@@ -92,7 +112,6 @@ export function registerImageGenRouting(options: {
       ...(located.shot.characters || []),
       ...(located.shot.characterNames || []),
     ].some(Boolean);
-    const forceProvider = req.body?.forceProvider as ImageGenProviderName | undefined;
     let decision;
     try {
       decision = router.route({ isMaster: located.shot.isMaster ?? located.shot.is_master, hasCharacter, forceProvider });
@@ -112,11 +131,17 @@ export function registerImageGenRouting(options: {
       return next();
     }
 
+    // 同一 shot 的 Agnes 请求进行中时拒绝重复提交,避免连点重复扣费(对齐 ComfyUI 管线的 409 语义)。
+    const inFlightKey = `${projectId}:${targetId}`;
+    if (inFlightAgnes.has(inFlightKey)) {
+      return res.status(409).json({ error: 'An Agnes image generation for this shot is already in progress.', provider: 'agnes' });
+    }
+    inFlightAgnes.add(inFlightKey);
     try {
       const prompt = req.body?.skipTranslation
         ? String(req.body?.prompt || '')
         : await options.optimizePrompt(String(req.body?.prompt || ''), false, req.body?.style);
-      const provider = new AgnesImageProvider(new AgnesClient(String(process.env.AGNES_API_KEY || '')), options.uploadsDir);
+      const provider = createAgnesProvider();
       const result = await provider.generate({
         shotId: located.index,
         prompt,
@@ -133,6 +158,8 @@ export function registerImageGenRouting(options: {
       saveAudit(options.db, projectId, targetId, 'agnes', decision.reason, { error: message, rawMeta: error?.raw });
       console.error('[ImageGenRouter]', JSON.stringify({ timestamp: new Date().toISOString(), event: 'provider_failed', project_id: projectId, shot_id: targetId, provider: 'agnes', reason: decision.reason, error: message }));
       return res.status(error instanceof ImageGenValidationError ? 400 : 502).json({ error: message, provider: 'agnes' });
+    } finally {
+      inFlightAgnes.delete(inFlightKey);
     }
   });
 }

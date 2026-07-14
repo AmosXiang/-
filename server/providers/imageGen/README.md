@@ -4,6 +4,26 @@
 
 Rules are loaded from `config/imageGenRouting.json` in order. Master frames and shots with bound characters use `comfyui_local`; other shots use `agnes`. `forceProvider` is the only override. A provider error is recorded and returned without invoking the other provider.
 
+### Rollout state: autoRoute is OFF by default
+
+`config/imageGenRouting.json` has a top-level `autoRoute` flag, currently `false`. The existing frontend still speaks the ComfyUI async contract (submit → `taskId` → poll `/api/comfyui/tasks`), while the Agnes path returns a synchronous `{ imageUrl }`. Until the UI is adapted (planned as the immediate follow-up PR), the middleware does not take over normal shot requests: they pass through to the legacy handler unchanged. Explicit `forceProvider` requests are routed regardless of `autoRoute`, which is how API-level acceptance runs today.
+
+### Requests that never enter provider routing
+
+Regardless of `autoRoute`, the middleware passes through (`next()`) any shot request that is an operation on an existing image rather than new shot generation:
+
+- `sourceImageUrl` present (upscale, re-render from a source image);
+- `presetId` containing `upscale` (e.g. `04_esrgan_upscale`) or `presetRole: "upscale"`;
+- requests without a usable `prompt` (unless `forceProvider` is explicit, in which case validation rejects them with 400).
+
+### Duplicate submission guard
+
+While an Agnes generation for a given `(projectId, shotId)` is in flight, a second POST for the same shot returns 409 without calling Agnes, mirroring the ComfyUI pipeline's 409 semantics and preventing double billing from double clicks.
+
+### Audit caveat for the ComfyUI path
+
+For `comfyui_local` decisions the audit row is written at routing time, before the async task completes. Only synchronous HTTP errors are reflected back into the audit; the eventual ComfyUI task outcome lives in `comfyui_tasks`, not in `shot_image_provider_audit`.
+
 The repository does not have a relational `shots` table. Shots are JSON objects inside SQLite `store.generated_scripts.newShots`. The migration therefore adds the four audit fields to each shot JSON object and creates `shot_image_provider_audit` as a queryable companion table. This preserves task A camera fields whether they are already present or merged later.
 
 Character presence uses `matchedCharacterIds`, with legacy `characterIds`, `characters`, and `characterNames` as compatibility inputs. Missing `isMaster`/`is_master` is treated as false and emits one startup/runtime warning.
@@ -18,7 +38,7 @@ Character presence uses `matchedCharacterIds`, with legacy `characterIds`, `char
 - Only network failures and HTTP 5xx are retried, at most twice. Every retry is logged.
 - Image rate limits are independent of video polling: 1K 20 RPM, 2K 10 RPM, 3K/4K 1 RPM.
 
-The downloaded local image is the only truth source. Remote URLs are audit data only. A successful response is downloaded immediately, decoded with Sharp, written atomically below `uploads/images/agnes/`, decoded again, and checked for non-zero size. Deleting that local file is irreversible; the remote URL and a repeated prompt cannot be treated as recovery mechanisms.
+The downloaded local image is the only truth source. Remote URLs are audit data only. A successful response is downloaded immediately (with a 120s timeout), decoded with Sharp, written atomically below `uploads/images/agnes/`, decoded again, and checked for non-zero size. Deleting that local file is irreversible; the remote URL and a repeated prompt cannot be treated as recovery mechanisms.
 
 ## Verified limitation: seed is not accepted
 

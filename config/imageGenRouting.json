@@ -1,4 +1,5 @@
 {
+  "autoRoute": false,
   "rules": [
     { "name": "master_frame_local", "if": { "isMaster": true }, "provider": "comfyui_local" },
     { "name": "has_character_local", "if": { "hasCharacter": true }, "provider": "comfyui_local" },

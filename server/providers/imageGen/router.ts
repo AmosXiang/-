@@ -3,7 +3,7 @@ import { type ImageGenProviderName } from './types.ts';
 
 type RuleCondition = { isMaster?: boolean; hasCharacter?: boolean };
 type RoutingRule = { name: string; if: RuleCondition; provider: ImageGenProviderName };
-type RoutingConfig = { rules: RoutingRule[] };
+type RoutingConfig = { autoRoute?: boolean; rules: RoutingRule[] };
 
 export interface ImageRouteContext {
   isMaster?: boolean;
@@ -20,11 +20,14 @@ let warnedMissingIsMaster = false;
 
 export class ImageGenRouter {
   private readonly config: RoutingConfig;
+  // 自动接管默认关闭:前端仍按 ComfyUI 异步契约(taskId+轮询)编写,启用前必须先完成 UI 适配。
+  readonly autoRoute: boolean;
 
   constructor(
     configPath: string,
   ) {
     this.config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as RoutingConfig;
+    this.autoRoute = this.config.autoRoute === true;
     if (!Array.isArray(this.config.rules) || !this.config.rules.length) throw new Error('imageGenRouting.json must contain at least one rule.');
     for (const rule of this.config.rules) {
       if (!rule.name || !['comfyui_local', 'agnes'].includes(rule.provider)) throw new Error(`Invalid image routing rule '${rule.name || '<unnamed>'}'.`);
