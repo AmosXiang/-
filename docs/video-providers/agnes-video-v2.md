@@ -11,13 +11,14 @@
 - 删除视频必须是显式、可审计的用户操作；执行前应提示“删除后无法恢复”。
 - 需要跨机器保存或灾难恢复时，必须备份 `uploads/videos/`；只备份 SQLite 或远程 URL 不足以恢复视频成品。
 
-`status = completed` 表示 provider 已完成并返回远程 URL。只有 `local_path` 非空且文件实际存在，才表示本地成品已经安全落地。下载失败时保持 `completed`，并在 `download_error` 中记录真实错误，以便运维人员重新尝试下载；不得用空文件或 mock 文件代替。
+`status = completed` 表示 provider 已完成并返回远程 URL。只有 `local_path` 非空且文件实际存在，才表示本地成品已经安全落地。下载失败时保持 `completed`，并在 `download_error` 中记录真实错误，运维人员可通过 `POST /api/video-tasks/:id/retry-download` 重新尝试下载；不得用空文件或 mock 文件代替。
 
 ## 当前接口
 
 - 创建：`POST /api/video-tasks`
 - 查询单个任务：`GET /api/video-tasks/:id`
 - 列出任务：`GET /api/video-tasks`
+- 重试下载：`POST /api/video-tasks/:id/retry-download`（仅限 `completed` 且保存了远程 URL 的任务；成功更新 `local_path` 并清空 `download_error`，失败返回 502 并如实记录 `download_error`。注意远程 URL 保留时长无保证，重试并非可靠恢复手段，不改变"本地 MP4 是唯一真相源"原则）
 - Provider：`agnes`
 - 模型：`agnes-video-v2.0`
 - 本地目录：`uploads/videos/`

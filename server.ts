@@ -603,6 +603,33 @@ app.get('/api/video-tasks/:id', (req, res) => {
   res.json(row);
 });
 
+// 运维重下端点:completed 任务下载失败(download_error)或本地 MP4 丢失时,
+// 用保存的远程 URL 重新尝试下载。远程 URL 的保留时长无保证,失败时如实记录。
+const activeVideoDownloads = new Set<string>();
+app.post('/api/video-tasks/:id/retry-download', async (req, res) => {
+  const row = videoTaskRow(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Video task not found.' });
+  if (row.status !== 'completed' || !row.video_url) {
+    return res.status(409).json({ error: 'Only completed tasks with a saved remote video URL can retry download.', task: row });
+  }
+  if (activeVideoDownloads.has(row.id)) {
+    return res.status(409).json({ error: 'A download for this task is already in progress.' });
+  }
+  activeVideoDownloads.add(row.id);
+  try {
+    await downloadCompletedVideo(row.id, String(row.video_url));
+    return res.json(videoTaskRow(row.id));
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    dbSqlite.prepare(`UPDATE video_tasks SET download_error = ?, updated_at = ? WHERE id = ?`)
+      .run(message, new Date().toISOString(), row.id);
+    console.error('[VideoProvider]', JSON.stringify({ timestamp: new Date().toISOString(), provider: 'agnes', event: 'retry_download_failed', local_task_id: row.id, video_url: row.video_url, error: message }));
+    return res.status(502).json(videoTaskRow(row.id));
+  } finally {
+    activeVideoDownloads.delete(row.id);
+  }
+});
+
 for (const row of dbSqlite.prepare(`SELECT id FROM video_tasks WHERE status IN ('pending', 'in_progress') ORDER BY created_at`).all() as Array<{ id: string }>) {
   enqueueVideoPoll(row.id);
 }
