@@ -53,10 +53,20 @@ export class AgnesImageProvider implements ImageGenProvider {
     const remoteUrl = imageUrl(created.raw);
     const startedAt = Date.now();
     console.log('[AgnesImageProvider]', JSON.stringify({ timestamp: new Date().toISOString(), event: 'download_request', request_id: created.requestId, url: remoteUrl }));
-    const response = await fetch(remoteUrl);
-    console.log('[AgnesImageProvider]', JSON.stringify({ timestamp: new Date().toISOString(), event: 'download_response', request_id: created.requestId, status_code: response.status, duration_ms: Date.now() - startedAt, content_type: response.headers.get('content-type'), content_length: response.headers.get('content-length') }));
-    if (!response.ok) throw new Error(`Agnes image download failed with HTTP ${response.status}.`);
-    const bytes = Buffer.from(await response.arrayBuffer());
+    const downloadController = new AbortController();
+    const downloadTimeout = setTimeout(() => downloadController.abort(), 120_000);
+    let bytes: Buffer;
+    try {
+      const response = await fetch(remoteUrl, { signal: downloadController.signal });
+      console.log('[AgnesImageProvider]', JSON.stringify({ timestamp: new Date().toISOString(), event: 'download_response', request_id: created.requestId, status_code: response.status, duration_ms: Date.now() - startedAt, content_type: response.headers.get('content-type'), content_length: response.headers.get('content-length') }));
+      if (!response.ok) throw new Error(`Agnes image download failed with HTTP ${response.status}.`);
+      bytes = Buffer.from(await response.arrayBuffer());
+    } catch (error: any) {
+      if (error?.name === 'AbortError') throw new Error('Agnes image download timed out after 120000ms.');
+      throw error;
+    } finally {
+      clearTimeout(downloadTimeout);
+    }
     if (!bytes.length) throw new Error('Agnes image download returned an empty file.');
     await sharp(bytes).metadata();
 
