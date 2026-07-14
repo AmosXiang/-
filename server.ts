@@ -320,6 +320,10 @@ if (!comfyTaskColumns.has('origin')) {
 if (!comfyTaskColumns.has('importedFromTaskId')) {
   dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN importedFromTaskId TEXT');
 }
+if (!comfyTaskColumns.has('importSha256')) {
+  // idx_comfy_manual_import_unique 引用该列;缺少此迁移时全新数据库无法启动。
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN importSha256 TEXT');
+}
 if (!comfyTaskColumns.has('workflowPresetId')) {
   dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN workflowPresetId TEXT');
 }
