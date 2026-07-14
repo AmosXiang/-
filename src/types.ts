@@ -44,6 +44,9 @@ export interface Shot {
   isMaster?: boolean;                 // 本场(项目)主帧,项目内至多一个
   derivedFromShotId?: string;         // 派生来源镜头 id;无 = 非派生
   cameraPromptUsed?: string;          // 实际注入的完整英文机位指令(审计/复现)
+  finalTaskId?: string;               // 已定稿的 ComfyUI main-shot task id
+  finalizedImageUrl?: string;         // 定稿任务对应的本地 /uploads/... 图片 URL
+  isStale?: boolean;                  // 上游故事/风格/角色变化后标记为基于旧输入
 }
 
 export interface Character {
