@@ -15,6 +15,7 @@ import sharp, { type Metadata } from 'sharp';
 import { registerShotAnalysisModule } from './server/modules/shot-analysis/index.ts';
 import { registerCameraDeriveModule, cameraDeriveTaskNodeMappings, CAMERA_DERIVE_PRESET_ID } from './server/modules/camera-derive/index.ts';
 import { detectComfyProcesses, getPort8001OwnerPids as port8001OwnerPids } from './comfyui-health.ts';
+import { registerExportDeckModule } from './server/modules/export-deck/index.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -7416,6 +7417,8 @@ registerCameraDeriveModule(app, dbSqlite, {
     }
   },
 });
+
+registerExportDeckModule(app, dbSqlite, { uploadsDir: UPLOADS_DIR });
 
 // Keep unknown API routes machine-readable. This must precede the production
 // SPA fallback, otherwise an API typo receives index.html and breaks JSON parsing.
