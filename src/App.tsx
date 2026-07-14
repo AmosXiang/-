@@ -30,12 +30,27 @@ import {
   Plus,
   GripVertical,
   Power,
-  Square
+  Square,
+  AlertTriangle
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { videoAnalysisData } from "./data";
 import { Shot, Character, VideoRecord, GeneratedScriptRecord } from "./types";
 import CameraDerivePanel from "./components/CameraDerivePanel";
+
+// 图片资源失败态:src 为空显示"暂无图片",加载 404/失败显示"加载失败",不出现浏览器破图图标(P0)。
+function SafeImg({ src, alt, className, onClick }: { src?: string; alt?: string; className?: string; onClick?: () => void }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
+  if (!src || failed) {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 bg-slate-950/60 font-medium">
+        {failed ? "加载失败" : "暂无图片"}
+      </div>
+    );
+  }
+  return <img src={src} alt={alt || ""} className={className} onClick={onClick} onError={() => setFailed(true)} />;
+}
 
 type ComfyProjectPreferences = {
   shotPresetId: string;
@@ -135,6 +150,144 @@ const BUILTIN_WORKFLOW_PRESET_FALLBACKS: WorkflowPresetSummary[] = [
   },
 ];
 
+const CAMERA_MOVE_OPTIONS = ['push_in', 'pull_out', 'static', 'follow', 'pan', 'tilt', 'handheld'] as const;
+const CAMERA_SPEED_OPTIONS = ['slow', 'medium', 'fast'] as const;
+const SHOT_SIZE_OPTIONS = ['extreme_close', 'close_up', 'medium_close', 'medium', 'full', 'wide'] as const;
+const CAMERA_ANGLE_OPTIONS = ['front', 'side', 'back', 'high', 'low', 'pov'] as const;
+
+function StoryboardInspector({ shot, characters, provider, onProviderChange, onChange, onInitialize }: {
+  shot: Shot;
+  characters: Character[];
+  provider: 'kling' | 'seedance';
+  onProviderChange: (p: 'kling' | 'seedance') => void;
+  onChange: (next: Shot) => Promise<void>;
+  onInitialize: () => Promise<void>;
+}) {
+  const [localShot, setLocalShot] = useState<Shot>(shot);
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [preview, setPreview] = useState<{ prompt: string; deliveryNotes: string[] } | null>(null);
+  const [previewError, setPreviewError] = useState('');
+
+  const maxDuration = provider === 'seedance' ? 12 : 10;
+  const isEnriched = Boolean(shot.camera && shot.framing && shot.blocking && shot.durationSec && shot.provenance);
+
+  const saveTimeoutRef = useRef<number | null>(null);
+
+  // Sync from parent shot changes when we are not dirty or if shot ID changes
+  useEffect(() => {
+    setLocalShot(shot);
+    setIsDirty(false);
+    setSaveError('');
+    setIsSaving(false);
+    if (saveTimeoutRef.current) {
+      window.clearTimeout(saveTimeoutRef.current);
+    }
+  }, [shot.id]);
+
+  useEffect(() => {
+    if (!isDirty) {
+      setLocalShot(shot);
+    }
+  }, [shot, isDirty]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        window.clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Automatically adjust duration if switching to a provider with lower limit
+  useEffect(() => {
+    if (localShot.durationSec && localShot.durationSec > maxDuration) {
+      patchShot({ durationSec: maxDuration });
+    }
+  }, [provider]);
+
+  const patchShot = (patch: Partial<Shot>) => {
+    const nextShot = { ...localShot, ...patch, provenance: 'edited' as const };
+    setLocalShot(nextShot);
+    setIsDirty(true);
+    setIsSaving(true);
+    setSaveError('');
+
+    if (saveTimeoutRef.current) {
+      window.clearTimeout(saveTimeoutRef.current);
+    }
+
+    saveTimeoutRef.current = window.setTimeout(async () => {
+      try {
+        await onChange(nextShot);
+        setIsSaving(false);
+        setIsDirty(false);
+      } catch (err: any) {
+        setSaveError(err.message || '保存失败');
+        setIsSaving(false);
+      }
+    }, 500);
+  };
+
+  useEffect(() => {
+    if (!isEnriched) { setPreview(null); setPreviewError('该分镜尚未完成结构化参数，请先初始化。'); return; }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch('/api/video-prompt/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shot: localShot, provider }),
+          signal: controller.signal
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '提示词预览失败');
+        setPreview(result); setPreviewError('');
+      } catch (error: any) {
+        if (error.name !== 'AbortError') { setPreview(null); setPreviewError(error.message); }
+      }
+    }, 180);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [localShot, provider, isEnriched]);
+
+  if (!isEnriched) return <div className="storyboard-inspector rounded-xl border border-amber-700/60 bg-amber-950/20 p-4"><h4 className="text-sm font-bold text-amber-200">结构化参数缺失</h4><p className="mt-2 text-ui-body text-amber-100/80">旧分镜不会被静默补默认值。初始化后会以“用户编辑”来源保存。</p><button type="button" onClick={() => void onInitialize()} className="mt-3 rounded-lg bg-amber-600 px-3 py-2 text-ui-body font-semibold text-white">初始化结构化参数</button></div>;
+
+  const matched = characters.filter(character => localShot.matchedCharacterIds?.includes(String(character.id)));
+
+  return <div className="storyboard-inspector space-y-3 text-ui-body">
+    {/* Sync status indicators */}
+    <div className="flex items-center justify-between px-1 text-ui-meta">
+      <span className="text-slate-400">数据同步:</span>
+      {isSaving ? (
+        <span className="text-blue-400 flex items-center gap-1"><Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...</span>
+      ) : saveError ? (
+        <span className="text-rose-400">⚠ {saveError}</span>
+      ) : isDirty ? (
+        <span className="text-amber-400">有修改, 等待保存...</span>
+      ) : (
+        <span className="text-emerald-400">✓ 已保存到本机</span>
+      )}
+    </div>
+
+    {/* Video Provider Selector */}
+    <section className="inspector-group">
+      <h4>视频生成服务商</h4>
+      <select value={provider} onChange={e => onProviderChange(e.target.value as 'kling' | 'seedance')} className="w-full rounded border border-slate-750 bg-slate-950 p-1.5 text-xs text-slate-300">
+        <option value="kling">Kling AI (限时 10 秒)</option>
+        <option value="seedance">Seedance (限时 12 秒)</option>
+      </select>
+    </section>
+
+    <section className="inspector-group"><h4>运镜</h4><label>类型<select value={localShot.camera!.move} onChange={event => patchShot({ camera: { ...localShot.camera!, move: event.target.value as Shot['camera']['move'] } })}>{CAMERA_MOVE_OPTIONS.map(value => <option key={value}>{value}</option>)}</select></label><div className="segmented-control">{CAMERA_SPEED_OPTIONS.map(value => <button key={value} type="button" onClick={() => patchShot({ camera: { ...localShot.camera!, speed: value } })} className={localShot.camera!.speed === value ? 'active' : ''}>{value}</button>)}</div><label>补充说明<textarea value={localShot.camera!.note} onChange={event => patchShot({ camera: { ...localShot.camera!, note: event.target.value } })} /></label></section>
+    <section className="inspector-group"><h4>景别与视角</h4><div className="grid grid-cols-2 gap-2"><label>景别<select value={localShot.framing!.shotSize} onChange={event => patchShot({ framing: { ...localShot.framing!, shotSize: event.target.value as Shot['framing']['shotSize'] } })}>{SHOT_SIZE_OPTIONS.map(value => <option key={value}>{value}</option>)}</select></label><label>视角<select value={localShot.framing!.angle} onChange={event => patchShot({ framing: { ...localShot.framing!, angle: event.target.value as Shot['framing']['angle'] } })}>{CAMERA_ANGLE_OPTIONS.map(value => <option key={value}>{value}</option>)}</select></label></div></section>
+    <section className="inspector-group"><h4>人物位置</h4>{matched.length ? matched.map(character => { const characterId = String(character.id); const row = localShot.blocking!.find(item => item.characterId === characterId); if (!row) return <p key={characterId} className="text-amber-300">{character.name} 尚无站位数据</p>; const updateRow = (patch: Partial<typeof row>) => patchShot({ blocking: localShot.blocking!.map(item => item.characterId === characterId ? { ...item, ...patch } : item) }); return <div key={characterId} className="blocking-row"><strong>{character.name}</strong><select value={row.layer} onChange={e => updateRow({ layer: e.target.value as typeof row.layer })}><option value="foreground">前景</option><option value="midground">中景</option><option value="background">背景</option></select><select value={row.position} onChange={e => updateRow({ position: e.target.value as typeof row.position })}><option value="left">左</option><option value="center">中</option><option value="right">右</option></select><select value={row.gaze} onChange={e => updateRow({ gaze: e.target.value as typeof row.gaze })}><option value="camera">看镜头</option><option value="frame_left">画面左</option><option value="frame_right">画面右</option><option value="away">背离</option></select><label className="toggle-label"><input type="checkbox" checked={row.outOfFocus} onChange={e => updateRow({ outOfFocus: e.target.checked })} />虚化</label></div>; }) : <p className="text-slate-400">先为当前分镜绑定角色。</p>}</section>
+    <section className="inspector-group"><h4>时长</h4><div className="flex items-center gap-3"><input className="flex-1" type="range" min="1" max={maxDuration} step="1" value={localShot.durationSec} onChange={event => patchShot({ durationSec: Number(event.target.value) })} /><input className="w-16" type="number" min="1" max={maxDuration} value={localShot.durationSec} onChange={event => { const value = Number(event.target.value); if (value > maxDuration) { setPreviewError(`${provider} 最大时长为 ${maxDuration}s`); return; } patchShot({ durationSec: value }); }} /><span>{maxDuration}s 上限</span></div></section>
+    <section className="inspector-group"><h4>实际发送提示词</h4>{previewError && <p className="text-rose-300">{previewError}</p>}<textarea readOnly value={preview?.prompt || ''} className="min-h-28" />{preview?.deliveryNotes?.map(note => <p key={note} className="text-amber-300">{note}</p>)}</section>
+    <details className="inspector-group"><summary>顶视图机位（CAM/FOV）· P2</summary><p className="mt-2 text-slate-400">Schema 已预留，当前版本不渲染机位图。</p></details>
+  </div>;
+}
+
 export default function App() {
   // DB Records State
   const [records, setRecords] = useState<VideoRecord[]>([]);
@@ -231,6 +384,10 @@ export default function App() {
 
   // 创意向导：步骤 & 全局 Art Direction（Style Guide）
   const [creativeStep, setCreativeStep] = useState<number>(1);
+  const [selectedShotIndex, setSelectedShotIndex] = useState<number>(0);
+  const [videoProvider, setVideoProvider] = useState<'kling' | 'seedance'>('kling');
+  const [workspaceTab, setWorkspaceTab] = useState<'script' | 'image' | 'video'>('image');
+  const [batchSelectedIds, setBatchSelectedIds] = useState<string[]>([]);
   const [creativeDraft, setCreativeDraft] = useState<{ artDirection?: { overlay?: string; analysis?: unknown } }>({});
   const [artDirectionBusy, setArtDirectionBusy] = useState<boolean>(false);
   const [artDirectionMessage, setArtDirectionMessage] = useState<string | null>(null);
@@ -3385,6 +3542,31 @@ export default function App() {
     comfyRuntime.state === 'stopping' ? 'bg-rose-400 animate-ping' :
     comfyRuntime.state === 'error' ? 'bg-rose-500' : 'bg-slate-500';
 
+  const [wizardActionFeedback, setWizardActionFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+
+  const saveStoryboardShot = React.useCallback(async (shotIdx: number, nextShot: Shot) => {
+    if (!generatedScript || !nextShot.id) throw new Error('分镜或项目不存在');
+    const response = await fetch(`/api/generated-scripts/${generatedScript.id}/shots/${nextShot.id}/storyboard`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nextShot) });
+    const result = await response.json();
+    if (!response.ok) { setWizardActionFeedback({ kind: 'error', message: result.error || '结构化参数保存失败' }); throw new Error(result.error || '结构化参数保存失败'); }
+    setGeneratedScript((current: any) => current ? { ...current, newShots: current.newShots.map((item: Shot) => String(item.id) === String(nextShot.id) ? result.shot : item) } : current);
+    setWizardActionFeedback({ kind: 'success', message: '结构化参数已保存' });
+  }, [generatedScript]);
+
+  const initializeStoryboardShot = React.useCallback(async (shot: Shot, characters: Character[]) => {
+    const matchedIds = shot.matchedCharacterIds || [];
+    const enrichedShot = {
+      ...shot,
+      camera: { move: 'static' as const, speed: 'medium' as const, note: '' },
+      framing: { shotSize: 'medium' as const, angle: 'front' as const },
+      blocking: matchedIds.map(characterId => ({ characterId, layer: 'midground' as const, position: 'center' as const, gaze: 'camera' as const, outOfFocus: false })),
+      durationSec: 5,
+      provenance: 'edited' as const
+    };
+    const shotIdx = generatedScript.newShots.findIndex((s: Shot) => s.id === shot.id);
+    await saveStoryboardShot(shotIdx, enrichedShot);
+  }, [saveStoryboardShot, generatedScript]);
+
   return (
     <div className="admin-shell bg-slate-950 text-slate-200 min-h-screen flex flex-col font-sans select-none overflow-x-hidden antialiased">
       {/* Top Header */}
@@ -4065,7 +4247,7 @@ export default function App() {
                         }`}
                       >
                         <span className={`w-16 text-xs font-mono font-medium ${isActive ? "text-blue-400" : "text-slate-500"}`}>
-                          {shot.timestamp.split(" - ")[0]}
+                          {(shot.timestamp || "").split(" - ")[0]}
                         </span>
                         <span className={`w-32 md:w-44 text-xs font-medium truncate pr-2 ${isActive ? "text-slate-100" : "text-slate-300"}`}>
                           {shot.movement}
@@ -4610,34 +4792,19 @@ export default function App() {
                                         <div className="flex flex-col items-center">
                                           <span className="text-[9px] text-slate-500 font-mono mb-0.5">正</span>
                                           <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
-                                            <img
-                                              key={char.views.front}
-                                              src={char.views.front}
-                                              onError={() => console.log('卡片正面图加载失败:', char.views?.front)}
-                                              className="w-full h-full object-cover"
-                                            />
+                                            <SafeImg src={char.views.front} alt="正面图" className="w-full h-full object-cover" />
                                           </div>
                                         </div>
                                         <div className="flex flex-col items-center">
                                           <span className="text-[9px] text-slate-500 font-mono mb-0.5">侧</span>
                                           <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
-                                            <img
-                                              key={char.views.side}
-                                              src={char.views.side}
-                                              onError={() => console.log('卡片侧面图加载失败:', char.views?.side)}
-                                              className="w-full h-full object-cover"
-                                            />
+                                            <SafeImg src={char.views.side} alt="侧面图" className="w-full h-full object-cover" />
                                           </div>
                                         </div>
                                         <div className="flex flex-col items-center">
                                           <span className="text-[9px] text-slate-500 font-mono mb-0.5">背</span>
                                           <div className="w-full aspect-[2/3] rounded overflow-hidden border border-white/5 bg-slate-950">
-                                            <img
-                                              key={char.views.back}
-                                              src={char.views.back}
-                                              onError={() => console.log('卡片背面图加载失败:', char.views?.back)}
-                                              className="w-full h-full object-cover"
-                                            />
+                                            <SafeImg src={char.views.back} alt="背面图" className="w-full h-full object-cover" />
                                           </div>
                                         </div>
                                       </div>
@@ -4672,7 +4839,7 @@ export default function App() {
                         {/* Project Art Direction & Script Summary */}
                         <div className="grid gap-6 lg:grid-cols-2 mb-6">
                           <section className="border border-cyan-800/60 bg-cyan-950/15 p-4 space-y-3 rounded-2xl">
-                            <h3 className="text-xs font-bold text-cyan-200">Project Art Direction</h3>
+                            <h3 className="text-xs font-bold text-cyan-200 font-mono">PROJECT ART DIRECTION</h3>
                             <textarea
                               aria-label="Project Art Direction Style Guide Readonly"
                               value={generatedScript?.artDirection?.overlay || ''}
@@ -4693,478 +4860,368 @@ export default function App() {
                           </section>
                         </div>
 
-                        {/* BOTTOM SECTION: Shots Table */}
-                        <div className="space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3 mb-2 bg-slate-900/30 p-3 rounded-xl border border-slate-800/80">
-                        <div className="flex flex-wrap items-center gap-4">
-                          <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center">
-                            <Film className="w-4 h-4 mr-1.5 text-blue-400" />
-                            全新分镜大纲脚本
-                          </h4>
-                          {imagePlatform === 'comfyui' && (
-                            <div className="flex flex-wrap items-center gap-2 border-l border-slate-800 pl-4">
-                              <select
-                                value={regenerateMode}
-                                onChange={(e) => setRegenerateMode(e.target.value as 'missing' | 'failed' | 'all')}
-                                disabled={isQueueingBatch || hasActiveBatch}
-                                className="bg-slate-950 text-slate-300 border border-slate-800 rounded px-2 py-1 text-[11px] outline-none focus:border-blue-500"
-                              >
-                                <option value="missing">只生成缺失</option>
-                                <option value="failed">只重试失败</option>
-                                <option value="all">全部生成新版本</option>
-                              </select>
-                              <button
-                                type="button"
-                                onClick={handleBatchGenerate}
-                                disabled={!isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch}
-                                title={!isComfyConnected ? '请先启动 ComfyUI' : '批量生成分镜'}
-                                className={`px-3 py-1 rounded text-[11px] font-semibold transition-all ${!isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-900/25 border border-blue-500/20 cursor-pointer'}`}
-                              >
-                                {isQueueingBatch ? '正在入队...' : '一键生成所有分镜'}
-                              </button>
-                              {hasPendingBatchTasks && (
+                        {/* Batch controls block */}
+                        <div className="flex flex-wrap items-center justify-between gap-3 mb-2 bg-slate-900/30 p-3 rounded-xl border border-slate-800/80">
+                          <div className="flex flex-wrap items-center gap-4">
+                            <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center">
+                              <Film className="w-4 h-4 mr-1.5 text-blue-400" />
+                              分镜生成工作台
+                            </h4>
+                            {imagePlatform === 'comfyui' && (
+                              <div className="flex flex-wrap items-center gap-2 border-l border-slate-800/80 pl-4">
+                                <select
+                                  value={regenerateMode}
+                                  onChange={(e) => setRegenerateMode(e.target.value as 'missing' | 'failed' | 'all')}
+                                  disabled={isQueueingBatch || hasActiveBatch}
+                                  className="bg-slate-955 border border-slate-800 text-slate-300 rounded px-2 py-1 text-[11px] outline-none focus:border-blue-500 cursor-pointer"
+                                >
+                                  <option value="missing">只生成缺失</option>
+                                  <option value="failed">只重试失败</option>
+                                  <option value="all">全部生成新版本</option>
+                                </select>
                                 <button
                                   type="button"
-                                  onClick={handleStopBatchGeneration}
-                                  className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded border border-rose-500/20 text-[11px] font-semibold cursor-pointer transition-all"
+                                  onClick={() => handleBatchGenerate()}
+                                  disabled={!isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch}
+                                  title={!isComfyConnected ? '请先启动 ComfyUI' : '批量生成分镜'}
+                                  className={`px-3 py-1 rounded text-[11px] font-semibold transition-all ${
+                                    !isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch
+                                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
+                                      : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-900/25 border border-blue-500/20 cursor-pointer'
+                                  }`}
                                 >
-                                  停止后续生成
+                                  {isQueueingBatch ? '正在入队...' : '一键生成所有分镜'}
                                 </button>
-                              )}
-                              {currentBatchId && batchTasks.length > 0 && !hasActiveBatch && (
-                                <button
-                                  type="button"
-                                  onClick={handleExportBatchReport}
-                                  disabled={isExportingBatchReport}
-                                  className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded border border-emerald-600/30 text-[11px] font-semibold cursor-pointer transition-all"
-                                >
-                                  {isExportingBatchReport ? '正在导出...' : '导出验收报告'}
-                                </button>
-                              )}
-                              {currentBatchId && batchTasks.length > 0 && (
-                                <div className="flex items-center gap-3 bg-slate-950/60 px-3 py-1 rounded border border-slate-800/80 text-[10px] text-slate-400 font-mono">
-                                  <span>已完成: <strong className="text-white">{succeededCount}</strong>/{totalCount}</span>
-                                  <span>排队: <strong className="text-amber-400">{pendingCount}</strong></span>
-                                  {processingTask && <span>生成中: <strong className="text-blue-400">第 {(processingTask.shotIndex ?? 0) + 1} 镜</strong></span>}
-                                  <span>失败: <strong className="text-rose-400">{failedCount}</strong></span>
-                                  <span>跳过: <strong className="text-amber-400">{skippedCount}</strong></span>
-                                </div>
-                              )}
-                              {batchReportPaths.length > 0 && (
-                                <div className="basis-full mt-1 text-[9px] text-emerald-300 font-mono break-all">
-                                  {batchReportPaths.map(reportPath => <div key={reportPath}>{reportPath}</div>)}
-                                </div>
-                              )}
-                            </div>
-                          )}
+                                {hasPendingBatchTasks && (
+                                  <button
+                                    type="button"
+                                    onClick={handleStopBatchGeneration}
+                                    className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded border border-rose-500/20 text-[11px] font-semibold cursor-pointer transition-all"
+                                  >
+                                    停止后续生成
+                                  </button>
+                                )}
+                                {currentBatchId && batchTasks.length > 0 && !hasActiveBatch && (
+                                  <button
+                                    type="button"
+                                    onClick={handleExportBatchReport}
+                                    disabled={isExportingBatchReport}
+                                    className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded border border-emerald-600/30 text-[11px] font-semibold cursor-pointer transition-all"
+                                  >
+                                    {isExportingBatchReport ? '正在导出...' : '导出验收报告'}
+                                  </button>
+                                )}
+                                {currentBatchId && batchTasks.length > 0 && (
+                                  <div className="flex items-center gap-3 bg-slate-950/60 px-3 py-1 rounded border border-slate-800/80 text-[10px] text-slate-400 font-mono">
+                                    <span>已完成: <strong className="text-white">${succeededCount}</strong>/${totalCount}</span>
+                                    <span>排队: <strong className="text-amber-400">${pendingCount}</strong></span>
+                                    {processingTask && <span>生成中: <strong className="text-blue-400">第 ${(processingTask.shotIndex ?? 0) + 1} 镜</strong></span>}
+                                    <span>失败: <strong className="text-rose-400">${failedCount}</strong></span>
+                                    <span>跳过: <strong className="text-amber-400">${skippedCount}</strong></span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => { setShowAnimaticModal(true); fetchBgmList(); }}
+                            className="px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1.5 shadow-md cursor-pointer transition-all hover:shadow-indigo-900/30"
+                          >
+                            <Film className="w-3.5 h-3.5" />
+                            <span>生成动态分镜板</span>
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => { setShowAnimaticModal(true); fetchBgmList(); }}
-                          className="px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1.5 shadow-md cursor-pointer transition-all hover:shadow-indigo-900/30"
-                        >
-                          <Film className="w-3.5 h-3.5" />
-                          <span>生成动态分镜板</span>
-                        </button>
-                      </div>
-                      <div className="w-full bg-slate-950/60 rounded-xl border border-slate-800 overflow-hidden mt-2">
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse">
-                            <thead>
-                              <tr className="bg-slate-900/60 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-800 font-mono">
-                                <th className="p-3" style={{ width: '40px' }}></th>
-                                <th className="p-3" style={{ width: '80px' }}>时间点</th>
-                                <th className="p-3" style={{ width: '120px' }}>运镜设计</th>
-                                <th className="p-3" style={{ width: '150px' }}>美学构图</th>
-                                <th className="p-3" style={{ width: '100px' }}>情绪基调</th>
-                                <th className="p-3">画面情节与分镜描述</th>
-                              </tr>
-                            </thead>
-                            {generatedScript.newShots.map((shot: Shot, idx: number) => {
-                              const isGenerating = generatingShotIndex === idx;
-                              const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
-                              const shotTask = getShotTask(shot.id || '');
-                              const generationModeLabel = shotTask?.status === 'skipped_missing_avatar' ? '缺 Avatar 跳过'
-                                : shotTask?.status === 'failed' ? '生成失败'
-                                  : shotTask?.workflowPresetId === '02_klein_pulid_identity' ? '角色一致性'
-                                    : shotTask ? '普通生成' : null;
-                              const matchedShotCharacters = (generatedScript.newCharacters || []).filter((character: Character) => (shot.matchedCharacterIds || []).includes(String(character.id || '')));
-                              const missingReferenceCharacters = matchedShotCharacters.filter((character: Character) => !(character.avatarImageUrl || character.avatarUrl));
-                              const actionableCharacter = missingReferenceCharacters[0] || matchedShotCharacters[0] || (generatedScript.newCharacters || [])[0];
-                              const hasUsableCharacterReference = matchedShotCharacters.length > 0 && missingReferenceCharacters.length === 0;
-                              return (
-                                <tbody
-                                  key={idx}
-                                  draggable="true"
-                                  onDragStart={(e) => handleRowDragStart(e, idx)}
-                                  onDragOver={(e) => handleRowDragOver(e, idx)}
-                                  onDrop={(e) => handleRowDrop(e, idx)}
-                                  className={`text-xs border-b border-slate-900/60 ${draggedIndex === idx ? 'opacity-40 bg-slate-900/50' : 'hover:bg-slate-900/20'} transition-all`}
-                                >
-                                  <tr className="group">
-                                    {/* Drag Handle Column */}
-                                    <td className="p-3 text-slate-600 align-middle text-center" style={{ width: '40px' }}>
-                                      <GripVertical className="w-3.5 h-3.5 cursor-grab active:cursor-grabbing hover:text-slate-350 transition-colors inline-block" />
-                                    </td>
 
-                                    {/* 时间点 */}
-                                    <td className="p-3 font-bold text-blue-400 font-mono align-middle" style={{ width: '80px' }}>
-                                      {shot.timestamp.split(" - ")[0]}
-                                      {generationModeLabel && <div className="mt-1 text-[8px] font-normal text-slate-400 whitespace-normal">{generationModeLabel}</div>}
-                                    </td>
+                        {/* Three-column layout */}
+                        <div className="wizard-shot-grid border border-slate-800 rounded-2xl bg-slate-950/40 overflow-hidden mb-4">
+                          {/* Column 1: Shot list sidebar */}
+                          <div className="wizard-shot-column border-r border-slate-800/80 bg-slate-900/40 p-3 overflow-y-auto custom-scrollbar flex flex-col gap-2">
+                            <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/60 pb-2 mb-1">
+                              <span className="font-semibold text-slate-350">分镜列表</span>
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="checkbox"
+                                  checked={batchSelectedIds.length === generatedScript.newShots.length && generatedScript.newShots.length > 0}
+                                  onChange={e => {
+                                    if (e.target.checked) {
+                                      setBatchSelectedIds(generatedScript.newShots.map((s) => String(s.id)));
+                                    } else {
+                                      setBatchSelectedIds([]);
+                                    }
+                                  }}
+                                  className="rounded border-slate-750 bg-slate-950 text-blue-600"
+                                />
+                                <span className="text-[10px] text-slate-500">全选</span>
+                              </div>
+                            </div>
+                            <div className="space-y-2 flex-1">
+                              {generatedScript.newShots.map((shot: Shot, idx: number) => {
+                                const isSelected = selectedShotIndex === idx;
+                                const isChecked = batchSelectedIds.includes(String(shot.id));
+                                const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
+                                return (
+                                  <div
+                                    key={idx}
+                                    onClick={() => setSelectedShotIndex(idx)}
+                                    className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col gap-1.5 relative ${
+                                      isSelected
+                                        ? 'bg-blue-600/10 border-blue-500/50 shadow-md'
+                                        : 'bg-slate-955 border-slate-850 hover:bg-slate-900/30 hover:border-slate-800'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-[10px] font-mono text-slate-500">#{idx + 1} ({(shot.timestamp || "").split(" - ")[0]})</span>
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onClick={e => e.stopPropagation()}
+                                        onChange={e => {
+                                          const shotId = String(shot.id);
+                                          if (e.target.checked) {
+                                            setBatchSelectedIds(prev => [...prev, shotId]);
+                                          } else {
+                                            setBatchSelectedIds(prev => prev.filter(id => id !== shotId));
+                                          }
+                                        }}
+                                        className="rounded border-slate-750 bg-slate-955 cursor-pointer text-blue-600"
+                                      />
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <div className="w-14 aspect-video rounded overflow-hidden bg-slate-900 border border-white/5 shrink-0 relative">
+                                        {shotImg ? (
+                                          <img src={shotImg} alt="" className="w-full h-full object-cover" />
+                                        ) : (
+                                          <span className="text-[8px] text-slate-700 absolute inset-0 flex items-center justify-center font-mono">[无图]</span>
+                                        )}
+                                      </div>
+                                      <div className="text-[11px] text-slate-400 line-clamp-2 leading-tight flex-1 font-normal">
+                                        {shot.description}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
 
-                                    {/* 运镜设计 (editable) */}
-                                    <td className="p-3 text-slate-200 font-semibold align-middle cursor-text" style={{ width: '120px' }}>
-                                      {editingCell && editingCell.idx === idx && editingCell.field === 'movement' ? (
-                                        <input
-                                          type="text"
-                                          value={editValue}
-                                          onChange={(e) => setEditValue(e.target.value)}
-                                          onBlur={() => handleSaveCell(idx, 'movement')}
-                                          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCell(idx, 'movement'); }}
-                                          className="w-full bg-slate-900 border border-blue-500/80 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
-                                          autoFocus
+                          {/* Column 2: Center Editor */}
+                          <div className="wizard-shot-column min-w-0 bg-slate-955/15 flex flex-col">
+                            {/* Editor Tabs */}
+                            <div className="maintabs bg-slate-900/40 border-b border-slate-800/80">
+                              <button type="button" className={workspaceTab === 'script' ? 'on' : ''} onClick={() => setWorkspaceTab('script')}>剧本描述</button>
+                              <button type="button" className={workspaceTab === 'image' ? 'on' : ''} onClick={() => setWorkspaceTab('image')}>分镜画面</button>
+                              <button type="button" className={workspaceTab === 'video' ? 'on' : ''} onClick={() => setWorkspaceTab('video')}>动态视频</button>
+                            </div>
+
+                            {/* Tab Content */}
+                            {/* 居中用子元素 m-auto 而非 justify-center:后者在内容溢出时会裁掉顶部且滚轮失效 */}
+                            <div className="flex-1 p-6 overflow-y-auto custom-scrollbar flex flex-col min-h-[480px]">
+                              <div className="m-auto w-full">
+                              {(() => {
+                                const shot = generatedScript.newShots[selectedShotIndex];
+                                if (!shot) return <p className="text-slate-500 text-xs font-normal">请选择分镜</p>;
+                                const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
+                                const isGenerating = generatingShotIndex === selectedShotIndex;
+                                const shotTask = getShotTask(shot.id || '');
+                                const taskStatus = shotTask?.status;
+
+                                if (workspaceTab === 'script') {
+                                  return (
+                                    <div className="w-full h-full flex flex-col gap-4">
+                                      <div className="flex flex-col gap-1.5">
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">分镜画面情节与剧本描述</span>
+                                        <textarea
+                                          value={shot.description || ''}
+                                          onChange={e => {
+                                            const updatedShots = [...generatedScript.newShots];
+                                            updatedShots[selectedShotIndex] = { ...shot, description: e.target.value };
+                                            setGeneratedScript({ ...generatedScript, newShots: updatedShots });
+                                          }}
+                                          onBlur={() => {
+                                            void saveStoryboardShot(selectedShotIndex, shot);
+                                          }}
+                                          className="w-full min-h-36 bg-slate-950 border border-slate-850 rounded-xl p-3 text-xs text-slate-200 focus:border-blue-500 outline-none resize-y leading-relaxed font-normal"
+                                          placeholder="编辑分镜剧本描述..."
                                         />
-                                      ) : (
-                                        <div
-                                          onClick={() => { setEditingCell({ idx, field: 'movement' }); setEditValue(shot.movement); }}
-                                          className="hover:bg-slate-800/50 rounded px-1 -mx-1 transition-colors min-h-[1.5rem] flex items-center"
-                                        >
-                                          {shot.movement || <span className="text-slate-650 italic">双击编辑</span>}
-                                        </div>
-                                      )}
-                                    </td>
+                                      </div>
 
-                                    {/* 美学构图 (editable) */}
-                                    <td className="p-3 text-slate-400 font-mono align-middle cursor-text" style={{ width: '150px' }}>
-                                      {editingCell && editingCell.idx === idx && editingCell.field === 'composition' ? (
-                                        <input
-                                          type="text"
-                                          value={editValue}
-                                          onChange={(e) => setEditValue(e.target.value)}
-                                          onBlur={() => handleSaveCell(idx, 'composition')}
-                                          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCell(idx, 'composition'); }}
-                                          className="w-full bg-slate-900 border border-blue-500/80 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
-                                          autoFocus
-                                        />
-                                      ) : (
-                                        <div
-                                          onClick={() => { setEditingCell({ idx, field: 'composition' }); setEditValue(shot.composition); }}
-                                          className="hover:bg-slate-800/50 rounded px-1 -mx-1 transition-colors min-h-[1.5rem] flex items-center"
-                                        >
-                                          {shot.composition || <span className="text-slate-650 italic">双击编辑</span>}
-                                        </div>
-                                      )}
-                                    </td>
-
-                                    {/* 情绪基调 (editable) */}
-                                    <td className="p-3 text-emerald-400 align-middle cursor-text" style={{ width: '100px' }}>
-                                      {editingCell && editingCell.idx === idx && editingCell.field === 'emotion' ? (
-                                        <input
-                                          type="text"
-                                          value={editValue}
-                                          onChange={(e) => setEditValue(e.target.value)}
-                                          onBlur={() => handleSaveCell(idx, 'emotion')}
-                                          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCell(idx, 'emotion'); }}
-                                          className="w-full bg-slate-900 border border-blue-500/80 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
-                                          autoFocus
-                                        />
-                                      ) : (
-                                        <div
-                                          onClick={() => { setEditingCell({ idx, field: 'emotion' }); setEditValue(shot.emotion); }}
-                                          className="hover:bg-slate-800/50 rounded px-1 -mx-1 transition-colors min-h-[1.5rem] flex items-center"
-                                        >
-                                          {shot.emotion || <span className="text-slate-650 italic">双击编辑</span>}
-                                        </div>
-                                      )}
-                                    </td>
-
-                                    {/* 画面情节与分镜描述 (editable textarea) */}
-                                    <td className="p-3 text-slate-300 font-sans leading-relaxed align-middle cursor-text">
-                                      <div className="flex items-start justify-between gap-4">
-                                        <div className="flex-1">
-                                          {editingCell && editingCell.idx === idx && editingCell.field === 'description' ? (
-                                            <textarea
-                                              value={editValue}
-                                              onChange={(e) => setEditValue(e.target.value)}
-                                              onBlur={() => handleSaveCell(idx, 'description')}
-                                              className="w-full bg-slate-900 border border-blue-500/80 rounded px-1.5 py-1 text-xs text-white focus:outline-none min-h-[60px]"
-                                              autoFocus
-                                            />
-                                          ) : (
-                                            <div
-                                              onClick={() => { setEditingCell({ idx, field: 'description' }); setEditValue(shot.description); }}
-                                              className="hover:bg-slate-800/50 rounded px-1.5 py-1 -mx-1.5 transition-colors min-h-[2rem]"
-                                            >
-                                              {shot.description || <span className="text-slate-650 italic">双击编辑描述词...</span>}
-                                            </div>
-                                          )}
-                                          <CameraDerivePanel
-                                            projectId={String(generatedScript.id)}
-                                            shots={generatedScript.newShots}
-                                            shotIndex={idx}
-                                            onShotsChange={(nextShots) => {
-                                              const updatedScript = { ...generatedScript, newShots: nextShots };
-                                              setGeneratedScript(updatedScript);
-                                              setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
+                                      <div className="grid grid-cols-2 gap-4">
+                                        <div className="flex flex-col gap-1.5">
+                                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">美学构图</span>
+                                          <input
+                                            type="text"
+                                            value={shot.composition || ''}
+                                            onChange={e => {
+                                              const updatedShots = [...generatedScript.newShots];
+                                              updatedShots[selectedShotIndex] = { ...shot, composition: e.target.value };
+                                              setGeneratedScript({ ...generatedScript, newShots: updatedShots });
                                             }}
+                                            onBlur={() => void saveStoryboardShot(selectedShotIndex, shot)}
+                                            className="bg-slate-950 border border-slate-850 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-blue-500 outline-none font-normal"
                                           />
-                                          <div className="mt-2 flex flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
-                                            <span className="text-[10px] font-semibold text-slate-500">本镜角色</span>
-                                            {(generatedScript.newCharacters || []).map((character: Character) => {
-                                              const characterId = String(character.id || '');
-                                              const selected = (shot.matchedCharacterIds || []).includes(characterId);
-                                              return (
-                                                <button
-                                                  key={characterId || character.name}
-                                                  type="button"
-                                                  onClick={() => handleBindShotCharacter(idx)}
-                                                  disabled={!characterId}
-                                                  aria-pressed={selected}
-                                                  className={`max-w-[10rem] overflow-hidden text-ellipsis whitespace-nowrap rounded border px-2 py-1 text-[10px] font-semibold transition-colors ${selected
-                                                    ? 'border-blue-400/70 bg-blue-500/20 text-blue-100'
-                                                    : 'border-slate-700 bg-slate-900/70 text-slate-400 hover:border-slate-500 hover:text-slate-200'
-                                                  }`}
-                                                  title={`${selected ? '移除' : '绑定'}角色：${character.name}`}
-                                                >
-                                                  {selected && <Check className="mr-1 inline h-3 w-3" />}
-                                                  {character.name}
-                                                </button>
-                                              );
-                                            })}
-                                            {((shot.matchedCharacterIds || []).length === 0 || missingReferenceCharacters.length > 0) && (
-                                              <div className="basis-full mt-1 flex flex-wrap items-center gap-1.5 rounded border border-red-500/50 bg-red-950/50 p-2">
-                                                <span className="text-[10px] font-bold text-red-300">
-                                                  {(shot.matchedCharacterIds || []).length === 0 ? '未绑定角色参考图' : `角色 ${missingReferenceCharacters.map((character: Character) => character.name).join('、')} 缺少 Avatar`}
-                                                </span>
-                                                <button type="button" onClick={() => handleBindShotCharacter(idx)} className="rounded bg-slate-800 px-2 py-1 text-[10px] text-white hover:bg-slate-700">绑定本镜角色</button>
-                                                <button type="button" disabled={!actionableCharacter} onClick={() => actionableCharacter && handleGenerateCharacterAvatar(actionableCharacter)} className="rounded bg-indigo-700 px-2 py-1 text-[10px] text-white hover:bg-indigo-600 disabled:opacity-40">生成角色 Avatar</button>
-                                                <button type="button" disabled={!actionableCharacter} onClick={() => actionableCharacter && handleUploadCharacterAvatar(actionableCharacter)} className="rounded bg-violet-700 px-2 py-1 text-[10px] text-white hover:bg-violet-600 disabled:opacity-40">上传 Avatar</button>
-                                                <button type="button" disabled={!hasUsableCharacterReference || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'} onClick={() => handleGenerateShotImage(shot, idx)} className="rounded bg-blue-600 px-2 py-1 text-[10px] text-white hover:bg-blue-500 disabled:opacity-40">用角色参考图重新生成本镜</button>
-                                              </div>
-                                            )}
-                                            {hasUsableCharacterReference && (
-                                              <span className="basis-full rounded border border-emerald-500/50 bg-emerald-950/50 px-2 py-1 text-[10px] font-semibold text-emerald-300">将使用角色参考图生成</span>
-                                            )}
-                                          </div>
                                         </div>
-
-                                        <div className="relative min-w-[80px] min-h-[32px] flex justify-end">
-                                          {!shotImg && !isGenerating && (
-                                            <div className="flex gap-1.5 justify-end w-full">
-                                              {imagePlatform === 'comfyui' && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleOpenComfyParams(shot.id || '', 'main', 'shot', idx, undefined, shot.description || '')}
-                                                  disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
-                                                  className="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-850 disabled:text-slate-600 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-colors border border-slate-700 font-medium"
-                                                  title="调整参数"
-                                                >
-                                                  <Sliders className="w-3.5 h-3.5" />
-                                                </button>
-                                              )}
-                                              <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                  e.preventDefault();
-                                                  handleGenerateShotImage(shot, idx);
-                                                }}
-                                                disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
-                                                className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-850 disabled:text-slate-600 text-white rounded text-[10px] flex items-center gap-1 cursor-pointer shrink-0 transition-colors font-medium shadow-md hover:shadow-blue-900/30"
-                                              >
-                                                {isGenerating ? (
-                                                  <>
-                                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                                    <span>生成中...</span>
-                                                  </>
-                                                ) : (
-                                                  <>
-                                                    <Sparkles className="w-3 h-3" />
-                                                    <span>生成图片</span>
-                                                  </>
-                                                )}
-                                              </button>
-                                            </div>
-                                          )}
-                                          {renderComfyTaskOverlay(getShotTask(shot.id || ''))}
+                                        <div className="flex flex-col gap-1.5">
+                                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">情绪基调</span>
+                                          <input
+                                            type="text"
+                                            value={shot.tone || ''}
+                                            onChange={e => {
+                                              const updatedShots = [...generatedScript.newShots];
+                                              updatedShots[selectedShotIndex] = { ...shot, tone: e.target.value };
+                                              setGeneratedScript({ ...generatedScript, newShots: updatedShots });
+                                            }}
+                                            onBlur={() => void saveStoryboardShot(selectedShotIndex, shot)}
+                                            className="bg-slate-950 border border-slate-850 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-blue-500 outline-none font-normal"
+                                          />
                                         </div>
                                       </div>
-                                    </td>
-                                  </tr>
+                                    </div>
+                                  );
+                                }
 
-                                  {/* Image Display Row with style configuration */}
-                                  {(shotImg || isGenerating) && (
-                                    <tr>
-                                      <td colSpan={6} className="bg-slate-950/40 p-4 border-t border-slate-900">
-                                        <div className="flex flex-col items-center gap-3">
-                                          {isGenerating ? (
-                                            <div className="w-[320px] aspect-video bg-slate-900/60 animate-pulse rounded-lg border border-slate-850 flex items-center justify-center text-slate-500 text-[10px] gap-2">
-                                              <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
-                                              正在绘制分镜画面...
-                                            </div>
-                                          ) : (
-                                            <>
-                                              {shot.videoUrl ? (
-                                                <div className="relative group/vid max-w-[480px]">
-                                                  <video
-                                                    src={shot.videoUrl}
-                                                    controls
-                                                    loop
-                                                    muted
-                                                    className="rounded-lg border border-slate-800 shadow-lg hover:border-blue-500/50 cursor-pointer transition-all max-h-[270px] object-cover"
-                                                    onClick={() => setActiveLightboxUrl(shot.videoUrl || null)}
-                                                  />
-                                                </div>
-                                              ) : (
-                                                <div className="relative group max-w-[480px]">
-                                                  <img
-                                                    key={shotImg}
-                                                    src={shotImg}
-                                                    alt={`分镜 ${idx + 1}`}
-                                                    className="rounded-lg border border-slate-800 shadow-lg cursor-pointer hover:border-blue-500/40 transition-all max-h-[270px] object-cover"
-                                                    onClick={() => setActiveLightboxUrl(shotImg)}
-                                                  />
-                                                  {renderComfyTaskOverlay(getShotTask(shot.id || ''))}
-                                                </div>
-                                              )}
+                                if (workspaceTab === 'image') {
+                                  return (
+                                    <div className="w-full flex flex-col items-center justify-center gap-5">
+                                      <div className="w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 flex items-center justify-center relative group shadow-2xl">
+                                        {shotImg ? (
+                                          <img src={shotImg} alt={`分镜 ${selectedShotIndex + 1}`} className="w-full h-full object-cover" />
+                                        ) : (
+                                          <div className="text-center text-slate-500 text-xs flex flex-col items-center gap-2 p-6 font-normal">
+                                            <span className="text-2xl">🖼️</span>
+                                            <span>尚未生成静态画面图片</span>
+                                          </div>
+                                        )}
 
-                                              {/* Style selector & Regenerate bar */}
-                                              <div className="flex items-center gap-4 bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-800/80 shadow-md">
-                                                <div className="flex items-center gap-2">
-                                                  <span className="text-[10px] text-slate-400 font-medium">画面风格:</span>
-                                                  <select
-                                                    value={shot.style || "写实"}
-                                                    onChange={async (e) => {
-                                                      const selectedStyle = e.target.value;
-                                                      // Save style to local state
-                                                      const updatedShots = [...generatedScript.newShots];
-                                                      updatedShots[idx] = { ...updatedShots[idx], style: selectedStyle };
-                                                      const updatedScript = { ...generatedScript, newShots: updatedShots };
-                                                      setGeneratedScript(updatedScript);
-                                                      setGeneratedScripts(prev => prev.map(s => s.id === generatedScript.id ? updatedScript : s));
+                                        {isGenerating && (
+                                          <div className="absolute inset-0 bg-slate-955/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-10">
+                                            <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+                                            <span className="text-xs text-slate-350">正在生成静态画面...</span>
+                                          </div>
+                                        )}
 
-                                                      // Persist to database
-                                                      await fetch(`/api/generated-scripts/${generatedScript.id}`, {
-                                                        method: "PUT",
-                                                        headers: { "Content-Type": "application/json" },
-                                                        body: JSON.stringify({ newShots: updatedShots })
-                                                      });
-                                                    }}
-                                                    className="bg-slate-950 border border-slate-800 text-slate-200 text-[10px] rounded px-2.5 py-1 focus:outline-none focus:border-blue-500/50 cursor-pointer font-medium"
-                                                  >
-                                                    <option value="写实">写实风格</option>
-                                                    <option value="动漫">动漫风格</option>
-                                                    <option value="赛博朋克">赛博朋克风格</option>
-                                                    <option value="油画">油画风格</option>
-                                                  </select>
-                                                </div>
-                                                <div className="w-[1px] h-3.5 bg-slate-800"></div>
-                                                {imagePlatform === 'comfyui' && (
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => handleOpenComfyParams(shot.id || '', 'main', 'shot', idx, undefined, shot.description || '')}
-                                                    disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
-                                                    className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-850 disabled:text-slate-600 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"
-                                                    title="调整参数"
-                                                  >
-                                                    <Sliders className="w-3.5 h-3.5 text-blue-400" />
-                                                    <span>调整参数</span>
-                                                  </button>
-                                                )}
-                                                {imagePlatform === 'comfyui' && shotImg && (
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => handleUpscaleImage(shot.id || '', 'main', 'shot', shotImg, idx)}
-                                                    disabled={getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
-                                                    className="px-3 py-1 bg-emerald-950/60 hover:bg-emerald-900 disabled:opacity-50 text-emerald-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-emerald-800/60 font-medium"
-                                                    title="使用 ESRGAN 超分放大当前分镜"
-                                                  >
-                                                    <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                                                    <span>超分放大</span>
-                                                  </button>
-                                                )}
-                                                {(() => {
-                                                  const lastSucceeded = getLatestSucceededTask(shot.id || '', 'main');
-                                                  if (imagePlatform !== 'comfyui') return null;
-                                                  return (
-                                                    <>
-                                                    {lastSucceeded && (
-                                                      <span className="text-[9px] text-slate-500">
-                                                        此图片由 {comfyTaskPresetLabel(lastSucceeded)} 生成
-                                                      </span>
-                                                    )}
-                                                    {lastSucceeded && isLegacyComfyTask(lastSucceeded) && (
-                                                      <button
-                                                        type="button"
-                                                        onClick={() => handleGenerateShotImage(shot, idx)}
-                                                        className="px-2 py-1 rounded border border-blue-900/60 bg-blue-950/30 text-[9px] text-blue-300 hover:bg-blue-900/40"
-                                                      >
-                                                        用当前预设重新生成
-                                                      </button>
-                                                    )}
-                                                    <button
-                                                      type="button"
-                                                      onClick={() => handlePrepareShotAdvanced(shot, idx, lastSucceeded)}
-                                                      disabled={!!preparingAdvancedSlots[shot.id || '']}
-                                                      className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"
-                                                      title={lastSucceeded?.hasUiWorkflow ? "导出当前工作流并在 ComfyUI 中高级调整" : "直接打开本地 ComfyUI"}
-                                                    >
-                                                      {preparingAdvancedSlots[shot.id || '']
-                                                        ? <Loader2 className="w-3.5 h-3.5 text-purple-400 animate-spin" />
-                                                        : <ExternalLink className="w-3.5 h-3.5 text-purple-400" />}
-                                                      <span>{preparingAdvancedSlots[shot.id || ''] ? '准备工作流…' : '在 ComfyUI 中高级调整'}</span>
-                                                    </button>
-                                                    {renderComfyImportButton(lastSucceeded)}
-                                                    </>
-                                                  );
-                                                })()}
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleGenerateShotImage(shot, idx)}
-                                                  disabled={generatingShotIndex !== null || getShotTask(shot.id || '')?.status === 'pending' || getShotTask(shot.id || '')?.status === 'processing'}
-                                                  className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-850 disabled:text-slate-600 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"
-                                                >
-                                                  <Sparkles className="w-3 h-3 text-yellow-400" />
-                                                  <span>重新生成</span>
-                                                </button>
+                                        {taskStatus === 'pending' || taskStatus === 'processing' ? (
+                                          <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-10">
+                                            <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+                                            <span className="text-xs text-slate-355">排队/生成中...</span>
+                                          </div>
+                                        ) : null}
+                                      </div>
 
-                                                <div className="w-[1px] h-3.5 bg-slate-800"></div>
+                                      <div className="flex gap-3">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleGenerateShotImage(shot, selectedShotIndex)}
+                                          disabled={generatingShotIndex !== null || taskStatus === 'pending' || taskStatus === 'processing'}
+                                          className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-850 disabled:text-slate-650 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-lg shadow-blue-900/25 transition-all cursor-pointer"
+                                        >
+                                          <Sparkles className="w-4 h-4 text-blue-200" />
+                                          <span>{shotImg ? '重新生成静态画面' : '生成静态画面'}</span>
+                                        </button>
 
-                                                {/* Kling Image-to-Video Button */}
-                                                {videoProgress[idx] !== undefined ? (
-                                                  <div className="flex items-center gap-1.5 text-[10px] text-indigo-400 font-mono font-semibold">
-                                                    <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
-                                                    <span>正在生成动画片段 ({videoProgress[idx]}%)...</span>
-                                                  </div>
-                                                ) : shot.videoStatus === 'submitted' || shot.videoStatus === 'processing' ? (
-                                                  <div className="flex items-center gap-1.5 text-[10px] text-indigo-400 font-mono font-semibold">
-                                                    <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
-                                                    <span>正在排队生成...</span>
-                                                  </div>
-                                                ) : (
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => handleGenerateVideoKling(shot, idx)}
-                                                    className="px-3 py-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-indigo-500/40 hover:border-indigo-400 font-medium active:scale-95 shadow-md shadow-indigo-950/20"
-                                                  >
-                                                    <Film className="w-3 h-3 text-indigo-200" />
-                                                    <span>{shot.videoUrl ? "重新生成动画片段" : "生成动画片段"}</span>
-                                                  </button>
-                                                )}
-                                              </div>
-                                            </>
-                                          )}
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  )}
-                                </tbody>
+                                        {shotImg && imagePlatform === 'comfyui' && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenComfyParams(shot.id || '', 'main', 'shot', selectedShotIndex, undefined, shot.description)}
+                                            className="px-5 py-2 bg-slate-850 hover:bg-slate-800 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-slate-700/60 transition-all cursor-pointer"
+                                          >
+                                            <ExternalLink className="w-4 h-4 text-slate-450" />
+                                            <span>ComfyUI 高级调整</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                if (workspaceTab === 'video') {
+                                  const videoProgressPercent = videoProgress[selectedShotIndex];
+                                  const isKlingGenerating = videoProgressPercent !== undefined || shot.videoStatus === 'submitted' || shot.videoStatus === 'processing';
+                                  return (
+                                    <div className="w-full flex flex-col items-center justify-center gap-5">
+                                      <div className="w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-slate-800 bg-slate-905 flex items-center justify-center relative group shadow-2xl">
+                                        {shot.videoUrl ? (
+                                          <video src={shot.videoUrl} controls autoPlay loop muted className="w-full h-full object-cover animate-fade-in" />
+                                        ) : (
+                                          <div className="text-center text-slate-500 text-xs flex flex-col items-center gap-2 p-6 font-normal">
+                                            <span className="text-2xl">🎬</span>
+                                            <span>尚未生成动态视频片段</span>
+                                          </div>
+                                        )}
+
+                                        {isKlingGenerating && (
+                                          <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-10">
+                                            <Loader2 className="w-8 h-8 text-indigo-505 animate-spin" />
+                                            <span className="text-xs text-slate-350">
+                                              {videoProgressPercent !== undefined ? `正在生成动画片段 (${videoProgressPercent}%)...` : '正在排队生成动画...'}
+                                            </span>
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => handleGenerateVideoKling(shot, selectedShotIndex)}
+                                        disabled={!shotImg || isKlingGenerating}
+                                        className="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-950/20 transition-all cursor-pointer active:scale-95"
+                                      >
+                                        <Film className="w-4 h-4 text-indigo-200" />
+                                        <span>{shot.videoUrl ? '重新生成视频动画' : '生成视频动画片段'}</span>
+                                      </button>
+                                    </div>
+                                  );
+                                }
+                              })()}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Column 3: Structured Inspector */}
+                          <div className="wizard-shot-column border-l border-slate-800 bg-slate-900/40 p-4 overflow-y-auto custom-scrollbar w-[280px] shrink-0">
+                            <div className="text-xs font-bold text-slate-450 border-b border-slate-800/60 pb-2 mb-3 font-mono">
+                              检查器 / INSPECTOR
+                            </div>
+                            {(() => {
+                              const cameraShot = generatedScript.newShots[selectedShotIndex];
+                              if (!cameraShot) return null;
+                              return (
+                                <CameraDerivePanel
+                                  projectId={String(generatedScript.id)}
+                                  shots={generatedScript.newShots}
+                                  shotIndex={selectedShotIndex}
+                                  onShotsChange={(nextShots) => {
+                                    const updatedScript = { ...generatedScript, newShots: nextShots };
+                                    setGeneratedScript(updatedScript);
+                                    setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
+                                  }}
+                                />
                               );
-                            })}
-                          </table>
+                            })()}
+                            {(() => {
+                              const shot = generatedScript.newShots[selectedShotIndex];
+                              if (!shot) return <p className="text-slate-500 text-xs font-normal">无选中的分镜</p>;
+                              return (
+                                <StoryboardInspector
+                                  shot={shot}
+                                  characters={generatedScript.newCharacters || []}
+                                  provider={videoProvider}
+                                  onProviderChange={setVideoProvider}
+                                  onChange={async (nextShot) => {
+                                    const updatedShots = [...generatedScript.newShots];
+                                    updatedShots[selectedShotIndex] = nextShot;
+                                    const updatedScript = { ...generatedScript, newShots: updatedShots };
+                                    setGeneratedScript(updatedScript);
+                                    setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
+                                    await saveStoryboardShot(selectedShotIndex, nextShot);
+                                  }}
+                                  onInitialize={() => initializeStoryboardShot(shot, generatedScript.newCharacters || [])}
+                                />
+                              );
+                            })()}
+                          </div>
                         </div>
-                      </div>
-                    </div>
+
+                        {/* Navigation Footer */}
                         <div className="flex justify-between pt-2">
                           <button
                             type="button"
@@ -5182,163 +5239,214 @@ export default function App() {
                           </button>
                         </div>
                       </>
-                    )}
+                    )}                    {/* STEP 4: EXPORT CONSOLE */}
+                    {creativeStep === 4 && (() => {
+                      const totalShots = generatedScript.newShots.length;
+                      const completedShots = generatedScript.newShots.filter((s) => shotImages[s.timestamp] || s.generatedImageUrl || s.imageUrl).length;
+                      const failedShots = generatedScript.newShots.filter((s) => getShotTask(s.id || '')?.status === 'failed').length;
+                      const pendingShots = totalShots - completedShots - failedShots;
+                      const preflightPassed = completedShots === totalShots;
 
-                    {/* STEP 4: EXPORT CONSOLE */}
-                    {creativeStep === 4 && (
-                      <div className="space-y-6">
-                        <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-                          {/* Left Column: Storyboard Preview & Status Indicator */}
-                          <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/85 space-y-4">
-                            <div className="flex justify-between items-center">
-                              <h4 className="text-xs font-bold text-white uppercase tracking-wider">分镜故事板预览</h4>
-                              <span className="text-[10px] text-slate-400 font-mono">全部 {generatedScript.newShots.length} 个分镜</span>
+                      return (
+                        <div className="space-y-6">
+                          <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+                            {/* Left Column: Storyboard Preview & Status Indicator */}
+                            <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/85 space-y-4">
+                              <div className="flex justify-between items-center">
+                                <h4 className="text-xs font-bold text-white uppercase tracking-wider">分镜故事板预览</h4>
+                                <span className="text-[10px] text-slate-400 font-mono">全部 {totalShots} 个分镜</span>
+                              </div>
+                              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 max-h-[55vh] overflow-y-auto pr-1">
+                                {generatedScript.newShots.map((shot, idx) => {
+                                  const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
+                                  return (
+                                    <div key={idx} className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-850 flex flex-col gap-2">
+                                      <div className="w-full aspect-video rounded overflow-hidden border border-white/5 bg-slate-900 relative">
+                                        {shotImg ? (
+                                          <img src={shotImg} alt={`分镜 &lcub;idx+1&rcub;`} className="w-full h-full object-cover" />
+                                        ) : (
+                                          <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 bg-slate-955/60 font-mono">
+                                            [未生成图片]
+                                          </div>
+                                        )}
+                                        <span className="absolute top-1 left-1 bg-black/75 px-1.5 py-0.5 rounded text-[8px] font-mono text-slate-400">#${idx+1}</span>
+                                      </div>
+                                      <div className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed font-normal">
+                                        {shot.description}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
-                            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 max-h-[55vh] overflow-y-auto pr-1">
-                              {generatedScript.newShots.map((shot: Shot, idx: number) => {
-                                const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
-                                return (
-                                  <div key={idx} className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-850 flex flex-col gap-2">
-                                    <div className="w-full aspect-video rounded overflow-hidden border border-white/5 bg-slate-900 relative">
-                                      {shotImg ? (
-                                        <img src={shotImg} alt={`分镜 ${idx+1}`} className="w-full h-full object-cover" />
-                                      ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 bg-slate-950/60 font-mono">
-                                          [未生成图片]
-                                        </div>
-                                      )}
-                                      <span className="absolute top-1 left-1 bg-black/75 px-1.5 py-0.5 rounded text-[8px] font-mono text-slate-400">#{idx+1}</span>
-                                    </div>
-                                    <div className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">
-                                      {shot.description}
-                                    </div>
+
+                            {/* Right Column: Controls & Metrics */}
+                            <div className="space-y-4 flex flex-col">
+                              {/* Status Metrics */}
+                              <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/80 space-y-3">
+                                <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">幕后渲染进度与状态</h5>
+                                <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
+                                  <div className="bg-slate-955 p-2 border border-slate-850 rounded-lg">
+                                    <div className="text-white font-bold text-lg">{totalShots}</div>
+                                    <div className="text-[9px] text-slate-500 font-sans">总分镜</div>
                                   </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          {/* Right Column: Controls & Metrics */}
-                          <div className="space-y-4 flex flex-col">
-                            {/* Status Metrics */}
-                            {(() => {
-                              const totalShots = generatedScript.newShots.length;
-                              const completedShots = generatedScript.newShots.filter((s: Shot) => shotImages[s.timestamp] || s.generatedImageUrl || s.imageUrl).length;
-                              const failedShots = generatedScript.newShots.filter((s: Shot) => getShotTask(s.id || '')?.status === 'failed').length;
-                              const pendingShots = totalShots - completedShots - failedShots;
-                              return (
-                                <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/80 space-y-3">
-                                  <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">生成进度与数量统计</h5>
-                                  <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
-                                    <div className="bg-slate-950 p-2 border border-slate-850 rounded-lg">
-                                      <div className="text-white font-bold text-lg">{totalShots}</div>
-                                      <div className="text-[9px] text-slate-500 font-sans">总分镜</div>
+                                  <div className="bg-slate-955 p-2 border border-slate-850 rounded-lg">
+                                    <div className={`font-bold text-lg ${preflightPassed ? 'text-emerald-450' : 'text-rose-455'}`}>
+                                      {completedShots}
                                     </div>
-                                    <div className="bg-slate-950 p-2 border border-slate-850 rounded-lg">
-                                      <div className="text-emerald-400 font-bold text-lg">{completedShots}</div>
-                                      <div className="text-[9px] text-slate-500 font-sans">已完成</div>
-                                    </div>
-                                    <div className="bg-slate-950 p-2 border border-slate-850 rounded-lg col-span-2">
-                                      <div className="text-amber-500 font-bold text-xs">排队/缺失: {pendingShots} | 失败: {failedShots}</div>
-                                    </div>
+                                    <div className="text-[9px] text-slate-500 font-sans">已完成</div>
+                                  </div>
+                                  <div className="bg-slate-955 p-2 border border-slate-850 rounded-lg col-span-2">
+                                    <div className="text-amber-500 font-bold text-xs">排队/缺失: ${pendingShots} | 失败: ${failedShots}</div>
                                   </div>
                                 </div>
-                              );
-                            })()}
+                              </div>
 
-                            {/* Action Downloads Tile */}
-                            <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/85 space-y-2.5">
-                              <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">导出格式列表</h5>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const element = document.createElement("a");
-                                  const file = new Blob([JSON.stringify(generatedScript, null, 2)], { type: "application/json" });
-                                  element.href = URL.createObjectURL(file);
-                                  element.download = `new_script_${generatedScript.newTitle}.json`;
-                                  document.body.appendChild(element);
-                                  element.click();
-                                  document.body.removeChild(element);
-                                }}
-                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
-                              >
-                                <div className="flex items-center gap-2"><span className="text-sm">📝</span><div><div className="text-xs text-white font-semibold">导出 JSON 报告</div><div className="text-[9px] text-slate-500 font-sans">机器可读格式，适合后续 pipeline</div></div></div>
-                                <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
-                              </button>
+                              {/* Preflight Action Card */}
+                              {!preflightPassed && (
+                                <div className="bg-rose-955/20 border border-rose-900/50 p-5 rounded-2xl space-y-3">
+                                  <div className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                                    <AlertTriangle className="w-4 h-4 text-rose-455 shrink-0" />
+                                    <span>预检未通过：分镜未就绪</span>
+                                  </div>
+                                  <p className="text-[11px] text-slate-400 leading-relaxed font-normal">
+                                    存在缺失或生成失败的分镜，导出功能已被禁用。请点击下方按钮一键补全所有分镜。
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleBatchGenerate()}
+                                    className="w-full py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer"
+                                  >
+                                    一键生成缺失分镜
+                                  </button>
+                                </div>
+                              )}
 
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  window.print();
-                                }}
-                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
-                              >
-                                <div className="flex items-center gap-2"><span className="text-sm">📊</span><div><div className="text-xs text-white font-semibold">导出 HTML / PDF 报告</div><div className="text-[9px] text-slate-500 font-sans">适合生成书面文件或直接打印</div></div></div>
-                                <span className="text-blue-400 text-[10px] font-bold">打印 →</span>
-                              </button>
+                              {/* Action Downloads Tile */}
+                              <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/85 space-y-2.5">
+                                <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">导出格式列表</h5>
+                                <button
+                                  type="button"
+                                  disabled={!preflightPassed}
+                                  onClick={() => {
+                                    const element = document.createElement("a");
+                                    const file = new Blob([JSON.stringify(generatedScript, null, 2)], { type: "application/json" });
+                                    element.href = URL.createObjectURL(file);
+                                    element.download = `new_script_${generatedScript.newTitle}.json`;
+                                    document.body.appendChild(element);
+                                    element.click();
+                                    document.body.removeChild(element);
+                                  }}
+                                  className={`w-full flex items-center justify-between p-2.5 border rounded-xl text-left transition-colors ${
+                                    preflightPassed
+                                      ? 'bg-slate-950 hover:bg-slate-850 border-slate-850 cursor-pointer'
+                                      : 'bg-slate-950 opacity-40 cursor-not-allowed border-slate-900'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2"><span className="text-sm">📝</span><div><div className="text-xs text-white font-semibold">导出 JSON 报告</div><div className="text-[9px] text-slate-500 font-sans">机器可读格式，适合后续 pipeline</div></div></div>
+                                  <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
+                                </button>
 
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const element = document.createElement("a");
-                                  const file = new Blob([`# ${generatedScript.newTitle}\n\n## Topic: ${generatedScript.topic}\n\n${generatedScript.newShots.map((s:Shot, i:number) => `${i+1}. [${s.timestamp}] ${s.description}`).join('\n\n')}`], { type: "text/plain" });
-                                  element.href = URL.createObjectURL(file);
-                                  element.download = `storyboard_${generatedScript.newTitle}.zip`;
-                                  document.body.appendChild(element);
-                                  element.click();
-                                  document.body.removeChild(element);
-                                }}
-                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
-                              >
-                                <div className="flex items-center gap-2"><span className="text-sm">🎞️</span><div><div className="text-xs text-white font-semibold">导出故事板 ZIP</div><div className="text-[9px] text-slate-500 font-sans">打包剧本及所有分镜生成的图片</div></div></div>
-                                <span className="text-blue-400 text-[10px] font-bold">打包 →</span>
-                              </button>
+                                <button
+                                  type="button"
+                                  disabled={!preflightPassed}
+                                  onClick={() => {
+                                    window.print();
+                                  }}
+                                  className={`w-full flex items-center justify-between p-2.5 border rounded-xl text-left transition-colors ${
+                                    preflightPassed
+                                      ? 'bg-slate-950 hover:bg-slate-850 border-slate-850 cursor-pointer'
+                                      : 'bg-slate-955 opacity-40 cursor-not-allowed border-slate-900'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2"><span className="text-sm">📊</span><div><div className="text-xs text-white font-semibold">导出 HTML / PDF 报告</div><div className="text-[9px] text-slate-500 font-sans">适合生成书面文件 or 打印</div></div></div>
+                                  <span className="text-blue-400 text-[10px] font-bold">打印 →</span>
+                                </button>
 
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  alert("已导出所有分镜生成的无损图片！");
-                                }}
-                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
-                              >
-                                <div className="flex items-center gap-2"><span className="text-sm">🖼️</span><div><div className="text-xs text-white font-semibold">导出分镜图片</div><div className="text-[9px] text-slate-500 font-sans">仅导出生成无损分镜图片包</div></div></div>
-                                <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
-                              </button>
+                                <button
+                                  type="button"
+                                  disabled={!preflightPassed}
+                                  onClick={() => {
+                                    const element = document.createElement("a");
+                                    const file = new Blob([`# ${generatedScript.newTitle}\n\n## Topic: ${generatedScript.topic}\n\n${generatedScript.newShots.map((s, i) => `${i+1}. [${s.timestamp}] ${s.description}`).join('\n\n')}`], { type: "text/plain" });
+                                    element.href = URL.createObjectURL(file);
+                                    element.download = `storyboard_${generatedScript.newTitle}.zip`;
+                                    document.body.appendChild(element);
+                                    element.click();
+                                    document.body.removeChild(element);
+                                  }}
+                                  className={`w-full flex items-center justify-between p-2.5 border rounded-xl text-left transition-colors ${
+                                    preflightPassed
+                                      ? 'bg-slate-950 hover:bg-slate-850 border-slate-850 cursor-pointer'
+                                      : 'bg-slate-950 opacity-40 cursor-not-allowed border-slate-900'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2"><span className="text-sm">🎞️</span><div><div className="text-xs text-white font-semibold">导出故事板 ZIP</div><div className="text-[9px] text-slate-500 font-sans">打包剧本及所有分镜生成的图片</div></div></div>
+                                  <span className="text-blue-400 text-[10px] font-bold">打包 →</span>
+                                </button>
 
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  alert("已导出 ComfyUI PNG Info metadata！");
-                                }}
-                                className="w-full flex items-center justify-between p-2.5 bg-slate-950/70 hover:bg-slate-850 border border-slate-850 rounded-xl text-left transition-colors cursor-pointer"
-                              >
-                                <div className="flex items-center gap-2"><span className="text-sm">⚙️</span><div><div className="text-xs text-white font-semibold">导出 ComfyUI metadata</div><div className="text-[9px] text-slate-500 font-sans">携带完整生图工作流参数 JSON</div></div></div>
-                                <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
-                              </button>
+                                <button
+                                  type="button"
+                                  disabled={!preflightPassed}
+                                  onClick={() => {
+                                    const zipUrl = generatedScript.newShots.map(s => shotImages[s.timestamp] || s.generatedImageUrl || s.imageUrl).filter(Boolean);
+                                    alert("开始下载分镜原图包！(" + zipUrl.length + "张图)");
+                                  }}
+                                  className={`w-full flex items-center justify-between p-2.5 border rounded-xl text-left transition-colors ${
+                                    preflightPassed
+                                      ? 'bg-slate-950 hover:bg-slate-850 border-slate-850 cursor-pointer'
+                                      : 'bg-slate-955 opacity-40 cursor-not-allowed border-slate-900'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2"><span className="text-sm">🖼️</span><div><div className="text-xs text-white font-semibold">导出分镜图片</div><div className="text-[9px] text-slate-500 font-sans">仅导出生成无损分镜图片包</div></div></div>
+                                  <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  disabled={!preflightPassed}
+                                  onClick={() => {
+                                    alert("已导出 ComfyUI PNG Info metadata！");
+                                  }}
+                                  className={`w-full flex items-center justify-between p-2.5 border rounded-xl text-left transition-colors ${
+                                    preflightPassed
+                                      ? 'bg-slate-950 hover:bg-slate-850 border-slate-850 cursor-pointer'
+                                      : 'bg-slate-955 opacity-40 cursor-not-allowed border-slate-900'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2"><span className="text-sm">⚙️</span><div><div className="text-xs text-white font-semibold">导出 ComfyUI metadata</div><div className="text-[9px] text-slate-500 font-sans">携带完整生图工作流参数 JSON</div></div></div>
+                                  <span className="text-blue-400 text-[10px] font-bold">导出 →</span>
+                                </button>
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <div className="flex justify-between pt-2">
-                          <button
-                            type="button"
-                            onClick={() => setCreativeStep(3)}
-                            className="bg-slate-800 hover:bg-slate-700 text-slate-350 rounded-xl text-xs font-semibold py-2 px-5 border border-slate-700/60 transition-colors cursor-pointer"
-                          >
-                            ← 返回分镜生成
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              alert("全部故事板与参数已成功导出完毕！");
-                            }}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold py-2 px-6 shadow-lg shadow-emerald-950/25 transition-all cursor-pointer font-bold"
-                          >
-                            ✓ 完成并结束项目
-                          </button>
+                          <div className="flex justify-between pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setCreativeStep(3)}
+                              className="bg-slate-800 hover:bg-slate-700 text-slate-350 rounded-xl text-xs font-semibold py-2 px-5 border border-slate-700/60 transition-colors cursor-pointer"
+                            >
+                              ← 返回分镜生成
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!preflightPassed}
+                              onClick={() => {
+                                alert("全部故事板与参数已成功导出完毕！");
+                              }}
+                              className={`rounded-xl text-xs font-semibold py-2 px-6 shadow-lg transition-all font-bold ${
+                                preflightPassed
+                                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/25 cursor-pointer'
+                                  : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                              }`}
+                            >
+                              ✓ 完成并结束项目
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -5782,20 +5890,12 @@ export default function App() {
                       <div className="flex flex-col items-center">
                         <span className="text-[10px] text-slate-500 font-mono mb-1">正</span>
                         <div className="w-full aspect-[2/3] rounded-lg overflow-hidden border border-white/5 bg-slate-900 relative group/view">
-                          {activeDrawerChar.views?.front ? (
-                            <img
-                              key={activeDrawerChar.views.front}
-                              src={activeDrawerChar.views.front}
-                              onError={() => console.log('抽屉正面图加载失败:', activeDrawerChar.views?.front)}
-                              alt="正面图"
-                              className="w-full h-full object-cover cursor-zoom-in hover:scale-105 transition-transform"
-                              onClick={() => setActiveLightboxUrl(activeDrawerChar.views.front || null)}
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-650 bg-slate-950/60 font-medium">
-                              暂无图片
-                            </div>
-                          )}
+                          <SafeImg
+                            src={activeDrawerChar.views?.front}
+                            alt="正面图"
+                            className="w-full h-full object-cover cursor-zoom-in hover:scale-105 transition-transform"
+                            onClick={() => setActiveLightboxUrl(activeDrawerChar.views?.front || null)}
+                          />
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'front'))}
                           {imagePlatform === 'comfyui' && (
                             <button
@@ -5843,20 +5943,12 @@ export default function App() {
                       <div className="flex flex-col items-center">
                         <span className="text-[10px] text-slate-500 font-mono mb-1">侧</span>
                         <div className="w-full aspect-[2/3] rounded-lg overflow-hidden border border-white/5 bg-slate-900 relative group/view">
-                          {activeDrawerChar.views?.side ? (
-                            <img
-                              key={activeDrawerChar.views.side}
-                              src={activeDrawerChar.views.side}
-                              onError={() => console.log('抽屉侧面图加载失败:', activeDrawerChar.views?.side)}
-                              alt="侧面图"
-                              className="w-full h-full object-cover cursor-zoom-in hover:scale-105 transition-transform"
-                              onClick={() => setActiveLightboxUrl(activeDrawerChar.views.side || null)}
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-650 bg-slate-950/60 font-medium">
-                              暂无图片
-                            </div>
-                          )}
+                          <SafeImg
+                            src={activeDrawerChar.views?.side}
+                            alt="侧面图"
+                            className="w-full h-full object-cover cursor-zoom-in hover:scale-105 transition-transform"
+                            onClick={() => setActiveLightboxUrl(activeDrawerChar.views?.side || null)}
+                          />
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'side'))}
                           {imagePlatform === 'comfyui' && (
                             <button
@@ -5904,20 +5996,12 @@ export default function App() {
                       <div className="flex flex-col items-center">
                         <span className="text-[10px] text-slate-500 font-mono mb-1">背</span>
                         <div className="w-full aspect-[2/3] rounded-lg overflow-hidden border border-white/5 bg-slate-900 relative group/view">
-                          {activeDrawerChar.views?.back ? (
-                            <img
-                              key={activeDrawerChar.views.back}
-                              src={activeDrawerChar.views.back}
-                              onError={() => console.log('抽屉背面图加载失败:', activeDrawerChar.views?.back)}
-                              alt="背面图"
-                              className="w-full h-full object-cover cursor-zoom-in hover:scale-105 transition-transform"
-                              onClick={() => setActiveLightboxUrl(activeDrawerChar.views.back || null)}
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-650 bg-slate-950/60 font-medium">
-                              暂无图片
-                            </div>
-                          )}
+                          <SafeImg
+                            src={activeDrawerChar.views?.back}
+                            alt="背面图"
+                            className="w-full h-full object-cover cursor-zoom-in hover:scale-105 transition-transform"
+                            onClick={() => setActiveLightboxUrl(activeDrawerChar.views?.back || null)}
+                          />
                           {renderComfyTaskOverlay(getCharacterTask(activeDrawerChar.id || '', 'back'))}
                           {imagePlatform === 'comfyui' && (
                             <button
