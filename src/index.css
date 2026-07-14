@@ -35,6 +35,29 @@
 }
 
 @layer utilities {
+  .text-ui-meta { font-size: 12px; line-height: 1.45; }
+  .text-ui-body { font-size: 13px; line-height: 1.5; }
+  .text-ui-label { font-size: 14px; line-height: 1.45; }
+  .text-ui-title { font-size: 16px; line-height: 1.35; }
+  .text-ui-heading { font-size: 20px; line-height: 1.25; }
+}
+
+@layer components {
+  .wizard-shot-context > section { display: none; }
+  .inspector-group { border: 1px solid rgb(30 41 59); border-radius: 0.75rem; background: rgb(15 23 42 / 0.55); padding: 0.875rem; }
+  .inspector-group h4 { margin-bottom: 0.75rem; color: rgb(248 250 252); font-size: 14px; font-weight: 700; }
+  .inspector-group label { display: grid; gap: 0.375rem; color: rgb(203 213 225); font-size: 13px; }
+  .inspector-group select, .inspector-group textarea, .inspector-group input[type="number"] { width: 100%; border: 1px solid rgb(51 65 85); border-radius: 0.5rem; background: rgb(2 6 23); color: rgb(226 232 240); padding: 0.5rem; font-size: 13px; }
+  .segmented-control { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.25rem; margin: 0.625rem 0; }
+  .segmented-control button { border: 1px solid rgb(51 65 85); border-radius: 0.45rem; padding: 0.45rem; color: rgb(203 213 225); font-size: 13px; }
+  .segmented-control button.active { border-color: rgb(99 102 241); background: rgb(49 46 129 / 0.55); color: white; }
+  .blocking-row { display: grid; grid-template-columns: minmax(80px,1fr) repeat(3,minmax(68px,.8fr)) auto; align-items: center; gap: 0.375rem; padding: 0.5rem 0; border-top: 1px solid rgb(30 41 59); }
+  .blocking-row:first-of-type { border-top: 0; }
+  .toggle-label { display: flex !important; align-items: center; gap: 0.35rem !important; white-space: nowrap; }
+  .task-center button:focus-visible, .storyboard-inspector button:focus-visible, .storyboard-inspector select:focus-visible, .storyboard-inspector textarea:focus-visible, .storyboard-inspector input:focus-visible { outline: 2px solid rgb(129 140 248); outline-offset: 2px; }
+}
+
+@layer utilities {
   /* Scrollbar styles */
   .custom-scrollbar::-webkit-scrollbar {
     width: 4px;
@@ -142,6 +165,33 @@
 
   .admin-navigation + .admin-inspector {
     grid-column: 2 / -1;
+  }
+
+  .wizard-shot-grid {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr) 260px;
+    min-height: 640px;
+    max-height: calc(100vh - 15rem);
+  }
+
+  .wizard-shot-column {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  @media (max-width: 1200px) {
+    .wizard-shot-grid {
+      grid-template-columns: 220px minmax(0, 1fr);
+      max-height: none;
+    }
+
+    .wizard-shot-context {
+      grid-column: 2;
+      border-left: 0;
+      border-top: 1px solid var(--line-soft);
+    }
   }
 
   /* ── 主区顶部功能导航（从右栏迁移而来） ── */

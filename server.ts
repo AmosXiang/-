@@ -14,6 +14,7 @@ import PQueue from 'p-queue';
 import sharp, { type Metadata } from 'sharp';
 import { registerShotAnalysisModule } from './server/modules/shot-analysis/index.ts';
 import { registerCameraDeriveModule, cameraDeriveTaskNodeMappings, CAMERA_DERIVE_PRESET_ID } from './server/modules/camera-derive/index.ts';
+import { detectComfyProcesses, getPort8001OwnerPids as port8001OwnerPids } from './comfyui-health.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -575,6 +576,73 @@ const upload = multer({
   }
 });
 
+const imagePromptUpload = multer({
+  storage,
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) return cb(null, true);
+    cb(new Error('Only image files are supported.'));
+  },
+});
+
+const imagePromptSchema = {
+  type: 'OBJECT',
+  properties: {
+    subject: { type: 'STRING' },
+    scene: { type: 'STRING' },
+    style: { type: 'STRING' },
+    lighting: { type: 'STRING' },
+    camera: { type: 'STRING' },
+    flux_prompt: { type: 'STRING' },
+    negative_prompt: { type: 'STRING' },
+  },
+  required: ['subject', 'scene', 'style', 'lighting', 'camera', 'flux_prompt', 'negative_prompt'],
+};
+
+type GeminiImageErrorCode =
+  | 'GEMINI_TIMEOUT'
+  | 'GEMINI_NETWORK'
+  | 'GEMINI_AUTH'
+  | 'GEMINI_RATE_LIMIT'
+  | 'GEMINI_INVALID_RESPONSE'
+  | 'GEMINI_UPSTREAM';
+
+function classifyGeminiImageError(error: any): { code: GeminiImageErrorCode; status: number; retryable: boolean; message: string } {
+  const message = String(error?.message || error || 'Unknown Gemini error');
+  const normalized = message.toLowerCase();
+  const upstreamStatus = Number(error?.status || error?.statusCode || error?.response?.status || 0);
+  if (error?.code === 'GEMINI_TIMEOUT' || normalized.includes('timed out') || normalized.includes('timeout')) {
+    return { code: 'GEMINI_TIMEOUT', status: 504, retryable: true, message: 'Gemini image analysis timed out.' };
+  }
+  if (upstreamStatus === 401 || upstreamStatus === 403 || normalized.includes('api key') || normalized.includes('permission_denied')) {
+    return { code: 'GEMINI_AUTH', status: 502, retryable: false, message: 'Gemini authentication failed. Check GEMINI_API_KEY.' };
+  }
+  if (upstreamStatus === 429 || normalized.includes('rate limit') || normalized.includes('resource_exhausted')) {
+    return { code: 'GEMINI_RATE_LIMIT', status: 429, retryable: true, message: 'Gemini rate limit reached. Retry later or use manual JSON.' };
+  }
+  if (error instanceof SyntaxError || error?.code === 'GEMINI_INVALID_RESPONSE') {
+    return { code: 'GEMINI_INVALID_RESPONSE', status: 502, retryable: false, message: 'Gemini returned invalid structured JSON.' };
+  }
+  if (normalized.includes('fetch failed') || normalized.includes('econnreset') || normalized.includes('enotfound') || normalized.includes('network')) {
+    return { code: 'GEMINI_NETWORK', status: 502, retryable: true, message: 'Cannot reach Gemini API from the server.' };
+  }
+  return { code: 'GEMINI_UPSTREAM', status: 502, retryable: upstreamStatus >= 500 || upstreamStatus === 0, message };
+}
+
+async function withGeminiTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error(`Gemini request timed out after ${timeoutMs}ms`), { code: 'GEMINI_TIMEOUT' })), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const DEMO_TEMPLATE = {
   narrative: {
     structure: "ç”±ä¸‰ä¸ªä¸»è¦ç©ºé—´ï¼ˆé£žç©ºèˆ±èˆ±ã€ä¸‡ç±³äº‘ç©ºã€å¼‚åŸŸé›ªå±±ä¸Žæ·±æµ·ç³–æžœç•Œï¼‰æž„æˆçš„å››å¹•å¼æ—¶ç©ºç©¿æ¢­ç»“æž„ï¼Œé€šè¿‡é»‘è‰²æ¼©æ¶¡ä¼ é€é—¨åˆ‡æ¢åœºæ™¯ï¼Œè¡¨çŽ°å°é˜Ÿä»Žæ—¥å¸¸æ‹Œå˜´åˆ°ååŒå è½ã€å†åˆ°æ—¶ç©ºå¤§åå·®çŽ¯å¢ƒæ»‘ç¨½è‡ªæ•‘ï¼Œæœ€ç»ˆåœ¨è¿œå¤é—è¿¹åºŸå¢Ÿä¸Žå¼‚å½¢æ€ªå…½å†³æˆ˜çš„å™äº‹èµ·ä¼ã€‚",
@@ -796,6 +864,88 @@ async function optimizePrompt(rawPrompt: string, isCharacter: boolean, style?: s
   }
 }
 
+// Optional, user-confirmed storyboard prompt optimization. This is deliberately
+// separate from the legacy generation-time translator above so the stable path
+// remains unchanged when the UI switch is off.
+async function optimizeStoryboardPrompt(
+  rawPrompt: string,
+  style: string | undefined,
+  characterNames: string
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not configured.');
+
+  const ai = new GoogleGenAI({ apiKey });
+  const selectedStyle = style || 'Pure Klein 4B cinematic photorealism';
+  const systemPrompt = `你是专业的AI绘画提示词工程师。把中文分镜描述忠实转换为一条专业英文 Stable Diffusion / Flux 提示词。
+硬性要求：
+1. 中文原文是唯一事实来源。必须保留原文中所有人物、服装、动作、姿势、道具、环境和人物关系。
+2. 严禁新增、替换或重新解释任何动作、道具、地点、关系或剧情事件。
+3. 只补充与原文兼容的镜头景别、机位、焦段、构图、光影、氛围和景深。
+4. 保持 Pure Klein 4B 写实电影风格。指定风格：${selectedStyle}。
+5. 只使用少量有意义的画质词，例如 cinematic lighting、detailed texture，禁止关键词堆砌。
+6. 最终英文提示词不超过140词。只输出提示词，不要标题、引号、Markdown或解释。`;
+  const identityNote = characterNames ? `\n必须保留这些人物姓名：${characterNames}` : '';
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [{ text: `${systemPrompt}\n\n中文分镜原文：\n${rawPrompt}${identityNote}` }],
+    config: { temperature: 0.1 },
+  });
+  const optimized = String(response.text || '').trim().replace(/^```(?:text)?\s*/i, '').replace(/```$/i, '').trim();
+  if (!optimized) throw new Error('Prompt optimizer returned an empty response.');
+  return optimized;
+}
+
+
+const CAMERA_MOVES = ['push_in', 'pull_out', 'static', 'follow', 'pan', 'tilt', 'handheld'] as const;
+const CAMERA_SPEEDS = ['slow', 'medium', 'fast'] as const;
+const SHOT_SIZES = ['extreme_close', 'close_up', 'medium_close', 'medium', 'full', 'wide'] as const;
+const CAMERA_ANGLES = ['front', 'side', 'back', 'high', 'low', 'pov'] as const;
+const BLOCKING_LAYERS = ['foreground', 'midground', 'background'] as const;
+const BLOCKING_POSITIONS = ['left', 'center', 'right'] as const;
+export const VIDEO_PROVIDER_CONFIG = {
+  kling: { maxDurationSec: 10, nativeCameraMove: false },
+  seedance: { maxDurationSec: 12, nativeCameraMove: true },
+} as const;
+
+type VideoPromptProvider = keyof typeof VIDEO_PROVIDER_CONFIG;
+
+const enrichmentProperties = {
+  camera: { type: 'OBJECT', properties: { move: { type: 'STRING', enum: [...CAMERA_MOVES] }, speed: { type: 'STRING', enum: [...CAMERA_SPEEDS] }, note: { type: 'STRING' } }, required: ['move', 'speed', 'note'] },
+  framing: { type: 'OBJECT', properties: { shotSize: { type: 'STRING', enum: [...SHOT_SIZES] }, angle: { type: 'STRING', enum: [...CAMERA_ANGLES] } }, required: ['shotSize', 'angle'] },
+  blocking: { type: 'ARRAY', items: { type: 'OBJECT', properties: { characterId: { type: 'STRING' }, layer: { type: 'STRING', enum: [...BLOCKING_LAYERS] }, position: { type: 'STRING', enum: [...BLOCKING_POSITIONS] }, gaze: { type: 'STRING' }, outOfFocus: { type: 'BOOLEAN' } }, required: ['characterId', 'layer', 'position', 'gaze', 'outOfFocus'] } },
+  durationSec: { type: 'NUMBER' },
+  provenance: { type: 'STRING', enum: ['analyzed', 'edited', 'ai_optimized'] },
+};
+
+export function assertStoryboardEnrichment(shot: any, expectedProvenance?: 'analyzed' | 'edited' | 'ai_optimized') {
+  const fail = (message: string): never => { throw new Error(`STORYBOARD_SCHEMA_INVALID: ${message}`); };
+  if (!shot?.camera || !CAMERA_MOVES.includes(shot.camera.move) || !CAMERA_SPEEDS.includes(shot.camera.speed) || typeof shot.camera.note !== 'string') fail('camera');
+  if (!shot?.framing || !SHOT_SIZES.includes(shot.framing.shotSize) || !CAMERA_ANGLES.includes(shot.framing.angle)) fail('framing');
+  if (!Array.isArray(shot.blocking)) fail('blocking');
+  for (const item of shot.blocking) {
+    const validGaze = ['camera', 'frame_left', 'frame_right', 'away'].includes(item?.gaze) || /^at_character:.+/.test(item?.gaze || '');
+    if (typeof item?.characterId !== 'string' || !BLOCKING_LAYERS.includes(item.layer) || !BLOCKING_POSITIONS.includes(item.position) || !validGaze || typeof item.outOfFocus !== 'boolean') fail('blocking item');
+  }
+  if (!Number.isFinite(shot.durationSec) || shot.durationSec <= 0) fail('durationSec');
+  if (!['analyzed', 'edited', 'ai_optimized'].includes(shot.provenance)) fail('provenance');
+  if (expectedProvenance && shot.provenance !== expectedProvenance) fail(`provenance must be ${expectedProvenance}`);
+}
+
+export function buildVideoPrompt(shot: any, provider: VideoPromptProvider): { prompt: string; nativeParams?: Record<string, unknown>; deliveryNotes: string[] } {
+  assertStoryboardEnrichment(shot);
+  const config = VIDEO_PROVIDER_CONFIG[provider];
+  if (!config) throw new Error(`Unsupported video provider: ${provider}`);
+  if (shot.durationSec > config.maxDurationSec) throw new Error(`DURATION_LIMIT_EXCEEDED: ${provider} max ${config.maxDurationSec}s`);
+  const cameraText = `${shot.camera.move} camera, ${shot.camera.speed} speed${shot.camera.note ? `, ${shot.camera.note}` : ''}`;
+  const blockingText = shot.blocking.map((item: any) => `${item.characterId} ${item.layer} ${item.position}, gaze ${item.gaze}${item.outOfFocus ? ', out of focus' : ''}`).join('; ');
+  const promptParts = [String(shot.description || '').trim(), `${shot.framing.shotSize} shot, ${shot.framing.angle} angle`, blockingText].filter(Boolean);
+  const nativeParams: Record<string, unknown> = { durationSec: shot.durationSec };
+  const deliveryNotes: string[] = [];
+  if (config.nativeCameraMove) nativeParams.camera = { ...shot.camera };
+  else { promptParts.push(cameraText); deliveryNotes.push('运镜以文本方式传递'); }
+  return { prompt: promptParts.join('. '), nativeParams, deliveryNotes };
+}
 
 // Gemini Response JSON Schema
 const responseSchema = {
@@ -819,8 +969,9 @@ const responseSchema = {
           composition: { type: 'STRING', description: 'ç”»é¢æž„å›¾ï¼Œä¾‹å¦‚ï¼šä¸‰åˆ†æ³•ã€ä¸­å¿ƒæž„å›¾ã€æ¡†æž¶æž„å›¾ç­‰' },
           emotion: { type: 'STRING', description: 'é•œå¤´ä¼ è¾¾çš„æƒ…ç»ªï¼Œä¾‹å¦‚ï¼šéœ‡æ’¼ã€å¹³é™ã€ç¥žç§˜ã€æ»‘ç¨½ç­‰' },
           description: { type: 'STRING', description: 'è¯¥é•œå¤´ç”»é¢çš„å…·ä½“å†…å®¹å’Œæƒ…èŠ‚æè¿°' }
+          , ...enrichmentProperties
         },
-        required: ['timestamp', 'timeSeconds', 'movement', 'composition', 'emotion', 'description']
+        required: ['timestamp', 'timeSeconds', 'movement', 'composition', 'emotion', 'description', 'camera', 'framing', 'blocking', 'durationSec', 'provenance']
       }
     },
     characters: {
@@ -947,6 +1098,113 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
   }
 });
 
+// 4.1 POST /api/analyze-image-prompt - Reverse-engineer an editable Flux prompt from an image
+app.post('/api/analyze-image-prompt', (req, res) => {
+  imagePromptUpload.single('image')(req, res, async (uploadError: any) => {
+    if (uploadError) {
+      const status = uploadError instanceof multer.MulterError ? 413 : 400;
+      return res.status(status).json({ error: uploadError.message || 'Image upload failed' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'No image file provided. Use form field "image".' });
+
+    const requestId = crypto.randomUUID();
+    const startedAt = Date.now();
+    const timeoutMs = 30_000;
+    const maxAttempts = 2;
+    res.setHeader('X-Gemini-Request-Id', requestId);
+    try {
+      const sourcePrompt = String(req.body?.sourcePrompt || '').trim();
+      const existingPrompt = String(req.body?.existingPrompt || '').trim();
+      const styleOnly = String(req.body?.styleOnly || '') === 'true';
+      if (!styleOnly && !sourcePrompt && !existingPrompt) {
+        return res.status(400).json({
+          error: { code: 'SOURCE_PROMPT_REQUIRED', message: 'The original storyboard prompt is required.', retryable: false },
+          diagnostics: { requestId, model: 'gemini-2.5-flash', attempts: 0, durationMs: Date.now() - startedAt },
+          manualFallbackAvailable: true,
+        });
+      }
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) return res.status(500).json({
+        error: { code: 'GEMINI_NOT_CONFIGURED', message: 'GEMINI_API_KEY environment variable is not configured.', retryable: false },
+        diagnostics: { requestId, model: 'gemini-2.5-flash', attempts: 0, durationMs: Date.now() - startedAt },
+        manualFallbackAvailable: true,
+      });
+
+      const imageData = fs.readFileSync(req.file.path).toString('base64');
+      const ai = new GoogleGenAI({ apiKey });
+      let lastError: any = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const attemptStartedAt = Date.now();
+        try {
+          console.log('[Image Prompt Analyzer]', JSON.stringify({ requestId, event: 'attempt_start', attempt, model: 'gemini-2.5-flash', mimeType: req.file.mimetype, bytes: req.file.size, sourcePromptLength: sourcePrompt.length, existingPromptLength: existingPrompt.length, timeoutMs }));
+          const response = await withGeminiTimeout(ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: [{
+              role: 'user',
+              parts: [
+                { inlineData: { mimeType: req.file.mimetype, data: imageData } },
+                { text: styleOnly ? `Extract a reusable PROJECT ART DIRECTION style guide from this reference image.
+Analyze only color palette, lighting character, material/surface rendering, texture treatment, contrast, atmosphere, and overall visual style.
+Do not describe or copy any subject, person, object, action, location, camera angle, framing, layout, or composition from the image.
+Set subject, scene, and camera to empty strings. Put the reusable style guide in style, lighting, and flux_prompt. flux_prompt must be an English style overlay fragment, not a scene prompt. Return only the requested JSON fields.` : `Create a style-overlay prompt for an existing storyboard shot.
+
+CONTENT SOURCE (the only authority for subject, people, scene, actions, props, spatial relationships, camera, and composition):
+${sourcePrompt}
+
+EXISTING ENGLISH PROMPT (reuse when present, but do not change its content semantics):
+${existingPrompt || '(none)'}
+
+STRICT RULES:
+1. Inspect the reference image ONLY for color palette, lighting character, surface/material rendering, texture treatment, contrast, atmosphere, and overall visual style.
+2. Never copy or infer the reference image's subject, people, objects, location, action, camera angle, framing, layout, or composition.
+3. Preserve every scene, action, person, prop, relationship, camera, and composition detail from CONTENT SOURCE. Do not add, remove, replace, or reinterpret content.
+4. subject, scene, and camera must summarize CONTENT SOURCE only. style and lighting must describe only the allowed reference-image style traits.
+5. flux_prompt must be a complete English Flux prompt: faithful English rendering of CONTENT SOURCE, followed by a clearly integrated style overlay containing only the allowed visual traits.
+6. negative_prompt may contain quality defects, but must not negate any required content from CONTENT SOURCE.
+7. Return only the requested JSON fields.` },
+              ],
+            }],
+            config: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: imagePromptSchema },
+          }), timeoutMs);
+          let result: any;
+          try {
+            result = JSON.parse(String(response.text || '{}'));
+          } catch (parseError) {
+            throw Object.assign(parseError as Error, { code: 'GEMINI_INVALID_RESPONSE' });
+          }
+          const missingFields = imagePromptSchema.required.filter(field => typeof result?.[field] !== 'string');
+          if (missingFields.length) throw Object.assign(new Error(`Missing fields: ${missingFields.join(', ')}`), { code: 'GEMINI_INVALID_RESPONSE' });
+          console.log('[Image Prompt Analyzer]', JSON.stringify({ requestId, event: 'success', attempt, attemptDurationMs: Date.now() - attemptStartedAt, totalDurationMs: Date.now() - startedAt }));
+          res.setHeader('X-Gemini-Attempts', String(attempt));
+          return res.json(result);
+        } catch (error: any) {
+          lastError = error;
+          const classified = classifyGeminiImageError(error);
+          console.warn('[Image Prompt Analyzer]', JSON.stringify({ requestId, event: 'attempt_failed', attempt, code: classified.code, retryable: classified.retryable, attemptDurationMs: Date.now() - attemptStartedAt, detail: String(error?.message || error) }));
+          if (!classified.retryable || attempt === maxAttempts) break;
+          await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+        }
+      }
+      const classified = classifyGeminiImageError(lastError);
+      return res.status(classified.status).json({
+        error: { code: classified.code, message: classified.message, retryable: classified.retryable },
+        diagnostics: { requestId, model: 'gemini-2.5-flash', attempts: maxAttempts, timeoutMs, durationMs: Date.now() - startedAt },
+        manualFallbackAvailable: true,
+      });
+    } catch (error: any) {
+      const classified = classifyGeminiImageError(error);
+      console.error('[Image Prompt Analyzer]', JSON.stringify({ requestId, event: 'unhandled_failure', code: classified.code, detail: String(error?.message || error) }));
+      return res.status(classified.status).json({
+        error: { code: classified.code, message: classified.message, retryable: classified.retryable },
+        diagnostics: { requestId, model: 'gemini-2.5-flash', attempts: 0, timeoutMs, durationMs: Date.now() - startedAt },
+        manualFallbackAvailable: true,
+      });
+    } finally {
+      fs.promises.unlink(req.file.path).catch(() => undefined);
+    }
+  });
+});
+
 // 5. POST /api/analyze - Upload video to Gemini, run analysis, store JSON and details
 app.post('/api/analyze', async (req, res) => {
   const { filename, filepath, title, shortDramaMode } = req.body;
@@ -1011,6 +1269,7 @@ app.post('/api/analyze', async (req, res) => {
       prompt += `\nç‰¹åˆ«æ³¨æ„ï¼šè¿™æ˜¯ç«–å±çŸ­å‰§ï¼Œæ¯3-5ç§’ä¸€ä¸ªé•œå¤´ï¼ŒæŒ‰å°è¯åœé¡¿å’Œæƒ…ç»ªè½¬æŠ˜åˆ‡åˆ†ã€‚`;
       console.log('[Gemini] Short Drama Mode enabled for video analysis prompt.');
     }
+    prompt += `\nFor every shot, camera, framing, blocking, and durationSec are mandatory. provenance must be exactly "analyzed". blocking characterId must reference a character name or stable identifier from this analysis. Do not omit fields or invent fallback defaults.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -1035,6 +1294,7 @@ app.post('/api/analyze', async (req, res) => {
     let analysisResult;
     try {
       analysisResult = JSON.parse(response.text);
+      for (const shot of analysisResult.shots || []) assertStoryboardEnrichment(shot, 'analyzed');
     } catch (e) {
       console.error('Failed to parse Gemini JSON response:', response.text);
       throw new Error('Gemini did not return valid JSON conformant to the schema.');
@@ -1117,7 +1377,7 @@ app.delete('/api/videos/:id', async (req, res) => {
 
 // 7. POST /api/generate-script - Generate new script from template
 app.post('/api/generate-script', async (req, res) => {
-  const { templateId, topic, preferences, shortDramaMode } = req.body;
+  const { templateId, topic, preferences, shortDramaMode, sourceScriptId, artDirection } = req.body;
   const requestedShotCount = Math.max(0, Math.min(30, Number(preferences?.shotCount) || 0));
   const requestedCharacterCount = Math.max(0, Math.min(10, Number(preferences?.characterCount) || 0));
 
@@ -1129,7 +1389,15 @@ app.post('/api/generate-script', async (req, res) => {
     let templateData = DEMO_TEMPLATE;
     const db = readDb();
 
-    if (templateId && templateId !== 'demo') {
+    if (sourceScriptId) {
+      const sourceScript = db.generated_scripts.find((item: any) => String(item.id) === String(sourceScriptId));
+      if (!sourceScript) return res.status(404).json({ error: 'Source history script not found.' });
+      templateData = {
+        narrative: sourceScript.newNarrative,
+        characters: sourceScript.newCharacters || [],
+        shots: sourceScript.newShots || [],
+      } as any;
+    } else if (templateId && templateId !== 'demo') {
       const video = db.videos.find((v: any) => v.id === templateId);
       if (video && video.analysis) {
         templateData = video.analysis;
@@ -1179,7 +1447,7 @@ ${topic}
     }
 
     if (requestedShotCount) {
-      prompt += `\n\nMANDATORY OUTPUT CONSTRAINT: Return exactly ${requestedShotCount} storyboard shots in newShots. Do not return more or fewer shots.`;
+      prompt += `\n\nMANDATORY OUTPUT CONSTRAINT: Return exactly ${requestedShotCount} storyboard shots in newShots. Do not return more or fewer shots. Every shot must include camera, framing, blocking, durationSec, and provenance exactly "ai_optimized".`;
     }
     if (requestedCharacterCount) {
       prompt += `\nMANDATORY OUTPUT CONSTRAINT: Return exactly ${requestedCharacterCount} principal character(s) in newCharacters and keep the same character identity consistent across every shot.`;
@@ -1224,8 +1492,9 @@ ${topic}
               composition: { type: 'STRING', description: 'è¯¥é•œå¤´çš„ç”»é¢æž„å›¾æ–¹å¼ï¼Œå¦‚ä¸‰åˆ†æ³•ã€æ¡†å¼æž„å›¾ç­‰ï¼ˆéœ€ç»§æ‰¿æ¨¡æ¿çš„æž„å›¾ç¾Žå­¦ï¼‰' },
               emotion: { type: 'STRING', description: 'è¯¥é•œå¤´ä¼ è¾¾çš„æƒ…ç»ªï¼Œå¦‚éœ‡æ’¼ã€ç¥žç§˜ã€ç´§å¼ ç­‰' },
               description: { type: 'STRING', description: 'é•œå¤´ä¸‹çš„å…·ä½“æƒ…èŠ‚åŠ¨ä½œæè¿°ã€äººç‰©å¯¹è¯ä»¥åŠéŸ³æ•ˆè§„åˆ’' }
+              , ...enrichmentProperties
             },
-            required: ['timestamp', 'timeSeconds', 'movement', 'composition', 'emotion', 'description']
+            required: ['timestamp', 'timeSeconds', 'movement', 'composition', 'emotion', 'description', 'camera', 'framing', 'blocking', 'durationSec', 'provenance']
           }
         }
       },
@@ -1248,6 +1517,7 @@ ${topic}
     let result;
     try {
       result = JSON.parse(response.text);
+      for (const shot of result.newShots || []) assertStoryboardEnrichment(shot, 'ai_optimized');
     } catch (e) {
       console.error('Failed to parse Gemini script JSON response:', response.text);
       throw new Error('Gemini did not return valid JSON conformant to script schema.');
@@ -1270,6 +1540,8 @@ ${topic}
       templateId: templateId || 'demo',
       templateTitle: templateId === 'demo' ? 'æ¼”ç¤ºåˆ†é•œæ¨¡æ¿' : (db.videos.find((v: any) => v.id === templateId)?.title || 'æœªçŸ¥æ¨¡æ¿'),
       topic: topic,
+      sourceScriptId: sourceScriptId || null,
+      artDirection: artDirection && typeof artDirection === 'object' ? artDirection : undefined,
       createdAt: new Date().toISOString(),
       comfyuiPreferences: readDefaultComfyPreferences(),
       newTitle: result.newTitle,
@@ -1310,6 +1582,76 @@ app.get('/api/generated-scripts', (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to retrieve generated scripts' });
+  }
+});
+
+app.post('/api/generated-scripts/:id/clone', async (req, res) => {
+  const sourceId = String(req.params.id);
+  let clone: any = null;
+  await mutateDb((db) => {
+    const source = db.generated_scripts.find((item: any) => String(item.id) === sourceId);
+    if (!source) return;
+    clone = JSON.parse(JSON.stringify(source));
+    clone.id = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+    clone.sourceScriptId = sourceId;
+    clone.newTitle = `${source.newTitle}（副本）`;
+    clone.createdAt = new Date().toISOString();
+    const characterIdMap = new Map<string, string>();
+    clone.newCharacters = (clone.newCharacters || []).map((item: any) => {
+      const newId = crypto.randomUUID();
+      characterIdMap.set(String(item.id || ''), newId);
+      return { ...item, id: newId };
+    });
+    clone.newShots = (clone.newShots || []).map((item: any) => ({
+      ...item,
+      id: crypto.randomUUID(),
+      matchedCharacterIds: (item.matchedCharacterIds || []).map((id: unknown) => characterIdMap.get(String(id))).filter(Boolean),
+    }));
+    db.generated_scripts.push(clone);
+  });
+  if (!clone) return res.status(404).json({ error: 'Script not found' });
+  return res.status(201).json(clone);
+});
+
+app.post('/api/prompts/optimize-shot', async (req, res) => {
+  const projectId = String(req.body?.projectId || '');
+  const shotId = String(req.body?.shotId || '');
+  const shotIndex = Number.isInteger(req.body?.shotIndex) ? Number(req.body.shotIndex) : null;
+  const force = req.body?.force === true;
+  if (!projectId) return res.status(400).json({ error: 'projectId is required' });
+
+  const script = getGeneratedScript(projectId);
+  if (!script) return res.status(404).json({ error: 'Project not found' });
+  const shot = shotId
+    ? (script.newShots || []).find((item: any) => String(item.id) === shotId)
+    : shotIndex !== null ? script.newShots?.[shotIndex] : null;
+  if (!shot) return res.status(404).json({ error: 'Shot not found' });
+  const rawPrompt = String(req.body?.prompt || shot.description || '').trim();
+  if (!rawPrompt) return res.status(400).json({ error: 'Shot description is required' });
+  if (!force && String(shot.optimizedPrompt || '').trim()) {
+    return res.json({ success: true, optimizedPrompt: shot.optimizedPrompt, cached: true });
+  }
+
+  const matchedIds = new Set((shot.matchedCharacterIds || []).map((value: unknown) => String(value)));
+  const characterNames = (script.newCharacters || [])
+    .filter((character: any) => matchedIds.has(String(character.id || '')))
+    .map((character: any) => String(character.name || '').trim())
+    .filter(Boolean)
+    .join(', ');
+
+  try {
+    const artDirectionOverlay = String(script.artDirection?.overlay || '').trim();
+    const requestedStyle = [req.body?.style || shot.style, artDirectionOverlay ? `Project art direction style overlay: ${artDirectionOverlay}` : ''].filter(Boolean).join('. ');
+    const optimizedPrompt = await optimizeStoryboardPrompt(rawPrompt, requestedStyle, characterNames);
+    await mutateDb((db) => {
+      const storedScript = db.generated_scripts.find((item: any) => String(item.id) === projectId);
+      const storedShot = storedScript?.newShots?.find((item: any) => String(item.id) === String(shot.id));
+      if (storedShot) storedShot.optimizedPrompt = optimizedPrompt;
+    });
+    return res.json({ success: true, optimizedPrompt, cached: false });
+  } catch (error: any) {
+    console.error('[PromptOptimization]', { projectId, shotId: shot.id, error: error.message });
+    return res.status(502).json({ error: error.message || 'Prompt optimization failed' });
   }
 });
 
@@ -1551,7 +1893,7 @@ function inferMatchedCharacterIds(description: unknown, characters: any[]): stri
 app.put('/api/generated-scripts/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { newShots, newCharacters, title, summary, tone, pace } = req.body;
+    const { newShots, newCharacters, title, summary, tone, pace, artDirection } = req.body;
 
     let found = false;
     let updatedScript: any = null;
@@ -1565,6 +1907,7 @@ app.put('/api/generated-scripts/:id', async (req, res) => {
         if (summary) script.summary = summary;
         if (tone) script.tone = tone;
         if (pace) script.pace = pace;
+        if (artDirection && typeof artDirection === 'object') script.artDirection = artDirection;
 
         db.generated_scripts[index] = script;
         updatedScript = script;
@@ -1580,6 +1923,77 @@ app.put('/api/generated-scripts/:id', async (req, res) => {
   } catch (err: any) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update script: ' + err.message });
+  }
+});
+
+app.put('/api/generated-scripts/:id/shots/:shotId/storyboard', async (req, res) => {
+  const projectId = String(req.params.id);
+  const shotId = String(req.params.shotId);
+  const patch = { ...req.body, provenance: 'edited' };
+  let updatedShot: any = null;
+  try {
+    assertStoryboardEnrichment(patch, 'edited');
+
+    // Server-side validation of character references
+    const db = readDb();
+    const script = db.generated_scripts.find((item: any) => String(item.id) === projectId);
+    if (!script) return res.status(404).json({ error: 'Project not found' });
+    const shot = (script.newShots || []).find((item: any) => String(item.id) === shotId);
+    if (!shot) return res.status(404).json({ error: 'Shot not found' });
+
+    const validCharacterIds = new Set((script.newCharacters || []).map((c: any) => String(c.id || '')).filter(Boolean));
+    const matchedCharacterIds = patch.matchedCharacterIds || shot.matchedCharacterIds || [];
+
+    // 1. Validate matchedCharacterIds are known characters
+    for (const charId of matchedCharacterIds) {
+      if (!validCharacterIds.has(String(charId))) {
+        return res.status(422).json({ error: `STORYBOARD_SCHEMA_INVALID: Unknown character ID in matchedCharacterIds: ${charId}` });
+      }
+    }
+
+    // 2. Validate blocking matches matchedCharacterIds 1:1
+    const blocking = patch.blocking || [];
+    const blockingCharIds = blocking.map((b: any) => String(b.characterId));
+    const matchedCharSet = new Set(matchedCharacterIds.map(String));
+    const blockingCharSet = new Set(blockingCharIds);
+
+    for (const bCharId of blockingCharIds) {
+      if (!matchedCharSet.has(bCharId)) {
+        return res.status(422).json({ error: `STORYBOARD_SCHEMA_INVALID: Character ${bCharId} is in blocking but not bound to the shot` });
+      }
+    }
+    for (const mCharId of matchedCharacterIds) {
+      if (!blockingCharSet.has(mCharId)) {
+        return res.status(422).json({ error: `STORYBOARD_SCHEMA_INVALID: Bound character ${mCharId} has no blocking row` });
+      }
+    }
+    if (blockingCharSet.size !== blocking.length) {
+      return res.status(422).json({ error: `STORYBOARD_SCHEMA_INVALID: Duplicate blocking rows are not allowed` });
+    }
+
+    // 3. Validate at_character:<id> gaze targets exist in the project/script
+    for (const b of blocking) {
+      const match = /^at_character:(.+)/.exec(b.gaze || '');
+      if (match) {
+        const targetId = match[1];
+        if (!validCharacterIds.has(targetId)) {
+          return res.status(422).json({ error: `STORYBOARD_SCHEMA_INVALID: Gaze target character ${targetId} does not exist in script` });
+        }
+      }
+    }
+
+    await mutateDb((db) => {
+      const scriptMut = db.generated_scripts.find((item: any) => String(item.id) === projectId);
+      const shotMut = scriptMut?.newShots?.find((item: any) => String(item.id) === shotId);
+      if (shotMut) {
+        Object.assign(shotMut, patch);
+        updatedShot = { ...shotMut };
+      }
+    });
+    if (!updatedShot) return res.status(404).json({ error: 'Project or shot not found' });
+    return res.json({ success: true, shot: updatedShot });
+  } catch (error: any) {
+    return res.status(422).json({ error: error.message || 'Storyboard validation failed' });
   }
 });
 
@@ -1611,7 +2025,22 @@ app.put('/api/generated-scripts/:id/shots/:shotId/matched-characters', async (re
       const validCharacterIds = new Set((script.newCharacters || []).map((character: any) => String(character.id || '')).filter(Boolean));
       invalidCharacterIds = matchedCharacterIds.filter(characterId => !validCharacterIds.has(characterId));
       if (invalidCharacterIds.length) return;
+      
       shot.matchedCharacterIds = matchedCharacterIds;
+      
+      // Synchronize blocking rows to maintain 1:1 mapping
+      const existingBlocking = shot.blocking || [];
+      shot.blocking = matchedCharacterIds.map((charId: string) => {
+        const existingRow = existingBlocking.find((b: any) => String(b.characterId) === charId);
+        return existingRow || {
+          characterId: charId,
+          layer: 'midground',
+          position: 'center',
+          gaze: 'camera',
+          outOfFocus: false
+        };
+      });
+
       updatedShot = { ...shot };
     });
     if (!projectFound) return respond(404, { error: 'Project not found', projectId, shotId, matchedCharacterIds });
@@ -1621,6 +2050,28 @@ app.put('/api/generated-scripts/:id/shots/:shotId/matched-characters', async (re
   } catch (error: any) {
     console.error('[Shot Character Binding]', { projectId, shotId, matchedCharacterIds, error });
     return respond(500, { error: error.message || 'Failed to save shot character binding', projectId, shotId, matchedCharacterIds });
+  }
+});
+
+
+app.put('/api/generated-scripts/:id/shots/:shotId/optimized-prompt', async (req, res) => {
+  const projectId = String(req.params.id);
+  const shotId = String(req.params.shotId);
+  const optimizedPrompt = String(req.body?.optimizedPrompt || '').trim();
+  let updatedShot: any = null;
+  try {
+    await mutateDb((db) => {
+      const script = db.generated_scripts.find((item: any) => String(item.id) === projectId);
+      const shot = script?.newShots?.find((item: any) => String(item.id) === shotId);
+      if (!shot) return;
+      shot.optimizedPrompt = optimizedPrompt;
+      shot.provenance = 'ai_optimized';
+      updatedShot = { ...shot };
+    });
+    if (!updatedShot) return res.status(404).json({ error: 'Project or shot not found' });
+    return res.json({ success: true, optimizedPrompt, shot: updatedShot });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to save optimized prompt' });
   }
 });
 
@@ -2008,7 +2459,7 @@ const mockTasks = new Map<string, {
 
 // 10.925. POST /api/generate-animation - Generate image-to-video using Kling AI or Mock Fallback
 app.post('/api/generate-animation', async (req, res) => {
-  const { scriptId, shotIndex, imageUrl, prompt } = req.body;
+  const { scriptId, shotIndex, imageUrl } = req.body;
 
   if (!scriptId || shotIndex === undefined || !imageUrl) {
     return res.status(400).json({ error: 'scriptId, shotIndex, and imageUrl are required' });
@@ -2032,6 +2483,14 @@ app.post('/api/generate-animation', async (req, res) => {
   const isReal = !!(apiKey || (ak && sk));
 
   if (!isReal) {
+    let resolvedPrompt;
+    try {
+      resolvedPrompt = buildVideoPrompt(checkShot, 'kling');
+    } catch (error: any) {
+      return res.status(422).json({ error: error.message || 'Video prompt validation failed' });
+    }
+    const prompt = resolvedPrompt.prompt;
+
     // Mock Fallback Mode
     const taskId = `mock_${Math.random().toString(36).substring(2, 9)}`;
     mockTasks.set(taskId, {
@@ -2039,7 +2498,7 @@ app.post('/api/generate-animation', async (req, res) => {
       progress: 0,
       scriptId,
       shotIndex,
-      prompt: prompt || checkShot.description || 'cinematic motion',
+      prompt,
       imageUrl,
       createdAt: Date.now()
     });
@@ -2310,15 +2769,37 @@ app.get('/api/animation-status/:taskId', async (req, res) => {
   }
 });
 
+app.post('/api/video-prompt/preview', (req, res) => {
+  try {
+    const provider = String(req.body?.provider || 'kling') as VideoPromptProvider;
+    if (!(provider in VIDEO_PROVIDER_CONFIG)) return res.status(400).json({ error: `Unsupported video provider: ${provider}` });
+    return res.json(buildVideoPrompt(req.body?.shot, provider));
+  } catch (error: any) {
+    return res.status(422).json({ error: error.message || 'Video prompt validation failed' });
+  }
+});
+
 // 10.927. POST /api/generate-video - Add image-to-video using Kling API and poll internally until succeeded
 app.post('/api/generate-video', async (req, res) => {
-  const { imageUrl, prompt, scriptId, shotIndex } = req.body;
+  const { imageUrl, scriptId, shotIndex, provider } = req.body;
 
   if (!imageUrl) {
     return res.status(400).json({ error: 'imageUrl is required' });
   }
 
-  const apiKey = process.env.KLING_API_KEY;
+  const sourceScript = readDb().generated_scripts.find((script: any) => String(script.id) === String(scriptId));
+  const sourceShot = sourceScript?.newShots?.[shotIndex];
+  if (!sourceShot) return res.status(404).json({ error: 'Script or shot not found' });
+  let resolvedPrompt;
+  try {
+    resolvedPrompt = buildVideoPrompt(sourceShot, provider || 'kling');
+  } catch (error: any) {
+    return res.status(422).json({ error: error.message || 'Video prompt validation failed' });
+  }
+  const prompt = resolvedPrompt.prompt;
+  console.log('[VideoPrompt:Resolved]', JSON.stringify({ scriptId, shotIndex, provider: 'kling', prompt, nativeParams: resolvedPrompt.nativeParams, deliveryNotes: resolvedPrompt.deliveryNotes }));
+
+  const apiKey = (provider || 'kling') === 'seedance' ? null : process.env.KLING_API_KEY;
   const isReal = !!apiKey;
 
   const updateGenerateVideoSubmitted = async (taskId: string) => {
@@ -2412,8 +2893,8 @@ app.post('/api/generate-video', async (req, res) => {
         model_name: 'kling-v1',
         image: resolvedUrl,
         image_url: resolvedUrl,
-        prompt: prompt || 'cinematic motion',
-        duration: '5',
+        prompt,
+        duration: String(sourceShot.durationSec),
         mode: 'std'
       })
     });
@@ -2791,64 +3272,30 @@ function probeDirectoryWritable(directory: string): ComfyPermissionCheck {
   return result;
 }
 
-async function runningComfyProcesses(comfyRoot: string): Promise<Array<{ processId: number; name: string; commandLine: string }>> {
-  if (process.platform !== 'win32') return [];
-  const escapedRoot = comfyRoot.replace(/'/g, "''");
-  const command = `powershell.exe -NoProfile -Command "$items = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*${escapedRoot.replace(/\\/g, '\\\\')}*') -and ($_.Name -match 'python|comfy') } | Select-Object ProcessId,Name,CommandLine; $items | ConvertTo-Json -Compress"`;
-  try {
-    const { stdout } = await execPromise(command, { windowsHide: true, timeout: 8_000 });
-    const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : [];
-    const matches = (Array.isArray(parsed) ? parsed : [parsed]).map((item: any) => ({ processId: Number(item.ProcessId), name: String(item.Name || ''), commandLine: String(item.CommandLine || '') }));
-    if (matches.length) return matches;
-  } catch (error: any) {
-    console.warn('[ComfyPreflight:ProcessCheckFailed]', error.message);
-  }
-  try {
-    const fallback = `powershell.exe -NoProfile -Command "$items = Get-NetTCPConnection -State Listen -LocalPort 8001 -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; [pscustomobject]@{ ProcessId = $_.OwningProcess; Name = $p.ProcessName; CommandLine = '[command line unavailable; detected by port 8001]' } }; $items | ConvertTo-Json -Compress"`;
-    const { stdout } = await execPromise(fallback, { windowsHide: true, timeout: 8_000 });
-    const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : [];
-    const matches = (Array.isArray(parsed) ? parsed : [parsed]).map((item: any) => ({ processId: Number(item.ProcessId), name: String(item.Name || ''), commandLine: String(item.CommandLine || '') }));
-    if (matches.length) return matches;
-  } catch (error: any) {
-    console.warn('[ComfyPreflight:PortOwnerCheckFailed]', error.message);
-  }
-  try {
-    const { stdout } = await execPromise('netstat -ano -p tcp', { windowsHide: true, timeout: 8_000 });
-    const pids = [...new Set(stdout.split(/\r?\n/)
-      .filter(line => /:8001\s+.*LISTENING\s+\d+\s*$/i.test(line))
-      .map(line => Number(line.trim().split(/\s+/).at(-1)))
-      .filter(Boolean))];
-    const detected = pids.map(processId => ({ processId, name: 'ComfyUI port owner', commandLine: '[detected by netstat port 8001]' }));
-    try {
-      const escapedRoot = comfyRoot.replace(/'/g, "''");
-      const rootCommand = `powershell.exe -NoProfile -Command "$items = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith('${escapedRoot}', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { [pscustomobject]@{ ProcessId=$_.Id; Name=$_.ProcessName; CommandLine=('[command line unavailable] executable=' + $_.Path) } }; $items | ConvertTo-Json -Compress"`;
-      const rootResult = await execPromise(rootCommand, { windowsHide: true, timeout: 8_000 });
-      const parsed = rootResult.stdout.trim() ? JSON.parse(rootResult.stdout.trim()) : [];
-      for (const item of (Array.isArray(parsed) ? parsed : [parsed])) detected.push({ processId: Number(item.ProcessId), name: String(item.Name || ''), commandLine: String(item.CommandLine || '') });
-    } catch (error: any) {
-      console.warn('[ComfyPreflight:RootProcessCheckFailed]', error.message);
-    }
-    return [...new Map(detected.map(item => [item.processId, item])).values()];
-  } catch (error: any) {
-    console.warn('[ComfyPreflight:NetstatCheckFailed]', error.message);
-    return [];
-  }
-}
-
-async function comfyPermissionPreflight() {
+async function comfyLightweightPreflight(context: Record<string, unknown> = {}) {
   const comfyRoot = path.resolve(process.env.COMFYUI_ROOT || 'C:\\Users\\Owner\\Documents\\ComfyUI');
   let online = false;
   let onlineError: string | null = null;
+  let queue: any = null;
   try {
-    await comfyFetch('/system_stats', {}, 5_000);
+    const response = await comfyFetch('/queue', {}, 5_000);
+    queue = await response.json();
     online = true;
-  } catch (error: any) {
-    onlineError = error.message || String(error);
-  }
-  const input = probeDirectoryWritable(path.join(comfyRoot, 'input'));
-  const output = probeDirectoryWritable(path.join(comfyRoot, 'output'));
-  const userDefault = probeDirectoryWritable(path.join(comfyRoot, 'user', 'default'));
-  const processes = await runningComfyProcesses(comfyRoot);
+  } catch (error: any) { onlineError = error.message || String(error); }
+  return {
+    comfyUrl: comfyBaseUrl(), comfyRoot, online, onlineError, queue,
+    busy: Number(queue?.queue_running?.length || 0) > 0 || Number(queue?.queue_pending?.length || 0) > 0,
+    input: probeDirectoryWritable(path.join(comfyRoot, 'input')),
+    output: probeDirectoryWritable(path.join(comfyRoot, 'output')),
+    userDefault: probeDirectoryWritable(path.join(comfyRoot, 'user', 'default')),
+    context,
+  };
+}
+
+async function comfyPermissionPreflight(context: Record<string, unknown> = {}) {
+  const comfyRoot = path.resolve(process.env.COMFYUI_ROOT || 'C:\\Users\\Owner\\Documents\\ComfyUI');
+  const light = await comfyLightweightPreflight(context);
+  const processDetection = await detectComfyProcesses(comfyRoot, context);
   const dbCandidates = [path.join(comfyRoot, 'user', 'default', 'comfyui.db'), path.join(comfyRoot, 'comfyui.db')];
   const dbPath = dbCandidates.find(candidate => fs.existsSync(candidate)) || dbCandidates[0];
   let dbLocked = false;
@@ -2862,7 +3309,7 @@ async function comfyPermissionPreflight() {
       dbLockError = error.message || String(error);
     }
   }
-  return { comfyUrl: comfyBaseUrl(), comfyRoot, online, onlineError, input, output, userDefault, processes, multipleProcesses: processes.length > 1, dbPath, dbExists: fs.existsSync(dbPath), dbLocked, dbLockError };
+  return { ...light, processDetection, processes: processDetection.candidates, multipleProcesses: processDetection.multipleProcesses, dbPath, dbExists: fs.existsSync(dbPath), dbLocked, dbLockError };
 }
 
 function validateWorkflow(value: unknown): ComfyWorkflow {
@@ -3245,26 +3692,53 @@ async function persistComfyImage(image: ComfyImageOutput, context: ImageTargetCo
 }
 
 let lastWorkflowFamily: string | null = null;
+const fullyPreflightedThreeViewBatches = new Set<string>();
+const threeViewBatchProcessSnapshots = new Map<string, any>();
+
+function assertComfyPreflight(preflight: any) {
+  if (!preflight.online) throw new Error(`ComfyUI 未连接：${preflight.onlineError || preflight.comfyUrl}`);
+  if (preflight.multipleProcesses) {
+    const pids = preflight.processDetection.confirmedMainPids.length >= 2 ? preflight.processDetection.confirmedMainPids : preflight.processDetection.portOwnerPids;
+    throw new Error(`检测到多个 ComfyUI 主进程，请关闭重复实例。PID: ${pids.join(', ')}`);
+  }
+  if (preflight.dbLocked) throw new Error(`检测到明确 comfyui.db lock 错误：${preflight.dbLockError || preflight.dbPath}`);
+  if (!preflight.input.writable || !preflight.output.writable || !preflight.userDefault.writable) {
+    const details = [!preflight.input.writable ? `input: ${preflight.input.error}` : '', !preflight.output.writable ? `output: ${preflight.output.error}` : '', !preflight.userDefault.writable ? `user/default: ${preflight.userDefault.error}` : ''].filter(Boolean).join('; ');
+    throw new Error(`ComfyUI input/output 无写入权限。${details}`);
+  }
+}
+
+async function logThreeViewDiagnostic(tag: 'Preflight' | 'Submit' | 'Complete', task: any, preflight?: any) {
+  if (task.targetType !== 'character' || !['front', 'side', 'back'].includes(String(task.viewType))) return;
+  const promptId = task.comfyPromptId || task.id;
+  let queue: any = preflight?.queue || null;
+  let historyHasResult = false;
+  try {
+    if (!queue) queue = await (await comfyFetch('/queue', {}, 5_000)).json();
+    const history = await (await comfyFetch(`/history/${encodeURIComponent(promptId)}`, {}, 5_000)).json();
+    historyHasResult = !!history?.[promptId];
+  } catch {}
+  const detection = preflight?.processDetection || threeViewBatchProcessSnapshots.get(String(task.workflowBatchId || ''));
+  const livePortOwnerPids = await port8001OwnerPids();
+  console.log(`[ThreeView:${tag}]`, JSON.stringify({ timestamp: new Date().toISOString(), viewType: task.viewType, taskId: task.id, workflowBatchId: task.workflowBatchId || null, promptId, portOwnerPids: livePortOwnerPids, candidates: detection?.candidates || [], queue: queue ? { running: queue.queue_running?.length || 0, pending: queue.queue_pending?.length || 0 } : 'unavailable', historyHasResult }));
+}
 
 async function submitComfyTask(task: any) {
   try {
     console.log('[ComfySubmit:Request]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: task.comfyPromptId || task.id, status: task.status, error: null }));
-    const preflight = await comfyPermissionPreflight();
+    const batchId = String(task.workflowBatchId || '');
+    const previousBatchFailure = batchId ? dbSqlite.prepare(`SELECT error FROM comfyui_tasks WHERE workflowBatchId = ? AND status = 'failed' AND id <> ? ORDER BY completedAt DESC LIMIT 1`).get(batchId, task.id) as { error?: string } | undefined : undefined;
+    const retryStrongScan = /(?:8001|comfyui\.db|connection|连接|端口|lock)/i.test(previousBatchFailure?.error || '');
+    const useLightweight = !!batchId && fullyPreflightedThreeViewBatches.has(batchId) && !retryStrongScan;
+    const preflight = useLightweight
+      ? await comfyLightweightPreflight({ taskId: task.id, viewType: task.viewType, workflowBatchId: batchId, mode: 'lightweight' })
+      : await comfyPermissionPreflight({ taskId: task.id, viewType: task.viewType, workflowBatchId: batchId || null, mode: 'full' });
     console.log('[ComfyPreflight:Result]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, ...preflight }));
-    if (!preflight.online) throw new Error(`ComfyUI 未连接：${preflight.onlineError || preflight.comfyUrl}`);
-    if (preflight.multipleProcesses || preflight.dbLocked) {
-      const processDetails = preflight.processes.map(item => `PID ${item.processId}: ${item.commandLine || item.name}`).join('; ');
-      const lockDetails = preflight.dbLocked ? `comfyui.db: ${preflight.dbLockError || preflight.dbPath}` : '';
-      throw new Error(`检测到 8001 已被占用或 comfyui.db 被锁，请关闭重复 ComfyUI 进程后，只启动一个 ComfyUI 实例。${[processDetails, lockDetails].filter(Boolean).join('; ')}`);
-    }
-    if (!preflight.input.writable || !preflight.output.writable || !preflight.userDefault.writable) {
-      const details = [
-        !preflight.input.writable ? `input: ${preflight.input.error || 'not writable'}` : '',
-        !preflight.output.writable ? `output: ${preflight.output.error || 'not writable'}` : '',
-        !preflight.userDefault.writable ? `user/default: ${preflight.userDefault.error || 'not writable'}` : '',
-      ].filter(Boolean).join('; ');
-      throw new Error(`ComfyUI input/output 无写入权限，请关闭重复 ComfyUI 进程或修复文件夹权限。${details}`);
-    }
+    assertComfyPreflight(preflight);
+    if (preflight.busy) console.log('[ComfyProcessDetect:Decision]', JSON.stringify({ timestamp: new Date().toISOString(), taskId: task.id, viewType: task.viewType, decision: 'ComfyUI 正在生成，等待当前任务完成。' }));
+    else if ((preflight as any).processDetection?.commandLineUnavailable && (preflight as any).processDetection.portOwnerPids.length === 1) console.log('[ComfyProcessDetect:Decision]', JSON.stringify({ timestamp: new Date().toISOString(), taskId: task.id, viewType: task.viewType, decision: '无法读取部分进程命令行，但 8001 端口存在单一 owner，继续。' }));
+    else console.log('[ComfyProcessDetect:Decision]', JSON.stringify({ timestamp: new Date().toISOString(), taskId: task.id, viewType: task.viewType, decision: 'ComfyUI 已连接。' }));
+    await logThreeViewDiagnostic('Preflight', task, preflight);
     let workflow: any;
     if (task.apiWorkflowJson) {
       try {
@@ -3461,6 +3935,8 @@ async function submitComfyTask(task: any) {
     }
 
     dbSqlite.prepare(`UPDATE comfyui_tasks SET comfyPromptId = ?, stateDetail = 'queued', queuePosition = NULL, updatedAt = ? WHERE id = ? AND status = 'processing'`).run(String(result.prompt_id), new Date().toISOString(), task.id);
+    task.comfyPromptId = String(result.prompt_id);
+    await logThreeViewDiagnostic('Submit', task, preflight);
     console.log('[TaskState:Update]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: result.prompt_id, status: 'processing', error: null }));
 
     console.log(`[Worker] Task ${task.id} accepted by ComfyUI successfully.`);
@@ -3605,8 +4081,10 @@ async function checkComfyTaskState(promptId: string): Promise<
     if (inRunning) return { status: 'processing', queuePosition: 0, phase: 'running' };
     if (inPending) return { status: 'processing', queuePosition: pendingIndex + 1, phase: 'queued' };
 
-    // 3. Not in history and not in queue
-    return { status: 'failed', error: `ComfyUI prompt '${promptId}' is missing from both queue and history` };
+    // 3. Not in history and not in queue yet — may just be a query-timing race with ComfyUI's
+    // internal queue registration. Report 'missing' so pollActiveTasks can apply its grace period
+    // (recoveryCheckCount / missingSince) instead of failing on a single observation.
+    return { status: 'missing' };
   } catch (err: any) {
     const isNetwork = err.code === 'ECONNREFUSED' || err.message.includes('fetch');
     if (isNetwork) {
@@ -3729,6 +4207,7 @@ async function pollActiveTasks() {
           console.log('[TaskState:Update]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: promptId, status: 'succeeded', outputImageUrl: imageUrl, error: null }));
           dbSqlite.prepare(`UPDATE comfyui_shot_batch_items SET finalStatus = 'success', updatedAt = ? WHERE taskId = ?`).run(new Date().toISOString(), task.id);
         });
+        await logThreeViewDiagnostic('Complete', { ...task, comfyPromptId: promptId });
 
       } else if (state.status === 'processing') {
         dbSqlite.prepare(`UPDATE comfyui_tasks SET stateDetail=?, queuePosition=?, updatedAt=? WHERE id=? AND status='processing'`).run(state.phase, state.queuePosition, new Date().toISOString(), task.id);
@@ -3758,6 +4237,7 @@ async function pollActiveTasks() {
         `).run(missingSince, count, new Date().toISOString(), task.id);
 
         const elapsed = Date.now() - new Date(missingSince).getTime();
+        console.log('[TaskState:Missing]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, prompt_id: promptId, recoveryCheckCount: count, missingSinceMs: elapsed }));
         if (count >= 5 && elapsed >= 60_000) {
           console.log(`[Worker] Task ${task.id} is confirmed lost after ${count} checks and ${elapsed}ms. Failing task.`);
           dbSqlite.prepare(`
@@ -3981,7 +4461,11 @@ class ComfyUiRuntimeManager {
       this.childProcess = spawn(executable, args, {
         cwd: workDir || undefined,
         shell: false,
-        env: spawnEnv
+        env: spawnEnv,
+        // CREATE_NO_WINDOW: give the child its own hidden console instead of inheriting
+        // ours. When this server is orphaned from a dead terminal (ConPTY host gone),
+        // console children that inherit it die at DLL init with exit code 0xC0000142.
+        windowsHide: true
       });
 
       this.pid = this.childProcess.pid || null;
@@ -4981,7 +5465,7 @@ function updateImportedSlot(scripts: any[], task: any, imageUrl: string, generat
   throw new ImportResultError(422, `Unsupported target type '${task.targetType}'.`);
 }
 
-function publicComfyTask(task: any) {
+export function publicComfyTask(task: any) {
   let hasUiWorkflow = false;
   try {
     exportedUiWorkflow(task);
@@ -4990,7 +5474,15 @@ function publicComfyTask(task: any) {
     hasUiWorkflow = false;
   }
   const { apiWorkflowJson: _apiWorkflowJson, uiWorkflowJson: _uiWorkflowJson, ...publicTask } = task;
-  return { ...publicTask, errorMessage: publicTask.error || null, outputImageUrl: publicTask.imageUrl || null, hasUiWorkflow };
+  const errorMessage = String(publicTask.error || '');
+  const normalized = errorMessage.toLowerCase();
+  const failReason = publicTask.status !== 'failed' ? null
+    : publicTask.stateDetail === 'timeout' || /timed out|timeout|超时/.test(normalized) ? 'timeout'
+      : /missing from both queue and history|queue.*missing|队列.*丢/.test(normalized) ? 'lost_queue'
+        : /parameter|invalid|schema|参数/.test(normalized) ? 'param_error'
+          : /missing|not found|缺失/.test(normalized) ? 'missing'
+            : 'unknown';
+  return { ...publicTask, failReason, errorMessage: errorMessage || null, outputImageUrl: publicTask.imageUrl || null, hasUiWorkflow };
 }
 
 function storedGeneratedScript(projectId: string) {
@@ -5738,7 +6230,7 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
           targetId,
           viewType,
           shotIndex: idx,
-          prompt: shot.description || '',
+          prompt: [shot.description || '', script.artDirection?.overlay ? `Project art direction style overlay (style only; preserve shot content and composition): ${script.artDirection.overlay}` : ''].filter(Boolean).join('\n\n'),
           style: getStyleEnglishBackend(shot.style || '写实'),
           negativePrompt: undefined,
           seed: undefined,
@@ -6635,6 +7127,16 @@ app.post('/api/generate-image', async (req, res) => {
         `).get(String(projectId || ''), targetId) as { id: string } | undefined;
         const sourceTaskId = req.body.sourceTaskId || avatarTask?.id || null;
 
+        const batchPreflight = await comfyPermissionPreflight({ workflowBatchId, targetId, viewType: 'front,side,back', mode: 'batch-full' });
+        console.log('[ThreeView:Preflight]', JSON.stringify({ timestamp: new Date().toISOString(), workflowBatchId, targetId, taskId: null, viewType: 'front,side,back', ...batchPreflight }));
+        try {
+          assertComfyPreflight(batchPreflight);
+        } catch (error: any) {
+          return res.status(409).json({ error: error.message, code: batchPreflight.multipleProcesses ? 'MULTIPLE_COMFYUI_PROCESSES' : 'COMFYUI_PREFLIGHT_FAILED' });
+        }
+        fullyPreflightedThreeViewBatches.add(workflowBatchId);
+        threeViewBatchProcessSnapshots.set(workflowBatchId, batchPreflight.processDetection);
+
         const tx = dbSqlite.transaction(() => {
           for (const vp of viewPrompts) {
             const taskId = crypto.randomUUID();
@@ -6902,24 +7404,6 @@ app.post('/api/generate-image', async (req, res) => {
   }
 });
 
-// If in production, serve the frontend dist folder
-if (process.env.NODE_ENV === 'production') {
-  const DIST_DIR = path.join(__dirname, 'dist');
-  app.use(express.static(DIST_DIR));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(DIST_DIR, 'index.html'));
-  });
-}
-
-// Pre-initialize database / run migration immediately on startup
-try {
-  console.log('[SQLite] Initializing database and running migration check...');
-  readDb();
-  migrateDatabaseIds();
-} catch (e) {
-  console.error('[SQLite] Initialization failed:', e);
-}
-
 registerShotAnalysisModule(app, dbSqlite);
 registerCameraDeriveModule(app, dbSqlite, {
   mutateDb,
@@ -6933,10 +7417,44 @@ registerCameraDeriveModule(app, dbSqlite, {
   },
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
-  if (process.env.DISABLE_COMFY_WORKER !== 'true') {
-    startComfyWorker();
-  }
+// Keep unknown API routes machine-readable. This must precede the production
+// SPA fallback, otherwise an API typo receives index.html and breaks JSON parsing.
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    error: {
+      code: 'API_ROUTE_NOT_FOUND',
+      message: `API route not found: ${req.method} ${req.originalUrl}`,
+      retryable: false,
+    },
+  });
 });
+
+// If in production, serve the frontend dist folder
+if (process.env.NODE_ENV === 'production') {
+  const DIST_DIR = path.join(__dirname, 'dist');
+  app.use(express.static(DIST_DIR));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(DIST_DIR, 'index.html'));
+  });
+}
+
+const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === __filename;
+
+if (isMain) {
+  // Pre-initialize database / run migration immediately on startup
+  try {
+    console.log('[SQLite] Initializing database and running migration check...');
+    readDb();
+    migrateDatabaseIds();
+  } catch (e) {
+    console.error('[SQLite] Initialization failed:', e);
+  }
+
+  // Start Server
+  app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
+    if (process.env.DISABLE_COMFY_WORKER !== 'true') {
+      startComfyWorker();
+    }
+  });
+}

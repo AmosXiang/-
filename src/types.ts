@@ -16,6 +16,25 @@ export interface Shot {
   characterIds?: string[];
   characterNames?: string[];
   matchedCharacterIds?: string[];
+  scriptConfirmed?: boolean;
+  camera?: {
+    move: 'push_in' | 'pull_out' | 'static' | 'follow' | 'pan' | 'tilt' | 'handheld';
+    speed: 'slow' | 'medium' | 'fast';
+    note: string;
+  };
+  framing?: {
+    shotSize: 'extreme_close' | 'close_up' | 'medium_close' | 'medium' | 'full' | 'wide';
+    angle: 'front' | 'side' | 'back' | 'high' | 'low' | 'pov';
+  };
+  blocking?: Array<{
+    characterId: string;
+    layer: 'foreground' | 'midground' | 'background';
+    position: 'left' | 'center' | 'right';
+    gaze: 'camera' | 'frame_left' | 'frame_right' | 'away' | `at_character:${string}`;
+    outOfFocus: boolean;
+  }>;
+  durationSec?: number;
+  provenance?: 'analyzed' | 'edited' | 'ai_optimized';
   // 机位派生(camera derive):结构化机位参数与主帧派生关系。
   // A1 确认:shots 存于 SQLite store 表的 generated_scripts JSON 文档内,
   // 因此这些字段是 JSON 字段而非表列;全部可选,旧记录天然兼容。
