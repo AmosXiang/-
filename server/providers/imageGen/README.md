@@ -4,9 +4,9 @@
 
 Rules are loaded from `config/imageGenRouting.json` in order. Master frames and shots with bound characters use `comfyui_local`; other shots use `agnes`. `forceProvider` is the only override. A provider error is recorded and returned without invoking the other provider.
 
-### Rollout state: autoRoute is OFF by default
+### Rollout state: autoRoute is ON
 
-`config/imageGenRouting.json` has a top-level `autoRoute` flag, currently `false`. The existing frontend still speaks the ComfyUI async contract (submit → `taskId` → poll `/api/comfyui/tasks`), while the Agnes path returns a synchronous `{ imageUrl }`. Until the UI is adapted (planned as the immediate follow-up PR), the middleware does not take over normal shot requests: they pass through to the legacy handler unchanged. Explicit `forceProvider` requests are routed regardless of `autoRoute`, which is how API-level acceptance runs today.
+`config/imageGenRouting.json` has a top-level `autoRoute` flag, currently `true`: normal shot generation requests are routed by the rules above. The frontend handles both response contracts by shape: a synchronous Agnes `{ provider: 'agnes', imageUrl }` updates the shot state directly (the server has already persisted it), while a ComfyUI `{ taskId }` follows the existing async polling flow. Explicitly ComfyUI-bound UI operations (the ComfyUI parameter dialog, shot advanced-adjust which opens the ComfyUI GUI) send `forceProvider: 'comfyui_local'`. Set `autoRoute` back to `false` to instantly restore pure legacy behavior without redeploying code.
 
 ### Requests that never enter provider routing
 
