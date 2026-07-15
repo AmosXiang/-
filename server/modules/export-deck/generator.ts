@@ -29,6 +29,7 @@ interface ShotExportData {
   isStale: boolean;
   localImagePath: string | null; // resolved local path if valid and exists
   imageExt: string | null; // image extension e.g. .png
+  sceneId: string | null;
 }
 
 /**
@@ -69,6 +70,13 @@ function getLocalPath(url: string | undefined | null, uploadsDir: string): strin
 }
 
 /**
+ * Sanitizes folder and file names to prevent path traversal and bad characters.
+ */
+function sanitizeFilename(name: string): string {
+  return name.replace(/[^\p{L}\p{N}_\-]/gu, '_');
+}
+
+/**
  * Truncates text and appends "…（全文见 manifest）" if it exceeds maxLength.
  */
 function truncateText(text: string | undefined | null, maxLength: number): string {
@@ -79,11 +87,13 @@ function truncateText(text: string | undefined | null, maxLength: number): strin
 
 /**
  * Truncates role text and appends "..." if it exceeds maxLength.
+ * Uses Array.from to prevent splitting surrogate pairs (emojis).
  */
 function truncateRole(text: string | undefined | null, maxLength: number): string {
   if (!text) return '';
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + '…';
+  const chars = Array.from(text);
+  if (chars.length <= maxLength) return text;
+  return chars.slice(0, maxLength).join('') + '…';
 }
 
 /**
@@ -744,7 +754,10 @@ export function generateManifest(
   exportRelDir: string,
   uploadsDir: string
 ): string {
-  const manifest = {
+  const sceneReferences = (script as any).sceneReferences;
+  const hasScenes = Array.isArray(sceneReferences) && sceneReferences.length > 0;
+
+  const manifest: any = {
     manifestVersion: 1,
     projectId: String(script.id),
     title: script.newTitle || '',
@@ -783,8 +796,25 @@ export function generateManifest(
       finalized: shot.finalized,
       isStale: shot.isStale,
       imageFile: shot.localImagePath ? `finals/shot-${String(shot.index).padStart(2, '0')}${shot.imageExt}` : null,
+      sceneId: shot.sceneId ?? null,
     })),
   };
+
+  if (hasScenes) {
+    manifest.scenes = sceneReferences.map((scene: any, idx: number) => {
+      const localPath = scene.imageUrl ? getLocalPath(scene.imageUrl, uploadsDir) : null;
+      const hasLocal = localPath ? isReadableFile(localPath) : false;
+      const ext = localPath && hasLocal ? path.extname(localPath) || '.png' : '';
+      const twoDigitIdx = String(idx + 1).padStart(2, '0');
+      const sanitized = sanitizeFilename(scene.name || 'scene');
+      return {
+        id: String(scene.id),
+        name: scene.name || '',
+        imageFile: hasLocal ? `scenes/${twoDigitIdx}_${sanitized}${ext}` : null,
+        overlay: scene.overlay || null,
+      };
+    });
+  }
 
   return JSON.stringify(manifest, null, 2);
 }
