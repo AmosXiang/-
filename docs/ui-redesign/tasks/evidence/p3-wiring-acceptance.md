@@ -163,3 +163,11 @@ Tracked implementation changes are limited to:
 - this evidence document
 
 No router, entrypoint, module implementation, dependency, upload asset, or formal database file was changed.
+
+## CC review follow-up
+
+The approved review identified that the batch route pre-appended the overlay before `optimizePrompt`, so an optimizer rewrite could prevent the later exact-string idempotency check from recognizing the first injection.
+
+The batch route now passes only `shot.description` into `prepareComfyTaskData`. The shared preparation path performs the sole overlay injection after prompt optimization. This removes the optimizer-dependent double-injection path and also removes the redundant batch-level contract resolution.
+
+The suggested broad `&& !reqPresetRole` guard was not added. No current shot caller sends `presetRole`, and accepting any caller-supplied role as a contract bypass would weaken the current authority boundary. A future shot upscale operation should introduce an explicit non-storyboard operation/view discriminator and test that discriminator rather than treating every non-empty `presetRole` as trusted.

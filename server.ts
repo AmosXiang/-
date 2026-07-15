@@ -6298,13 +6298,6 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
     if (preflight.total === 0) return res.json({ success: true, requiresConfirmation: false, count: 0, message: 'No shots match the selected batch mode' });
     if (confirmed !== true) return res.json({ success: true, requiresConfirmation: true, preflight });
     const workflowBatchId = crypto.randomUUID();
-    let batchEffectiveStyle: ReturnType<typeof resolveEffectiveStyleContract> | null = null;
-    try {
-      batchEffectiveStyle = resolveEffectiveStyleContract(readDb, String(projectId));
-    } catch (error: any) {
-      console.warn('[StyleContract:BatchFallback]', JSON.stringify({ projectId, error: error?.code || error?.message || String(error) }));
-    }
-    const batchStyleOverlay = batchEffectiveStyle?.styleOverlay ?? String(script.artDirection?.overlay || '');
 
     const tasksToCreate: any[] = [];
     let batchOrder = 0;
@@ -6343,7 +6336,7 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
           targetId,
           viewType,
           shotIndex: idx,
-          prompt: [shot.description || '', batchStyleOverlay ? `Project art direction style overlay (style only; preserve shot content and composition): ${batchStyleOverlay}` : ''].filter(Boolean).join('\n\n'),
+          prompt: shot.description || '',
           style: getStyleEnglishBackend(shot.style || '写实'),
           negativePrompt: undefined,
           seed: undefined,
