@@ -24,6 +24,8 @@ import {
   registerStyleContractModule,
   resolveEffectiveStyleContract,
 } from './server/modules/style-contract/index.ts';
+import { registerSceneReferenceModule, sceneForShot } from './server/modules/scene-reference/index.ts';
+import { DEFAULT_COMFY_NEGATIVE_PROMPT } from './server/constants/comfyDefaults.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -1777,13 +1779,20 @@ function projectSnapshotVersions(projectId: string): { storyVersion: number; sty
 }
 
 // 组装一个 shot main 生成任务的参数快照 JSON。seed 取任务解析后的实际值(random 时可能为空)。
-function buildShotGenerationSnapshot(projectId: string, seed: unknown): { json: string; storyVersion: number } {
+function buildShotGenerationSnapshot(projectId: string, shotId: string, seed: unknown): { json: string; storyVersion: number } {
   const { storyVersion } = projectSnapshotVersions(projectId);
   let effective: ReturnType<typeof resolveEffectiveStyleContract> | null = null;
+  let scene: { id: string; overlay: string } | null = null;
   try {
     effective = resolveEffectiveStyleContract(readDb, String(projectId || ''));
   } catch (error: any) {
     console.warn('[StyleContract:SnapshotFallback]', JSON.stringify({ projectId, error: error?.code || error?.message || String(error) }));
+  }
+  try {
+    const project = readDb().generated_scripts.find((item: any) => String(item.id) === String(projectId));
+    scene = project ? sceneForShot(project, shotId) : null;
+  } catch (error: any) {
+    console.warn('[SceneReference:SnapshotFallback]', JSON.stringify({ projectId, shotId, error: error?.message || String(error) }));
   }
   const seedNum = seed === undefined || seed === null || seed === '' ? null : Number(seed);
   return {
@@ -1794,12 +1803,13 @@ function buildShotGenerationSnapshot(projectId: string, seed: unknown): { json: 
       seed: Number.isFinite(seedNum as number) ? seedNum : null,
       contractLocked: effective?.locked === true,
       effective: {
-        storyboardPresetId: effective?.storyboardPresetId || null,
+        storyboardPresetId: effective?.storyboardPresetId ?? null,
         styleOverlay: effective?.styleOverlay ?? null,
         width: effective?.width ?? null,
         height: effective?.height ?? null,
         loraStrength: effective?.loraStrength ?? null,
       },
+      scene,
     }),
     storyVersion,
   };
@@ -3245,9 +3255,6 @@ type ImageTargetContext = {
   shotIndex?: number;
   characterName?: string;
 };
-
-const DEFAULT_COMFY_NEGATIVE_PROMPT =
-  'low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark';
 
 function comfyBaseUrl(): string {
   const configured = (process.env.COMFYUI_API_URL || 'http://127.0.0.1:8188').replace(/\/+$/, '');
@@ -6414,7 +6421,7 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
           t.characterReferenceTaskId,
           t.lockCharacterIdentity,
           t.batchOrder,
-          buildShotGenerationSnapshot(projectId, t.seed).json  // P3 参数快照(generate-all 全为 shot main)
+          buildShotGenerationSnapshot(projectId, t.targetId, t.seed).json  // P3 参数快照(generate-all 全为 shot main)
         );
       }
     });
@@ -6870,6 +6877,19 @@ async function prepareComfyTaskData(reqBody: any) {
         optimizedPrompt,
         `Project art direction style overlay (style only; preserve shot content and composition): ${overlay}`,
       ].filter(Boolean).join('\n\n');
+    }
+    try {
+      const project = readDb().generated_scripts.find((item: any) => String(item.id) === String(projectId));
+      const scene = project ? sceneForShot(project, targetId) : null;
+      const sceneOverlay = String(scene?.overlay || '').trim();
+      if (sceneOverlay && !optimizedPrompt.includes(sceneOverlay)) {
+        optimizedPrompt = [
+          optimizedPrompt,
+          `Scene reference (environment only; preserve shot content, composition and characters): ${sceneOverlay}`,
+        ].filter(Boolean).join('\n\n');
+      }
+    } catch (error: any) {
+      console.warn('[SceneReference:PrepareFallback]', JSON.stringify({ projectId: String(projectId || ''), targetId, error: error?.message || String(error) }));
     }
   }
   const contractControlsShotStyle = (effectiveStyleContract?.version || 0) >= 1;
@@ -7344,7 +7364,7 @@ app.post('/api/generate-image', async (req, res) => {
 
         // P3 参数快照:仅 shot 主画面生成记录故事/风格契约版本快照。
         const shotSnapshot = (prepared.taskData.targetType === 'shot' && prepared.taskData.viewType === 'main')
-          ? buildShotGenerationSnapshot(prepared.taskData.projectId, prepared.taskData.seed)
+          ? buildShotGenerationSnapshot(prepared.taskData.projectId, prepared.taskData.targetId, prepared.taskData.seed)
           : null;
 
         const tx = dbSqlite.transaction(() => {
@@ -7559,6 +7579,7 @@ registerShotReviewModule(app, dbSqlite, { mutateDb, uploadsDir: UPLOADS_DIR });
 registerExportDeckModule(app, dbSqlite, { uploadsDir: UPLOADS_DIR });
 registerStoryVersionModule(app, dbSqlite, { mutateDb });
 registerStyleContractModule(app, { readDb, mutateDb });
+registerSceneReferenceModule(app, { readDb, mutateDb, uploadsDir: UPLOADS_DIR });
 
 // Keep unknown API routes machine-readable. This must precede the production
 // SPA fallback, otherwise an API typo receives index.html and breaks JSON parsing.
