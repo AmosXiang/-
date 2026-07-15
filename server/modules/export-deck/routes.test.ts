@@ -323,6 +323,27 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     assert.ok(zip.file('finals/shot-01.png'), 'shot-01 inside zip');
     assert.ok(zip.file('finals/shot-02.png'), 'shot-02 inside zip');
     assert.ok(!zip.file('finals/shot-03.png'), 'shot-03 does not exist inside zip');
+
+    // Verify README.txt existence and content on disk
+    const readmePath = path.join(data.exportDir, 'README.txt');
+    assert.ok(fs.existsSync(readmePath), 'README.txt exists on disk');
+    const readmeContent = fs.readFileSync(readmePath, 'utf8');
+    assert.ok(readmeContent.includes('项目交付包说明文档'), 'README.txt has title');
+    assert.ok(readmeContent.includes('Test Project Title'), 'README.txt has project title');
+    assert.ok(readmeContent.includes('Captain Jack'), 'README.txt has character name');
+
+    // Verify characters directory existence and content on disk
+    const charactersDir = path.join(data.exportDir, 'characters');
+    assert.ok(fs.existsSync(charactersDir), 'characters directory exists on disk');
+    const jackFolder = path.join(charactersDir, '01_Captain_Jack');
+    assert.ok(fs.existsSync(jackFolder), 'Jack folder exists on disk');
+    const jackAvatar = path.join(jackFolder, 'avatar.png');
+    assert.ok(fs.existsSync(jackAvatar), 'Jack avatar file exists on disk');
+    assert.equal(fs.readFileSync(jackAvatar, 'utf8'), 'avatar-jack-content');
+
+    // Verify README.txt and characters folder inside ZIP
+    assert.ok(zip.file('README.txt'), 'README.txt exists inside zip');
+    assert.ok(zip.file('characters/01_Captain_Jack/avatar.png'), 'Jack avatar exists inside zip');
   });
 
   // 3. Clean up temp files

@@ -14,6 +14,7 @@ const db = new Database('db.sqlite');
 const PROJECT_ID = 'export-visual-test-project';
 const UPLOADS_DIR = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.resolve(process.cwd(), 'uploads');
 const EVIDENCE_DIR = path.resolve(process.cwd(), 'docs/ui-redesign/tasks/evidence');
+const SOFFICE_PATH = 'C:\\Program Files\\LibreOffice\\program\\soffice.exe';
 
 async function run() {
   console.log('--- Visual Test Deck Generation Pipeline ---');
@@ -58,12 +59,22 @@ async function run() {
         name: '梅 (Mei)',
         role: '女主角，前科研所高级工程师，灵魂重组者。',
         avatarUrl: '/uploads/avatars/jack.png',
+        views: {
+          front: `/uploads/projects/${PROJECT_ID}/shot-1-final.png`,
+          side: `/uploads/projects/${PROJECT_ID}/shot-2-fallback.png`,
+          back: `/uploads/projects/${PROJECT_ID}/shot-4-fallback.png`,
+        }
       },
       {
         id: 'char-2',
         name: '雷恩 (Reyn)',
         role: '基地守卫队长，铁血副官。',
-        avatarUrl: null, // missing avatar to test text placeholder
+        avatarUrl: null, // missing avatar
+        views: {
+          front: null,
+          side: `/uploads/projects/${PROJECT_ID}/shot-2-fallback.png`,
+          back: null,
+        }
       },
     ],
     newShots: [
@@ -187,40 +198,21 @@ async function run() {
   const pptxPath = path.join(exportDir, 'storyboard-deck.pptx');
   console.log('Export deck completed successfully. PPTX path:', pptxPath);
 
-  // 5. Render PPTX slides to PNG using PowerPoint COM automation
-  console.log('Starting PowerPoint COM automation rendering...');
-  const psScript = `
-    $pptxPath = "${pptxPath}"
-    $outputDir = "${EVIDENCE_DIR}"
-    Write-Host "Opening Presentation: $pptxPath"
-    $ppt = New-Object -ComObject PowerPoint.Application
-    # Suppress PowerPoint window
-    $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
-    $pres = $ppt.Presentations.Open($pptxPath, $true, $true, $false)
-    $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoFalse
-    
-    $pres.Slides | ForEach-Object {
-        $slideNum = $_.SlideIndex
-        $outputPath = Join-Path $outputDir "slide-$slideNum.png"
-        Write-Host "Exporting Slide $slideNum to $outputPath"
-        $_.Export($outputPath, "PNG", 1280, 720)
-    }
-    $pres.Close()
-    $ppt.Quit()
-    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($ppt) | Out-Null
-    Write-Host "PowerPoint rendering completed successfully."
-  `;
-
-  // Write temporary powershell script
-  const tempPs1Path = path.join(os.tmpdir(), 'render_pptx.ps1');
-  fs.writeFileSync(tempPs1Path, psScript, 'utf8');
-
+  // 5. Render PPTX slides to PDF & PNG using LibreOffice headless
+  console.log('Starting LibreOffice headless rendering to PDF...');
   try {
-    const { stdout, stderr } = await execPromise(`powershell -ExecutionPolicy Bypass -File "${tempPs1Path}"`);
-    console.log(stdout);
-    if (stderr) console.error('PowerShell Stderr:', stderr);
-  } finally {
-    fs.unlinkSync(tempPs1Path);
+    const pdfCmd = `"${SOFFICE_PATH}" --headless --convert-to pdf --outdir "${EVIDENCE_DIR}" "${pptxPath}"`;
+    const { stdout: pdfOut, stderr: pdfErr } = await execPromise(pdfCmd);
+    console.log('LibreOffice PDF Export stdout:', pdfOut);
+    if (pdfErr) console.error('LibreOffice PDF Export stderr:', pdfErr);
+
+    console.log('Starting LibreOffice headless rendering to PNG...');
+    const pngCmd = `"${SOFFICE_PATH}" --headless --convert-to png --outdir "${EVIDENCE_DIR}" "${pptxPath}"`;
+    const { stdout: pngOut, stderr: pngErr } = await execPromise(pngCmd);
+    console.log('LibreOffice PNG Export stdout:', pngOut);
+    if (pngErr) console.error('LibreOffice PNG Export stderr:', pngErr);
+  } catch (err) {
+    console.error('LibreOffice execution failed:', err);
   }
 
   // 6. Clean up mock database records
@@ -229,7 +221,7 @@ async function run() {
   db.prepare("INSERT OR REPLACE INTO store (key, value) VALUES ('generated_scripts', ?)").run(JSON.stringify(cleanScripts));
   db.prepare("DELETE FROM comfyui_tasks WHERE projectId = ?").run(PROJECT_ID);
 
-  console.log('Pipeline finished successfully. Screenshots generated in:', EVIDENCE_DIR);
+  console.log('Pipeline finished successfully. Artifacts generated in:', EVIDENCE_DIR);
 }
 
 run().catch((err) => {
