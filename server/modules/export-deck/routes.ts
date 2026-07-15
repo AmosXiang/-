@@ -414,22 +414,22 @@ export function registerExportDeckModule(
    - 生成时间: ${generationTime} (中国标准时间)
 
 2. 目录与文件用途说明
-   - storyboard-deck.pptx: 
+   - storyboard-deck.pptx:
      可视化分镜幻灯片，采用 13.33 x 7.5 英寸 (LAYOUT_WIDE) 画布比例设计，适合向导演和团队展示，支持在 PowerPoint 中直接播放。
-   - storyboard-manifest.json: 
+   - storyboard-manifest.json:
      机器可读的交付包清单，包含项目元数据、叙事三要素、角色列表及所有分镜的完整结构化参数与图片相对路径。
-   - finals/: 
+   - finals/:
      存放导出的所有分镜对应的高清大图或降级图，文件命名格式为 shot-xx.png。
-   - characters/: 
+   - characters/:
      存放该剧本中所包含的角色的三视图（avatar、front、side、back），用于保持角色的一致性（Role Identity）。
 
 3. 角色文件清单及缺失视图说明
 ${characterViewsLog}
 
 4. 正式交付包与审阅稿的区别
-   - 审阅稿 (Review Mode): 
+   - 审阅稿 (Review Mode):
      允许包含未完全定稿的分镜（标注有红色 DRAFT 警示角标），用于前中期对剧本、角色与画面布局的快速迭代与意见反馈。
-   - 正式交付包 (Final Mode): 
+   - 正式交付包 (Final Mode):
      必须要求所有分镜全部完成 ComfyUI 定稿生成，无 DRAFT 分镜，属于可直接投产的最终版本。
 
 5. 后续 Video Lab 如何读取 storyboard-manifest.json
