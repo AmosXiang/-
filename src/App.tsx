@@ -35,15 +35,17 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { videoAnalysisData } from "./data";
-import { Shot, Character, VideoRecord, GeneratedScriptRecord } from "./types";
+import { Shot, Character, VideoRecord, GeneratedScriptRecord, SceneReference } from "./types";
 import CameraDerivePanel from "./components/CameraDerivePanel";
 import StoryEditor from "./components/StoryEditor";
 import ShotVersionPanel from "./components/ShotVersionPanel";
 import StyleContractPanel from "./components/StyleContractPanel";
 import StyleContractReadonly from "./components/StyleContractReadonly";
+import SceneReferencePanel from "./components/SceneReferencePanel";
 import DeliveryPanel from "./components/DeliveryPanel";
 import StoryboardReview from "./components/StoryboardReview";
 import { useHashRoute, navigateTo } from "./router";
+import { DEFAULT_COMFY_NEGATIVE_PROMPT } from "../server/constants/comfyDefaults";
 
 // 图片资源失败态:src 为空显示"暂无图片",加载 404/失败显示"加载失败",不出现浏览器破图图标(P0)。
 function SafeImg({ src, alt, className, onClick }: { src?: string; alt?: string; className?: string; onClick?: () => void }) {
@@ -120,8 +122,6 @@ const PROJECT_PRESET_TO_TASK_PRESET: Record<string, string> = {
   qwen_2511_three_views: '03_qwen_2511_three_views',
   esrgan_4x: '04_esrgan_upscale',
 };
-
-const DEFAULT_COMFY_NEGATIVE_PROMPT = 'low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark';
 
 type ActiveStyleContract = {
   initialized: boolean;
@@ -3734,6 +3734,41 @@ export default function App() {
     setWizardActionFeedback({ kind: 'success', message: '结构化参数已保存' });
   }, [generatedScript]);
 
+  const handleSceneReferencesChange = React.useCallback((scenes: SceneReference[]) => {
+    setGeneratedScript((current: any) => {
+      if (!current) return current;
+      const next = { ...current, sceneReferences: scenes };
+      generatedScriptRef.current = next;
+      return next;
+    });
+    setGeneratedScripts(current => current.map(script => String(script.id) === String(generatedScriptRef.current?.id) ? { ...script, sceneReferences: scenes } : script));
+  }, []);
+
+  const handleShotSceneChange = React.useCallback(async (shot: Shot, sceneId: string | null) => {
+    if (!generatedScript?.id || !shot.id) return;
+    const response = await fetch(`/api/generated-scripts/${encodeURIComponent(String(generatedScript.id))}/shots/${encodeURIComponent(String(shot.id))}/scene`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sceneId }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = result.error || '场景标签保存失败';
+      setWizardActionFeedback({ kind: 'error', message });
+      return;
+    }
+    setGeneratedScript((current: any) => {
+      if (!current) return current;
+      const next = { ...current, newShots: current.newShots.map((item: Shot) => String(item.id) === String(shot.id) ? result.shot : item) };
+      generatedScriptRef.current = next;
+      return next;
+    });
+    setGeneratedScripts(current => current.map(script => String(script.id) === String(generatedScript.id)
+      ? { ...script, newShots: script.newShots.map((item: Shot) => String(item.id) === String(shot.id) ? result.shot : item) }
+      : script));
+    setWizardActionFeedback({ kind: 'success', message: sceneId ? '场景标签已保存' : '场景标签已移除' });
+  }, [generatedScript?.id]);
+
   const initializeStoryboardShot = React.useCallback(async (shot: Shot, characters: Character[]) => {
     const matchedIds = shot.matchedCharacterIds || [];
     const enrichedShot = {
@@ -4685,10 +4720,13 @@ export default function App() {
                       </label>
                     </div>
                     {generatedScript ? (
-                      <StyleContractPanel
-                        projectId={String(generatedScript.id)}
-                        refreshNonce={styleContractRefreshNonce}
-                      />
+                      <div className="space-y-4">
+                        <StyleContractPanel
+                          projectId={String(generatedScript.id)}
+                          refreshNonce={styleContractRefreshNonce}
+                        />
+                        <SceneReferencePanel projectId={String(generatedScript.id)} onScenesChange={handleSceneReferencesChange} />
+                      </div>
                     ) : (
                       <textarea
                         aria-label="Project Art Direction Style Guide"
@@ -5369,6 +5407,8 @@ export default function App() {
                               const shot = generatedScript.newShots[selectedShotIndex];
                               if (!shot) return <p className="text-slate-500 text-xs font-normal">无选中的分镜</p>;
                               const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
+                              const sceneReferences: SceneReference[] = Array.isArray(generatedScript.sceneReferences) ? generatedScript.sceneReferences : [];
+                              const currentScene = sceneReferences.find(scene => scene.id === shot.sceneId);
                               return (
                                 <div className="space-y-3">
                                   <details open className="inspector-section">
@@ -5377,6 +5417,14 @@ export default function App() {
                                       <label><span>时间码</span><input readOnly value={shot.timestamp || '—'} /></label>
                                       <label><span>描述</span><textarea readOnly rows={4} value={shot.description || '—'} /></label>
                                       <label><span>情绪</span><input readOnly value={shot.emotion || '—'} /></label>
+                                      <label>
+                                        <span>场景</span>
+                                        <select value={shot.sceneId || ''} disabled={!shot.id} onChange={event => void handleShotSceneChange(shot, event.target.value || null)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500 disabled:opacity-50">
+                                          <option value="">未标注</option>
+                                          {shot.sceneId && !currentScene && <option value={shot.sceneId}>已删除场景</option>}
+                                          {sceneReferences.map(scene => <option key={scene.id} value={scene.id}>{scene.name}</option>)}
+                                        </select>
+                                      </label>
                                     </div>
                                   </details>
 
@@ -5418,7 +5466,10 @@ export default function App() {
 
                                   <details className="inspector-section">
                                     <summary><span>③ 项目风格契约</span><span className="inspector-chevron">›</span></summary>
-                                    <div className="inspector-section-body"><StyleContractReadonly projectId={String(generatedScript.id)} /></div>
+                                    <div className="inspector-section-body space-y-3">
+                                      <StyleContractReadonly projectId={String(generatedScript.id)} />
+                                      <p className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[10px] text-slate-400">当前分镜场景：<span className="font-semibold text-slate-200">{currentScene?.name || '未标注场景'}</span></p>
+                                    </div>
                                   </details>
 
                                   <details open className="inspector-section">
@@ -6779,7 +6830,7 @@ export default function App() {
                 )}
                 {comfyModalStyleContract && (
                   <div className="rounded-lg border border-cyan-900/60 bg-cyan-950/25 p-2.5 text-[10px] text-cyan-200">
-                    模型、工作流预设、反向提示词与分辨率由项目风格契约控制；提示词、Seed 与参考图仍可调整。
+                    模型、工作流预设与分辨率由项目风格契约控制；反向提示词由项目统一默认控制，提示词、Seed 与参考图仍可调整。
                   </div>
                 )}
 
@@ -6874,7 +6925,7 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex justify-between items-center">
                     <span className="font-semibold text-slate-400">反向提示词 (Negative Prompt):</span>
-                    {comfyModalStyleContract ? <span className="text-[10px] text-cyan-400 font-medium">由项目风格契约控制</span> : !workflowSupport.supported.negativePrompt && <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>}
+                    {comfyModalStyleContract ? <span className="text-[10px] text-cyan-400 font-medium">由项目统一默认控制</span> : !workflowSupport.supported.negativePrompt && <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>}
                   </div>
                   <textarea
                     rows={2}

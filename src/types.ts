@@ -49,6 +49,7 @@ export interface Shot {
   isStale?: boolean;                  // 上游故事/风格/角色变化后标记为基于旧输入
   basedOnStoryVersion?: number;       // P3:生成时的故事版本号
   basedOnStyleContractVersion?: number; // P3:生成时的风格契约版本号
+  sceneId?: string;                     // P3.5:关联项目 sceneReferences[].id
   // isStale 派生权威口径:basedOnStoryVersion < 当前 storyVersion 或 basedOnStyleContractVersion < 当前 styleContract.version
 }
 
@@ -131,6 +132,14 @@ export interface StyleContract {
   loraStrength: number;
 }
 
+export interface SceneReference {
+  id: string;
+  name: string;
+  imageUrl?: string;
+  overlay?: string;
+  updatedAt: string;
+}
+
 export interface GeneratedScriptRecord extends GeneratedScript {
   id: string;
   templateId: string;
@@ -152,6 +161,7 @@ export interface GeneratedScriptRecord extends GeneratedScript {
     storyDraft: NonNullable<GeneratedScriptRecord['storyDraft']>;
   }>;
   styleContract?: StyleContract;
+  sceneReferences?: SceneReference[];
 }
 
 
