@@ -48,6 +48,14 @@
   .inspector-group h4 { margin-bottom: 0.75rem; color: rgb(248 250 252); font-size: 14px; font-weight: 700; }
   .inspector-group label { display: grid; gap: 0.375rem; color: rgb(203 213 225); font-size: 13px; }
   .inspector-group select, .inspector-group textarea, .inspector-group input[type="number"] { width: 100%; border: 1px solid rgb(51 65 85); border-radius: 0.5rem; background: rgb(2 6 23); color: rgb(226 232 240); padding: 0.5rem; font-size: 13px; }
+  .inspector-section, .inspector-subsection { overflow: hidden; border: 1px solid rgb(30 41 59); border-radius: 0.75rem; background: rgb(15 23 42 / 0.55); }
+  .inspector-section > summary, .inspector-subsection > summary { display: flex; min-height: 2.75rem; cursor: pointer; list-style: none; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.65rem 0.75rem; color: rgb(226 232 240); font-size: 12px; font-weight: 700; }
+  .inspector-section > summary::-webkit-details-marker, .inspector-subsection > summary::-webkit-details-marker { display: none; }
+  .inspector-section-body { border-top: 1px solid rgb(30 41 59); padding: 0.75rem; }
+  .inspector-section-body label { display: grid; gap: 0.375rem; color: rgb(148 163 184); font-size: 11px; }
+  .inspector-section-body input, .inspector-section-body textarea { width: 100%; border: 1px solid rgb(51 65 85); border-radius: 0.5rem; background: rgb(2 6 23); color: rgb(203 213 225); padding: 0.5rem; font-size: 12px; }
+  .inspector-chevron { color: rgb(100 116 139); font-size: 18px; line-height: 1; transition: transform 150ms ease; }
+  .inspector-section[open] > summary > .inspector-chevron, .inspector-subsection[open] > summary > .inspector-chevron { transform: rotate(90deg); }
   .segmented-control { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.25rem; margin: 0.625rem 0; }
   .segmented-control button { border: 1px solid rgb(51 65 85); border-radius: 0.45rem; padding: 0.45rem; color: rgb(203 213 225); font-size: 13px; }
   .segmented-control button.active { border-color: rgb(99 102 241); background: rgb(49 46 129 / 0.55); color: white; }

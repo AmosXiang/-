@@ -39,6 +39,8 @@ import { Shot, Character, VideoRecord, GeneratedScriptRecord } from "./types";
 import CameraDerivePanel from "./components/CameraDerivePanel";
 import StoryEditor from "./components/StoryEditor";
 import ShotVersionPanel from "./components/ShotVersionPanel";
+import StyleContractPanel from "./components/StyleContractPanel";
+import StyleContractReadonly from "./components/StyleContractReadonly";
 import DeliveryPanel from "./components/DeliveryPanel";
 import StoryboardReview from "./components/StoryboardReview";
 import { useHashRoute, navigateTo } from "./router";
@@ -118,6 +120,20 @@ const PROJECT_PRESET_TO_TASK_PRESET: Record<string, string> = {
   qwen_2511_three_views: '03_qwen_2511_three_views',
   esrgan_4x: '04_esrgan_upscale',
 };
+
+const DEFAULT_COMFY_NEGATIVE_PROMPT = 'low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark';
+
+type ActiveStyleContract = {
+  initialized: boolean;
+  locked: boolean;
+  contract: {
+    storyboardPresetId: string;
+    styleOverlay: string;
+    width: number;
+    height: number;
+    loraStrength: number;
+  };
+} | null;
 
 const WORKFLOW_PRESET_LABELS: Record<string, string> = {
   sdxl_legacy: 'SDXL Legacy',
@@ -345,6 +361,7 @@ export default function App() {
     characterName?: string;
     defaultPrompt: string;
   } | null>(null);
+  const [comfyModalStyleContract, setComfyModalStyleContract] = useState<ActiveStyleContract>(null);
   const [comfyParams, setComfyParams] = useState<{
     prompt: string;
     negativePrompt: string;
@@ -389,6 +406,7 @@ export default function App() {
   const [creativeDraft, setCreativeDraft] = useState<{ artDirection?: { overlay?: string; analysis?: unknown } }>({});
   const [artDirectionBusy, setArtDirectionBusy] = useState<boolean>(false);
   const [artDirectionMessage, setArtDirectionMessage] = useState<string | null>(null);
+  const [styleContractRefreshNonce, setStyleContractRefreshNonce] = useState(0);
 
   // Script Generator State
   const [generatorTopic, setGeneratorTopic] = useState<string>("");
@@ -806,6 +824,7 @@ export default function App() {
 
   const handleOpenComfyParams = async (targetId: string, viewType: string, targetType: 'shot' | 'character', shotIndex?: number, characterName?: string, defaultPrompt?: string) => {
     if (!checkComfyRuntimeBeforeAction()) return;
+    setComfyModalStyleContract(null);
     let checkpointsList: string[] = [];
     try {
       const res = await fetch("/api/comfyui/checkpoints");
@@ -816,6 +835,25 @@ export default function App() {
       }
     } catch (e) {
       console.error(e);
+    }
+
+    let activeStyleContract: ActiveStyleContract = null;
+    if (targetType === 'shot' && viewType === 'main' && generatedScript?.id) {
+      try {
+        const response = await fetch(`/api/generated-scripts/${encodeURIComponent(String(generatedScript.id))}/style-contract`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data?.initialized && data?.contract) {
+            activeStyleContract = {
+              initialized: true,
+              locked: Boolean(data.locked),
+              contract: data.contract,
+            };
+          }
+        }
+      } catch (error) {
+        console.error(error);
+      }
     }
 
     let supportInfo = {
@@ -846,15 +884,29 @@ export default function App() {
     }
 
     const finalPrompt = lastParams ? lastParams.prompt : (defaultPrompt || "");
-    const finalNegative = lastParams ? lastParams.negativePrompt : "";
+    const finalNegative = activeStyleContract
+      ? (lastParams?.negativePrompt || DEFAULT_COMFY_NEGATIVE_PROMPT)
+      : (lastParams ? lastParams.negativePrompt : "");
     const finalSeed = lastParams ? String(lastParams.seed) : "";
-    const finalModel = lastParams ? lastParams.model : comfyParams.model;
-    const finalWidth = lastParams ? lastParams.width : (targetType === 'character' ? 1024 : 768);
-    const finalHeight = lastParams ? lastParams.height : (targetType === 'character' ? 1024 : 512);
+    const contractPreset = activeStyleContract?.contract.storyboardPresetId;
+    const contractPresetInfo = contractPreset
+      ? workflowPresets.find(preset => preset.presetId === contractPreset)
+      : undefined;
+    const finalModel = activeStyleContract
+      ? (contractPresetInfo?.modelName || lastParams?.model || comfyParams.model)
+      : (lastParams ? lastParams.model : comfyParams.model);
+    const finalWidth = activeStyleContract
+      ? activeStyleContract.contract.width
+      : (lastParams ? lastParams.width : (targetType === 'character' ? 1024 : 768));
+    const finalHeight = activeStyleContract
+      ? activeStyleContract.contract.height
+      : (lastParams ? lastParams.height : (targetType === 'character' ? 1024 : 512));
     const configuredPreset = targetType === 'character'
       ? comfyProjectPreferences.characterMasterPresetId
       : comfyProjectPreferences.shotPresetId;
-    const finalPresetId = lastParams
+    const finalPresetId = activeStyleContract
+      ? (PROJECT_PRESET_TO_TASK_PRESET[activeStyleContract.contract.storyboardPresetId] || activeStyleContract.contract.storyboardPresetId)
+      : lastParams
       ? (lastParams.workflowPresetId || 'sdxl_legacy')
       : (PROJECT_PRESET_TO_TASK_PRESET[configuredPreset] || 'sdxl_legacy');
     const finalSourceImageUrl = lastParams ? (lastParams.sourceImageUrl || "") : "";
@@ -873,6 +925,7 @@ export default function App() {
     }
 
     setModelError(mErr);
+    setComfyModalStyleContract(activeStyleContract);
     setComfyParams({
       prompt: finalPrompt,
       negativePrompt: finalNegative,
@@ -1081,13 +1134,21 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: generatedScript.id, regenerateMode })
       });
-      if (!preflightRes.ok) throw new Error((await preflightRes.json()).error || '批量预检失败');
-      const preview = await preflightRes.json();
+      const preview = await preflightRes.json().catch(() => ({}));
+      if (!preflightRes.ok) throw new Error(preview.error || '批量预检失败');
       if (!preview.preflight) {
         if (preview.message) alert(preview.message);
         return;
       }
       const p = preview.preflight;
+      if (p.styleContract && !p.styleContract.ready) {
+        const missing = Array.isArray(p.styleContract.missing) && p.styleContract.missing.length > 0
+          ? `；缺少：${p.styleContract.missing.join('、')}`
+          : '';
+        alert(`请先完成并锁定项目风格契约${missing}`);
+        setCreativeStep(1);
+        return;
+      }
       const estimateMinutes = Math.max(1, Math.ceil(p.estimatedSeconds / 60));
       const estimate60Minutes = Math.max(1, Math.ceil(p.estimated60ShotSeconds / 60));
       if (!window.confirm(`批量生成预检\n总数：${p.total}\n角色一致性（PuLID）：${p.pulid}\n缺 Avatar 跳过：${p.missingAvatar}\n普通 Klein：${p.klein}\n预计本批次：约 ${estimateMinutes} 分钟\n60 镜参考耗时：约 ${estimate60Minutes} 分钟\n存在 pending 旧任务：${p.hasPendingOldTasks ? `是（${p.pendingOldTaskCount}）` : '否'}\n疑似未绑定角色文本：${p.hasSuspiciousUnboundCharacterText ? `是（${p.suspiciousUnboundShots.length}）` : '否'}\n\n确认开始？`)) return;
@@ -1103,6 +1164,12 @@ export default function App() {
         await pollComfyTasks();
       } else {
         const err = await res.json();
+        if (res.status === 409 && err.code === 'STYLE_CONTRACT_NOT_LOCKED') {
+          const missing = Array.isArray(err.missing) && err.missing.length > 0 ? `；缺少：${err.missing.join('、')}` : '';
+          alert(`请先完成并锁定项目风格契约${missing}`);
+          setCreativeStep(1);
+          return;
+        }
         throw new Error(err.error || '批量提交任务失败');
       }
     } catch (e: any) {
@@ -3436,22 +3503,26 @@ export default function App() {
     upscale: '放大',
   };
 
-  // 保存全局 Art Direction（Style Guide）到当前创意项目
-  const saveArtDirection = async (overlay: string) => {
-    if (!generatedScript) return;
-    const artDirection = { ...(generatedScript.artDirection || {}), overlay, updatedAt: new Date().toISOString() };
-    const response = await fetch(`/api/generated-scripts/${encodeURIComponent(String(generatedScript.id))}`, {
+  const saveStyleContractOverlay = async (overlay: string) => {
+    if (!generatedScript?.id) return;
+    const endpoint = `/api/generated-scripts/${encodeURIComponent(String(generatedScript.id))}/style-contract`;
+    const currentResponse = await fetch(endpoint);
+    const current = await currentResponse.json().catch(() => ({}));
+    if (!currentResponse.ok) throw new Error(current.error || `读取风格契约失败（HTTP ${currentResponse.status}）`);
+    const response = await fetch(endpoint, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ artDirection }),
+      body: JSON.stringify({ contract: { ...current.contract, styleOverlay: overlay } }),
     });
+    const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`保存 Style Guide 失败（HTTP ${response.status}）${detail ? `：${detail.slice(0, 120)}` : ''}`);
+      if (response.status === 409 && result.code === 'CONTRACT_LOCKED') {
+        throw new Error('契约已锁定，请先解锁');
+      }
+      throw new Error(result.error || `保存 Style Guide 失败（HTTP ${response.status}）`);
     }
-    const updatedScript = { ...generatedScript, artDirection };
-    setGeneratedScript(updatedScript);
-    setGeneratedScripts(previous => previous.map(item => item.id === generatedScript.id ? updatedScript : item));
+    setStyleContractRefreshNonce(previous => previous + 1);
+    await refreshGeneratedScripts();
   };
 
   // 上传参考图，仅提取风格特征（styleOnly）生成全局 style overlay
@@ -3471,14 +3542,15 @@ export default function App() {
       const overlay = String(result.flux_prompt || result.style || '').trim();
       if (!overlay) throw new Error('Gemini 未返回可用的 style overlay');
       if (generatedScript) {
-        await saveArtDirection(overlay);
+        await saveStyleContractOverlay(overlay);
         setArtDirectionMessage('已从参考图提取全局 Style Guide 并保存');
       } else {
         setCreativeDraft(previous => ({ ...previous, artDirection: { ...(previous.artDirection || {}), overlay, analysis: result } }));
         setArtDirectionMessage('已提取全局 Style Guide（保存在当前创意草稿）');
       }
     } catch (error: any) {
-      setArtDirectionMessage(`风格提取失败：${error.message || error}`);
+      const message = error.message || String(error);
+      setArtDirectionMessage(message === '契约已锁定，请先解锁' ? message : `风格提取失败：${message}`);
     } finally {
       setArtDirectionBusy(false);
     }
@@ -4612,19 +4684,26 @@ export default function App() {
                         <input type="file" accept="image/*" disabled={artDirectionBusy} className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) handleAnalyzeArtDirection(file); event.currentTarget.value = ''; }} />
                       </label>
                     </div>
-                    <textarea
-                      aria-label="Project Art Direction Style Guide"
-                      value={generatedScript?.artDirection?.overlay || creativeDraft.artDirection?.overlay || ''}
-                      onChange={event => generatedScript ? setGeneratedScript((previous: any) => previous ? { ...previous, artDirection: { ...(previous.artDirection || {}), overlay: event.target.value } } : previous) : setCreativeDraft(previous => ({ ...previous, artDirection: { ...(previous.artDirection || {}), overlay: event.target.value } }))}
-                      onBlur={event => generatedScript ? saveArtDirection(event.target.value).then(() => setArtDirectionMessage('Style Guide 已保存')).catch(error => setShotCharacterFeedback({ kind: 'error', message: error.message })) : setArtDirectionMessage('Style Guide 已保存在当前创意草稿')}
-                      placeholder="上传参考图自动提取，或在此手动填写全局英文 style overlay…"
-                      className="min-h-24 w-full resize-y border border-cyan-900/70 bg-slate-950 px-3 py-2 text-[11px] leading-relaxed text-slate-100 outline-none focus:border-cyan-500 font-normal rounded-xl"
-                    />
+                    {generatedScript ? (
+                      <StyleContractPanel
+                        projectId={String(generatedScript.id)}
+                        refreshNonce={styleContractRefreshNonce}
+                      />
+                    ) : (
+                      <textarea
+                        aria-label="Project Art Direction Style Guide"
+                        value={creativeDraft.artDirection?.overlay || ''}
+                        onChange={event => setCreativeDraft(previous => ({ ...previous, artDirection: { ...(previous.artDirection || {}), overlay: event.target.value } }))}
+                        onBlur={() => setArtDirectionMessage('Style Guide 已保存在当前创意草稿')}
+                        placeholder="上传参考图自动提取，或在此手动填写全局英文 style overlay…"
+                        className="min-h-24 w-full resize-y border border-cyan-900/70 bg-slate-950 px-3 py-2 text-[11px] leading-relaxed text-slate-100 outline-none focus:border-cyan-500 font-normal rounded-xl"
+                      />
+                    )}
                     {artDirectionMessage && <p className="text-[10px] text-cyan-300">{artDirectionMessage}</p>}
                   </section>
                 )}
 
-                {(!generatedScript || creativeStep === 1) && (
+                {!generatedScript && (
                   <section className="workflow-preset-panel border border-slate-800 bg-slate-950/45 p-4 space-y-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -4972,14 +5051,10 @@ export default function App() {
                         <div className="grid gap-6 lg:grid-cols-2 mb-6">
                           <section className="border border-cyan-800/60 bg-cyan-950/15 p-4 space-y-3 rounded-2xl">
                             <h3 className="text-xs font-bold text-cyan-200 font-mono">PROJECT ART DIRECTION</h3>
-                            <textarea
-                              aria-label="Project Art Direction Style Guide Readonly"
-                              value={generatedScript?.artDirection?.overlay || ''}
-                              onChange={event => setGeneratedScript((previous: any) => previous ? { ...previous, artDirection: { ...(previous.artDirection || {}), overlay: event.target.value } } : previous)}
-                              onBlur={event => saveArtDirection(event.target.value).then(() => setArtDirectionMessage('Style Guide 已保存'))}
-                              placeholder="暂无 style overlay 设定..."
-                              className="min-h-20 w-full resize-none border border-cyan-900/50 bg-slate-950/70 px-3 py-2 text-[11px] leading-relaxed text-slate-100 outline-none focus:border-cyan-500 font-normal rounded-lg"
-                            />
+                            <p className="text-[11px] leading-relaxed text-slate-400">分镜风格由项目风格契约统一控制。需要修改预设、Overlay、分辨率或 LoRA 强度时，请返回风格设定步骤。</p>
+                            <button type="button" onClick={() => setCreativeStep(1)} className="rounded-lg border border-cyan-800 px-3 py-2 text-[10px] font-semibold text-cyan-200 hover:bg-cyan-900/30">
+                              查看风格契约
+                            </button>
                           </section>
 
                           <section className="border border-slate-800 bg-slate-900/40 p-4 space-y-3 rounded-2xl">
@@ -5255,30 +5330,6 @@ export default function App() {
                                           <span>{shotImg ? '重新生成静态画面' : '生成静态画面'}</span>
                                         </button>
 
-                                        {shotImg && imagePlatform === 'comfyui' && (
-                                          <button
-                                            type="button"
-                                            onClick={() => handleOpenComfyParams(shot.id || '', 'main', 'shot', selectedShotIndex, undefined, shot.description)}
-                                            className="px-5 py-2 bg-slate-850 hover:bg-slate-800 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-slate-700/60 transition-all cursor-pointer"
-                                          >
-                                            <ExternalLink className="w-4 h-4 text-slate-450" />
-                                            <span>ComfyUI 高级调整</span>
-                                          </button>
-                                        )}
-                                      </div>
-
-                                      {/* P2a: 生成版本历史与定稿(接 shot-review API) */}
-                                      <div className="w-full max-w-xl">
-                                        <ShotVersionPanel
-                                          projectId={String(generatedScript.id)}
-                                          shotId={String(shot.id || "")}
-                                          finalTaskId={shot.finalTaskId}
-                                          onShotUpdated={(updatedShot: any) => {
-                                            setGeneratedScript((current: any) => current
-                                              ? { ...current, newShots: current.newShots.map((item: Shot) => String(item.id) === String(updatedShot.id) ? { ...item, ...updatedShot } : item) }
-                                              : current);
-                                          }}
-                                        />
                                       </div>
                                     </div>
                                   );
@@ -5315,40 +5366,88 @@ export default function App() {
                               检查器 / INSPECTOR
                             </div>
                             {(() => {
-                              const cameraShot = generatedScript.newShots[selectedShotIndex];
-                              if (!cameraShot) return null;
-                              return (
-                                <CameraDerivePanel
-                                  projectId={String(generatedScript.id)}
-                                  shots={generatedScript.newShots}
-                                  shotIndex={selectedShotIndex}
-                                  onShotsChange={(nextShots) => {
-                                    const updatedScript = { ...generatedScript, newShots: nextShots };
-                                    setGeneratedScript(updatedScript);
-                                    setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
-                                  }}
-                                />
-                              );
-                            })()}
-                            {(() => {
                               const shot = generatedScript.newShots[selectedShotIndex];
                               if (!shot) return <p className="text-slate-500 text-xs font-normal">无选中的分镜</p>;
+                              const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
                               return (
-                                <StoryboardInspector
-                                  shot={shot}
-                                  characters={generatedScript.newCharacters || []}
-                                  provider={videoProvider}
-                                  onProviderChange={setVideoProvider}
-                                  onChange={async (nextShot) => {
-                                    const updatedShots = [...generatedScript.newShots];
-                                    updatedShots[selectedShotIndex] = nextShot;
-                                    const updatedScript = { ...generatedScript, newShots: updatedShots };
-                                    setGeneratedScript(updatedScript);
-                                    setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
-                                    await saveStoryboardShot(selectedShotIndex, nextShot);
-                                  }}
-                                  onInitialize={() => initializeStoryboardShot(shot, generatedScript.newCharacters || [])}
-                                />
+                                <div className="space-y-3">
+                                  <details open className="inspector-section">
+                                    <summary><span>① 分镜摘要</span><span className="inspector-chevron">›</span></summary>
+                                    <div className="inspector-section-body space-y-3">
+                                      <label><span>时间码</span><input readOnly value={shot.timestamp || '—'} /></label>
+                                      <label><span>描述</span><textarea readOnly rows={4} value={shot.description || '—'} /></label>
+                                      <label><span>情绪</span><input readOnly value={shot.emotion || '—'} /></label>
+                                    </div>
+                                  </details>
+
+                                  <details open className="inspector-section">
+                                    <summary><span>② 结构与运镜</span><span className="inspector-chevron">›</span></summary>
+                                    <div className="inspector-section-body space-y-3">
+                                      <StoryboardInspector
+                                        shot={shot}
+                                        characters={generatedScript.newCharacters || []}
+                                        provider={videoProvider}
+                                        onProviderChange={setVideoProvider}
+                                        onChange={async (nextShot) => {
+                                          const updatedShots = [...generatedScript.newShots];
+                                          updatedShots[selectedShotIndex] = nextShot;
+                                          const updatedScript = { ...generatedScript, newShots: updatedShots };
+                                          setGeneratedScript(updatedScript);
+                                          setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
+                                          await saveStoryboardShot(selectedShotIndex, nextShot);
+                                        }}
+                                        onInitialize={() => initializeStoryboardShot(shot, generatedScript.newCharacters || [])}
+                                      />
+                                      <details className="inspector-subsection">
+                                        <summary><span>机位工具</span><span className="inspector-chevron">›</span></summary>
+                                        <div className="inspector-section-body">
+                                          <CameraDerivePanel
+                                            projectId={String(generatedScript.id)}
+                                            shots={generatedScript.newShots}
+                                            shotIndex={selectedShotIndex}
+                                            onShotsChange={(nextShots) => {
+                                              const updatedScript = { ...generatedScript, newShots: nextShots };
+                                              setGeneratedScript(updatedScript);
+                                              setGeneratedScripts(prev => prev.map(s => s.id === updatedScript.id ? updatedScript : s));
+                                            }}
+                                          />
+                                        </div>
+                                      </details>
+                                    </div>
+                                  </details>
+
+                                  <details className="inspector-section">
+                                    <summary><span>③ 项目风格契约</span><span className="inspector-chevron">›</span></summary>
+                                    <div className="inspector-section-body"><StyleContractReadonly projectId={String(generatedScript.id)} /></div>
+                                  </details>
+
+                                  <details open className="inspector-section">
+                                    <summary><span>④ 高级调整</span><span className="inspector-chevron">›</span></summary>
+                                    <div className="inspector-section-body">
+                                      {shotImg && imagePlatform === 'comfyui' ? (
+                                        <button type="button" onClick={() => handleOpenComfyParams(shot.id || '', 'main', 'shot', selectedShotIndex, undefined, shot.description)} className="w-full rounded-lg border border-slate-700 bg-slate-850 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800">
+                                          <ExternalLink className="mr-1.5 inline h-4 w-4 text-slate-400" />ComfyUI 高级调整
+                                        </button>
+                                      ) : <p className="text-[10px] text-slate-500">生成 ComfyUI 分镜画面后可用。</p>}
+                                    </div>
+                                  </details>
+
+                                  <details className="inspector-section">
+                                    <summary><span>⑤ 版本与定稿</span><span className="inspector-chevron">›</span></summary>
+                                    <div className="inspector-section-body">
+                                      <ShotVersionPanel
+                                        projectId={String(generatedScript.id)}
+                                        shotId={String(shot.id || "")}
+                                        finalTaskId={shot.finalTaskId}
+                                        onShotUpdated={(updatedShot: any) => {
+                                          setGeneratedScript((current: any) => current
+                                            ? { ...current, newShots: current.newShots.map((item: Shot) => String(item.id) === String(updatedShot.id) ? { ...item, ...updatedShot } : item) }
+                                            : current);
+                                        }}
+                                      />
+                                    </div>
+                                  </details>
+                                </div>
                               );
                             })()}
                           </div>
@@ -6678,12 +6777,18 @@ export default function App() {
                     ℹ️ 当前正在使用自定义工作流。部分参数由工作流本身控制，未映射的参数已被禁用。
                   </div>
                 )}
+                {comfyModalStyleContract && (
+                  <div className="rounded-lg border border-cyan-900/60 bg-cyan-950/25 p-2.5 text-[10px] text-cyan-200">
+                    模型、工作流预设、反向提示词与分辨率由项目风格契约控制；提示词、Seed 与参考图仍可调整。
+                  </div>
+                )}
 
                 {/* Workflow Preset */}
                 <div className="space-y-1.5">
                   <span className="font-semibold text-slate-400">工作流预设:</span>
                   <select
                     value={comfyParams.presetId}
+                    disabled={Boolean(comfyModalStyleContract)}
                     onChange={(e) => {
                       const presetId = e.target.value;
                       setComfyParams(prev => ({
@@ -6692,7 +6797,7 @@ export default function App() {
                         sourceImageUrl: presetId === '02_klein_pulid_identity' ? prev.sourceImageUrl : '',
                       }));
                     }}
-                    className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none transition-all cursor-pointer text-slate-200"
+                    className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none transition-all cursor-pointer text-slate-200 disabled:cursor-not-allowed disabled:text-slate-500"
                   >
                     <option value="sdxl_legacy">SDXL Legacy</option>
                     <option value="01_klein_character_master">Pure Klein 4B</option>
@@ -6769,15 +6874,13 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex justify-between items-center">
                     <span className="font-semibold text-slate-400">反向提示词 (Negative Prompt):</span>
-                    {!workflowSupport.supported.negativePrompt && (
-                      <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>
-                    )}
+                    {comfyModalStyleContract ? <span className="text-[10px] text-cyan-400 font-medium">由项目风格契约控制</span> : !workflowSupport.supported.negativePrompt && <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>}
                   </div>
                   <textarea
                     rows={2}
                     value={comfyParams.negativePrompt}
                     onChange={(e) => setComfyParams(prev => ({ ...prev, negativePrompt: e.target.value }))}
-                    disabled={!workflowSupport.supported.negativePrompt}
+                    disabled={Boolean(comfyModalStyleContract) || !workflowSupport.supported.negativePrompt}
                     className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none disabled:bg-slate-950/50 disabled:text-slate-650 disabled:border-slate-900 transition-all font-sans resize-none text-slate-200"
                     placeholder="输入反向提示词（负面提示）..."
                   />
@@ -6787,11 +6890,11 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex justify-between items-center">
                     <span className="font-semibold text-slate-400">生成模型 (Checkpoint):</span>
-                    {!workflowSupport.supported.model && (
-                      <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>
-                    )}
+                    {comfyModalStyleContract ? <span className="text-[10px] text-cyan-400 font-medium">由项目风格契约控制</span> : !workflowSupport.supported.model && <span className="text-[10px] text-amber-500 font-medium">该参数由自定义工作流控制</span>}
                   </div>
-                  {workflowSupport.supported.model ? (
+                  {comfyModalStyleContract ? (
+                    <input type="text" disabled value={comfyParams.model || '由契约预设决定'} className="w-full bg-slate-950/50 border border-slate-900 text-slate-500 rounded px-2.5 py-1.5 cursor-not-allowed" />
+                  ) : workflowSupport.supported.model ? (
                     <div className="space-y-1.5">
                       <select
                         value={comfyParams.model}
@@ -6870,9 +6973,7 @@ export default function App() {
                   <div className="space-y-1">
                     <div className="flex justify-between items-center">
                       <span className="font-semibold text-slate-400">图片宽度 (Width):</span>
-                      {!workflowSupport.supported.width && (
-                        <span className="text-[10px] text-amber-500 font-medium">禁用</span>
-                      )}
+                      {comfyModalStyleContract ? <span className="text-[10px] text-cyan-400 font-medium">契约</span> : !workflowSupport.supported.width && <span className="text-[10px] text-amber-500 font-medium">禁用</span>}
                     </div>
                     <input
                       type="number"
@@ -6881,16 +6982,14 @@ export default function App() {
                       max={2048}
                       step={64}
                       onChange={(e) => setComfyParams(prev => ({ ...prev, width: parseInt(e.target.value) || 0 }))}
-                      disabled={!workflowSupport.supported.width}
+                      disabled={Boolean(comfyModalStyleContract) || !workflowSupport.supported.width}
                       className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none disabled:bg-slate-950/50 disabled:text-slate-650 text-slate-200"
                     />
                   </div>
                   <div className="space-y-1">
                     <div className="flex justify-between items-center">
                       <span className="font-semibold text-slate-400">图片高度 (Height):</span>
-                      {!workflowSupport.supported.height && (
-                        <span className="text-[10px] text-amber-500 font-medium">禁用</span>
-                      )}
+                      {comfyModalStyleContract ? <span className="text-[10px] text-cyan-400 font-medium">契约</span> : !workflowSupport.supported.height && <span className="text-[10px] text-amber-500 font-medium">禁用</span>}
                     </div>
                     <input
                       type="number"
@@ -6899,7 +6998,7 @@ export default function App() {
                       max={2048}
                       step={64}
                       onChange={(e) => setComfyParams(prev => ({ ...prev, height: parseInt(e.target.value) || 0 }))}
-                      disabled={!workflowSupport.supported.height}
+                      disabled={Boolean(comfyModalStyleContract) || !workflowSupport.supported.height}
                       className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-blue-500 rounded px-2.5 py-1.5 focus:outline-none disabled:bg-slate-950/50 disabled:text-slate-650 text-slate-200"
                     />
                   </div>

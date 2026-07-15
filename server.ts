@@ -18,7 +18,12 @@ import { registerShotReviewModule } from './server/modules/shot-review/index.ts'
 import { detectComfyProcesses, getPort8001OwnerPids as port8001OwnerPids } from './comfyui-health.ts';
 import { registerExportDeckModule } from './server/modules/export-deck/index.ts';
 import { registerStoryVersionModule } from './server/modules/story-version/index.ts';
-import { registerStyleContractModule } from './server/modules/style-contract/index.ts';
+import {
+  isStyleContractInitialized,
+  missingStyleContractFields,
+  registerStyleContractModule,
+  resolveEffectiveStyleContract,
+} from './server/modules/style-contract/index.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -1773,14 +1778,28 @@ function projectSnapshotVersions(projectId: string): { storyVersion: number; sty
 
 // 组装一个 shot main 生成任务的参数快照 JSON。seed 取任务解析后的实际值(random 时可能为空)。
 function buildShotGenerationSnapshot(projectId: string, seed: unknown): { json: string; storyVersion: number } {
-  const { storyVersion, styleContractVersion } = projectSnapshotVersions(projectId);
+  const { storyVersion } = projectSnapshotVersions(projectId);
+  let effective: ReturnType<typeof resolveEffectiveStyleContract> | null = null;
+  try {
+    effective = resolveEffectiveStyleContract(readDb, String(projectId || ''));
+  } catch (error: any) {
+    console.warn('[StyleContract:SnapshotFallback]', JSON.stringify({ projectId, error: error?.code || error?.message || String(error) }));
+  }
   const seedNum = seed === undefined || seed === null || seed === '' ? null : Number(seed);
   return {
     json: JSON.stringify({
       storyVersion,
-      styleContractVersion,
+      styleContractVersion: effective?.version || 0,
       basedOnStoryVersion: storyVersion,
       seed: Number.isFinite(seedNum as number) ? seedNum : null,
+      contractLocked: effective?.locked === true,
+      effective: {
+        storyboardPresetId: effective?.storyboardPresetId || null,
+        styleOverlay: effective?.styleOverlay ?? null,
+        width: effective?.width ?? null,
+        height: effective?.height ?? null,
+        loraStrength: effective?.loraStrength ?? null,
+      },
     }),
     storyVersion,
   };
@@ -1874,14 +1893,19 @@ app.get('/api/generated-scripts/:id/comfyui-preferences', (req, res) => {
 
 app.put('/api/generated-scripts/:id/comfyui-preferences', async (req, res) => {
   const projectId = req.params.id;
-  const requested = req.body?.recommended === true
+  const project = readDb().generated_scripts.find((item: any) => String(item.id) === String(projectId));
+  if (!project) return res.status(404).json({ error: 'Script not found' });
+  const requestedInput = req.body?.recommended === true
     ? RECOMMENDED_PROJECT_COMFY_PREFERENCES
     : req.body?.preferences;
-  if (!requested || typeof requested !== 'object') {
+  if (!requestedInput || typeof requestedInput !== 'object') {
     return res.status(400).json({ error: 'preferences are required' });
   }
 
-  const preferences = normalizeComfyPreferences(requested);
+  const requested = isStyleContractInitialized(project)
+    ? { ...requestedInput, shotPresetId: project.styleContract.storyboardPresetId }
+    : requestedInput;
+  let preferences = normalizeComfyPreferences(requested);
   const validationError = validateComfyPreferences(preferences);
   if (validationError) return res.status(422).json({ error: validationError });
   const qwenVerified = qwenThreeViewsVerified(projectId);
@@ -1890,6 +1914,9 @@ app.put('/api/generated-scripts/:id/comfyui-preferences', async (req, res) => {
   await mutateDb(db => {
     const index = db.generated_scripts.findIndex((item: any) => String(item.id) === String(projectId));
     if (index < 0) return;
+    if (isStyleContractInitialized(db.generated_scripts[index])) {
+      preferences = { ...preferences, shotPresetId: db.generated_scripts[index].styleContract.storyboardPresetId };
+    }
     db.generated_scripts[index] = { ...db.generated_scripts[index], comfyuiPreferences: preferences };
     updatedScript = db.generated_scripts[index];
   });
@@ -1962,7 +1989,11 @@ app.put('/api/generated-scripts/:id', async (req, res) => {
         if (summary) script.summary = summary;
         if (tone) script.tone = tone;
         if (pace) script.pace = pace;
-        if (artDirection && typeof artDirection === 'object') script.artDirection = artDirection;
+        if (artDirection && typeof artDirection === 'object') {
+          script.artDirection = isStyleContractInitialized(script)
+            ? { ...artDirection, overlay: script.styleContract.styleOverlay }
+            : artDirection;
+        }
 
         db.generated_scripts[index] = script;
         updatedScript = script;
@@ -6185,6 +6216,29 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
   }
 
   try {
+    const script = getGeneratedScript(String(projectId));
+    if (!script) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    const contractInitialized = isStyleContractInitialized(script);
+    const contractMissing = contractInitialized
+      ? missingStyleContractFields(script.styleContract)
+      : missingStyleContractFields(undefined);
+    const contractLocked = contractInitialized && script.styleContract.locked === true;
+    const styleContractPreflight = {
+      ready: contractLocked && contractMissing.length === 0,
+      locked: contractLocked,
+      missing: contractMissing,
+    };
+    if (confirmed === true && !styleContractPreflight.ready) {
+      return res.status(409).json({
+        error: 'Lock a complete project style contract before batch generation.',
+        code: 'STYLE_CONTRACT_NOT_LOCKED',
+        missing: styleContractPreflight.missing,
+        locked: styleContractPreflight.locked,
+      });
+    }
+
     // 1. Check if there is already an active batch for this project
     const activeBatchTask = dbSqlite.prepare(`
       SELECT workflowBatchId FROM comfyui_tasks
@@ -6200,11 +6254,6 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
         message: 'Batch already running',
         count: 0
       });
-    }
-
-    const script = getGeneratedScript(String(projectId));
-    if (!script) {
-      return res.status(404).json({ error: 'Project not found' });
     }
 
     const mode = regenerateMode || 'missing'; // 'all', 'missing', 'failed'
@@ -6244,6 +6293,7 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
       pendingOldTaskCount: oldPendingCount,
       hasSuspiciousUnboundCharacterText: suspiciousUnboundShots.length > 0,
       suspiciousUnboundShots,
+      styleContract: styleContractPreflight,
     });
     if (preflight.total === 0) return res.json({ success: true, requiresConfirmation: false, count: 0, message: 'No shots match the selected batch mode' });
     if (confirmed !== true) return res.json({ success: true, requiresConfirmation: true, preflight });
@@ -6286,7 +6336,7 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
           targetId,
           viewType,
           shotIndex: idx,
-          prompt: [shot.description || '', script.artDirection?.overlay ? `Project art direction style overlay (style only; preserve shot content and composition): ${script.artDirection.overlay}` : ''].filter(Boolean).join('\n\n'),
+          prompt: shot.description || '',
           style: getStyleEnglishBackend(shot.style || '写实'),
           negativePrompt: undefined,
           seed: undefined,
@@ -6807,6 +6857,22 @@ async function prepareComfyTaskData(reqBody: any) {
   const targetId = reqTargetId || (targetType === 'shot' ? `shot_${shotIndex}` : `char_${characterName}`);
   const viewType = reqViewType || (targetType === 'shot' ? 'main' : 'avatar');
   const projectPreferences = projectComfyPreferences(String(projectId || ''));
+  let effectiveStyleContract: ReturnType<typeof resolveEffectiveStyleContract> | null = null;
+  if (targetType === 'shot' && viewType === 'main') {
+    try {
+      effectiveStyleContract = resolveEffectiveStyleContract(readDb, String(projectId || ''));
+    } catch (error: any) {
+      console.warn('[StyleContract:PrepareFallback]', JSON.stringify({ projectId: String(projectId || ''), error: error?.code || error?.message || String(error) }));
+    }
+    const overlay = String(effectiveStyleContract?.styleOverlay || '').trim();
+    if (overlay && !optimizedPrompt.includes(overlay)) {
+      optimizedPrompt = [
+        optimizedPrompt,
+        `Project art direction style overlay (style only; preserve shot content and composition): ${overlay}`,
+      ].filter(Boolean).join('\n\n');
+    }
+  }
+  const contractControlsShotStyle = (effectiveStyleContract?.version || 0) >= 1;
   const hasExplicitPreset = reqPresetId !== undefined || reqWorkflowPresetId !== undefined;
   const explicitPreset = reqPresetId ?? reqWorkflowPresetId;
   const lockCharacterIdentity = targetType === 'shot' ? reqLockCharacterIdentity !== false : false;
@@ -6834,7 +6900,9 @@ async function prepareComfyTaskData(reqBody: any) {
   }
 
   let selectedPreset: string;
-  if (hasExplicitPreset) {
+  if (contractControlsShotStyle) {
+    selectedPreset = effectiveStyleContract!.storyboardPresetId;
+  } else if (hasExplicitPreset) {
     selectedPreset = String(explicitPreset || 'sdxl_legacy');
   } else if (reqPresetRole === 'threeView') {
     selectedPreset = projectPreferences.threeViewPresetId;
@@ -6869,8 +6937,8 @@ async function prepareComfyTaskData(reqBody: any) {
     }));
   }
 
-  const requestedWidth = Number(reqWidth) || (isCharacter ? 512 : 768);
-  const requestedHeight = Number(reqHeight) || (isCharacter ? 768 : 512);
+  const requestedWidth = contractControlsShotStyle ? effectiveStyleContract!.width : (Number(reqWidth) || (isCharacter ? 512 : 768));
+  const requestedHeight = contractControlsShotStyle ? effectiveStyleContract!.height : (Number(reqHeight) || (isCharacter ? 768 : 512));
   const width = Math.max(256, Math.min(2048, Math.floor(requestedWidth / 64) * 64));
   const height = Math.max(256, Math.min(2048, Math.floor(requestedHeight / 64) * 64));
 
@@ -6923,7 +6991,9 @@ async function prepareComfyTaskData(reqBody: any) {
     }
 
     const strength = reqStrength !== undefined ? Number(reqStrength) : manifest.defaultParameters?.strength;
-    const loraStrength = reqLoraStrength !== undefined ? Number(reqLoraStrength) : manifest.defaultParameters?.loraStrength;
+    const loraStrength = contractControlsShotStyle
+      ? effectiveStyleContract!.loraStrength
+      : (reqLoraStrength !== undefined ? Number(reqLoraStrength) : manifest.defaultParameters?.loraStrength);
 
     const identityPrompt = characterReference.characters.length
       ? `IDENTITY PRIORITY: preserve the supplied character design exactly; do not redesign face, hair, clothing, colors, age, or body shape. ${characterReference.characters.map((character: any) => `${character.name}: ${character.clothing || character.role || ''}`).join('; ')}. SHOT: ${optimizedPrompt}`

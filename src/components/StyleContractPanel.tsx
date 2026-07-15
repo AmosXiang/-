@@ -55,9 +55,11 @@ function presetValue(value: unknown): string {
 export default function StyleContractPanel({
   projectId,
   onLockedChange,
+  refreshNonce = 0,
 }: {
   projectId: string;
   onLockedChange?: (locked: boolean) => void;
+  refreshNonce?: number;
 }) {
   const [contract, setContract] = useState<StyleContractFields | null>(null);
   const [savedContract, setSavedContract] = useState<StyleContractFields | null>(null);
@@ -113,7 +115,7 @@ export default function StyleContractPanel({
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [load, refreshNonce]);
 
   const patchContract = <Key extends keyof StyleContractFields>(key: Key, value: StyleContractFields[Key]) => {
     setContract(current => current ? { ...current, [key]: value } : current);
