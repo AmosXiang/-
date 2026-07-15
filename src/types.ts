@@ -125,6 +125,18 @@ export interface GeneratedScriptRecord extends GeneratedScript {
   createdAt: string;
   sourceScriptId?: string | null;
   artDirection?: { overlay: string; analysis?: unknown; updatedAt?: string };
+  storyDraft?: {
+    logline: string;
+    beats: Array<{ id: string; title: string; summary: string }>;
+    hooks: Array<{ id: string; time: string; label: string }>;
+  };
+  storyVersion?: number;
+  storyVersions?: Array<{
+    version: number;
+    savedAt: string;
+    note?: string;
+    storyDraft: NonNullable<GeneratedScriptRecord['storyDraft']>;
+  }>;
 }
 
 
