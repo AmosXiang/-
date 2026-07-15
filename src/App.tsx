@@ -37,6 +37,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { videoAnalysisData } from "./data";
 import { Shot, Character, VideoRecord, GeneratedScriptRecord } from "./types";
 import CameraDerivePanel from "./components/CameraDerivePanel";
+import { useHashRoute, navigateTo } from "./router";
 
 // 图片资源失败态:src 为空显示"暂无图片",加载 404/失败显示"加载失败",不出现浏览器破图图标(P0)。
 function SafeImg({ src, alt, className, onClick }: { src?: string; alt?: string; className?: string; onClick?: () => void }) {
@@ -270,15 +271,7 @@ function StoryboardInspector({ shot, characters, provider, onProviderChange, onC
       )}
     </div>
 
-    {/* Video Provider Selector */}
-    <section className="inspector-group">
-      <h4>视频生成服务商</h4>
-      <select value={provider} onChange={e => onProviderChange(e.target.value as 'kling' | 'seedance')} className="w-full rounded border border-slate-750 bg-slate-950 p-1.5 text-xs text-slate-300">
-        <option value="kling">Kling AI (限时 10 秒)</option>
-        <option value="seedance">Seedance (限时 12 秒)</option>
-      </select>
-    </section>
-
+    {/* P1: 视频生成服务商选择已随视频生成 UI 下线;provider 仍用于时长上限与提示词预览口径 */}
     <section className="inspector-group"><h4>运镜</h4><label>类型<select value={localShot.camera!.move} onChange={event => patchShot({ camera: { ...localShot.camera!, move: event.target.value as Shot['camera']['move'] } })}>{CAMERA_MOVE_OPTIONS.map(value => <option key={value}>{value}</option>)}</select></label><div className="segmented-control">{CAMERA_SPEED_OPTIONS.map(value => <button key={value} type="button" onClick={() => patchShot({ camera: { ...localShot.camera!, speed: value } })} className={localShot.camera!.speed === value ? 'active' : ''}>{value}</button>)}</div><label>补充说明<textarea value={localShot.camera!.note} onChange={event => patchShot({ camera: { ...localShot.camera!, note: event.target.value } })} /></label></section>
     <section className="inspector-group"><h4>景别与视角</h4><div className="grid grid-cols-2 gap-2"><label>景别<select value={localShot.framing!.shotSize} onChange={event => patchShot({ framing: { ...localShot.framing!, shotSize: event.target.value as Shot['framing']['shotSize'] } })}>{SHOT_SIZE_OPTIONS.map(value => <option key={value}>{value}</option>)}</select></label><label>视角<select value={localShot.framing!.angle} onChange={event => patchShot({ framing: { ...localShot.framing!, angle: event.target.value as Shot['framing']['angle'] } })}>{CAMERA_ANGLE_OPTIONS.map(value => <option key={value}>{value}</option>)}</select></label></div></section>
     <section className="inspector-group"><h4>人物位置</h4>{matched.length ? matched.map(character => { const characterId = String(character.id); const row = localShot.blocking!.find(item => item.characterId === characterId); if (!row) return <p key={characterId} className="text-amber-300">{character.name} 尚无站位数据</p>; const updateRow = (patch: Partial<typeof row>) => patchShot({ blocking: localShot.blocking!.map(item => item.characterId === characterId ? { ...item, ...patch } : item) }); return <div key={characterId} className="blocking-row"><strong>{character.name}</strong><select value={row.layer} onChange={e => updateRow({ layer: e.target.value as typeof row.layer })}><option value="foreground">前景</option><option value="midground">中景</option><option value="background">背景</option></select><select value={row.position} onChange={e => updateRow({ position: e.target.value as typeof row.position })}><option value="left">左</option><option value="center">中</option><option value="right">右</option></select><select value={row.gaze} onChange={e => updateRow({ gaze: e.target.value as typeof row.gaze })}><option value="camera">看镜头</option><option value="frame_left">画面左</option><option value="frame_right">画面右</option><option value="away">背离</option></select><label className="toggle-label"><input type="checkbox" checked={row.outOfFocus} onChange={e => updateRow({ outOfFocus: e.target.checked })} />虚化</label></div>; }) : <p className="text-slate-400">先为当前分镜绑定角色。</p>}</section>
@@ -289,6 +282,7 @@ function StoryboardInspector({ shot, characters, provider, onProviderChange, onC
 }
 
 export default function App() {
+  const route = useHashRoute();
   // DB Records State
   const [records, setRecords] = useState<VideoRecord[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<VideoRecord | null>(null);
@@ -1884,10 +1878,7 @@ export default function App() {
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
       }
-      // Reset scriptwriter generator when reference template changes
-      setGeneratedScript(null);
-      setGeneratorTopic("");
-      setGeneratorError(null);
+      // P1: 生成器重置已移交路由派发器(此前在这里清空会误伤 openStudioProject 刚设置的项目)
     }
   }, [selectedRecord]);
 
@@ -2047,6 +2038,7 @@ export default function App() {
             setSelectedRecord(videoRecord);
             setIsAnalyzing(false);
             setStatusText("");
+            navigateTo(`#/analysis/${videoRecord.id}`);
           } else {
             const errData = await analyzeRes.json();
             throw new Error(errData.error || "Gemini 分析失败");
@@ -2086,6 +2078,7 @@ export default function App() {
         setRecords(prev => prev.filter(r => r.id !== id));
         if (selectedRecord && selectedRecord.id === id) {
           setSelectedRecord(null);
+          navigateTo("#/library");
         }
       }
     } catch (err) {
@@ -3487,14 +3480,71 @@ export default function App() {
     }
   };
 
-  // 主区顶部功能导航（分析面板与创意向导共用）
+  // ── P1 路由:URL 是页面/实体的唯一真相源;点击只改 hash,这里统一派发状态 ──
+  const openStudioProject = React.useCallback((script: any) => {
+    setGeneratedScript(script);
+    setSelectedRecord(null);
+    setActiveTab("generator");
+    setGeneratorTopic(script.topic || "");
+    const images: Record<string, string> = {};
+    (script.newShots || []).forEach((s: any) => {
+      if (s.generatedImageUrl) images[s.timestamp] = s.generatedImageUrl;
+      else if (s.imageUrl) images[s.timestamp] = s.imageUrl;
+    });
+    setShotImages(images);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (route.page === "analysis") {
+      if (route.videoId === "demo") {
+        if (selectedRecord !== null) setSelectedRecord(null);
+        if (generatedScript !== null) {
+          setGeneratedScript(null);
+          setGeneratorTopic("");
+          setGeneratorError(null);
+        }
+        if (activeTab === "generator") setActiveTab("shots");
+      } else {
+        const rec = records.find(r => r.id === route.videoId);
+        if (rec) {
+          if (!selectedRecord || selectedRecord.id !== rec.id) {
+            setSelectedRecord(rec);
+            setGeneratedScript(null);
+            setGeneratorTopic("");
+            setGeneratorError(null);
+          }
+          if (activeTab === "generator") setActiveTab("shots");
+        } else if (records.length > 0) {
+          navigateTo("#/library"); // 记录不存在(已删除/坏链接)时回素材库
+        }
+      }
+    } else if (route.page === "studio") {
+      if (route.projectId === "new") {
+        if (generatedScript !== null) setGeneratedScript(null);
+        if (activeTab !== "generator") setActiveTab("generator");
+      } else if (route.projectId) {
+        const script = generatedScripts.find(s => String(s.id) === String(route.projectId));
+        if (script) {
+          if (!generatedScript || String(generatedScript.id) !== String(script.id)) openStudioProject(script);
+          else if (activeTab !== "generator") setActiveTab("generator");
+        } else if (generatedScripts.length > 0) {
+          navigateTo("#/studio");
+        }
+      }
+    }
+    // 依赖刻意只含路由与数据列表:本效应是"URL→状态"单向派发器,页内交互不应触发它
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route, records, generatedScripts]);
+
+  // 主区顶部功能导航:分析三 tab 页内切换;创意生成已独立成 #/studio 路由
+  const onStudioPage = activeTab === "generator";
   const mainTabsBar = (
     <nav className="maintabs" role="tablist" aria-label="分析功能">
-      {([
+      {!onStudioPage && ([
         ["shots", "分镜脉络"],
         ["characters", "人物画像"],
         ["narrative", "叙事与爽点"],
-        ["generator", "创意生成"],
       ] as const).map(([key, label]) => (
         <button
           key={key}
@@ -3507,6 +3557,24 @@ export default function App() {
           {label}
         </button>
       ))}
+      {onStudioPage && (
+        <span className="py-2.5 text-xs font-bold text-slate-200 tracking-wider flex items-center gap-2">
+          <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+          创意工作室
+        </span>
+      )}
+      <div className="ml-auto flex items-center py-1.5">
+        {!onStudioPage && (
+          <button
+            type="button"
+            onClick={() => navigateTo("#/studio/new")}
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            以此为模板创作 →
+          </button>
+        )}
+      </div>
     </nav>
   );
 
@@ -3579,13 +3647,43 @@ export default function App() {
             <h1 className="text-sm md:text-base font-semibold tracking-tight flex items-center gap-2">
               视频智能分析工作台
               <span className="text-slate-500 font-normal text-xs bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700/50">
-                {selectedRecord ? selectedRecord.title : "Pro_Edit_Final_V4.mp4 (演示样本)"}
+                {route.page === "library"
+                  ? "素材库"
+                  : route.page === "studio"
+                    ? (generatedScript?.newTitle || "创意项目")
+                    : selectedRecord
+                      ? selectedRecord.title
+                      : "蒸汽飞空艇与少女 (演示样本)"}
               </span>
               <span className="bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded ml-2">
                 UI_REDESIGN_V1
               </span>
             </h1>
           </div>
+          <nav className="flex items-center gap-1 ml-4" aria-label="全局导航">
+            <button
+              type="button"
+              onClick={() => navigateTo("#/library")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                route.page === "library" || route.page === "analysis"
+                  ? "bg-blue-600/20 text-blue-300"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+              }`}
+            >
+              素材库
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateTo("#/studio")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                route.page === "studio"
+                  ? "bg-emerald-600/20 text-emerald-300"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+              }`}
+            >
+              创意项目
+            </button>
+          </nav>
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-mono bg-emerald-950/40 text-emerald-400 border border-emerald-800/50 px-2.5 py-0.5 rounded-full">
@@ -3742,7 +3840,183 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Workspace Area (3 columns: Library Sidebar, Player Column, Tabular Details) */}
+      {route.page === "library" ? (
+        /* ── P1: 素材库首页(上传优先落地页 + 记录网格) ── */
+        <main className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+          <div className={`max-w-5xl mx-auto px-6 pb-16 space-y-10 ${records.length === 0 ? "pt-20" : "pt-10"}`}>
+            <section>
+              {records.length === 0 && (
+                <div className="text-center mb-8 space-y-2">
+                  <h2 className="text-xl font-bold text-slate-100">从上传一条参考视频开始</h2>
+                  <p className="text-xs text-slate-500">上传后自动拉片分析:分镜脉络 · 人物画像 · 叙事与爽点</p>
+                </div>
+              )}
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={handleDrop}
+                onClick={triggerFileSelect}
+                className={`border border-dashed rounded-2xl text-center cursor-pointer transition-all duration-300 ${records.length === 0 ? "p-14" : "p-8"} ${
+                  isUploading || isAnalyzing
+                    ? "border-blue-500/50 bg-blue-950/10 cursor-not-allowed"
+                    : "border-slate-800 bg-slate-900/30 hover:border-blue-500/40 hover:bg-slate-900/60"
+                }`}
+              >
+                <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="video/*" className="hidden" />
+                {isUploading || isAnalyzing ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
+                    <p className="text-sm font-semibold text-slate-200">
+                      {isUploading ? `视频上传中 (${uploadProgress}%)` : "Gemini 分析中..."}
+                    </p>
+                    {isUploading && (
+                      <div className="w-64 bg-slate-800 h-1 rounded-full overflow-hidden">
+                        <div className="bg-blue-600 h-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="w-14 h-14 rounded-full bg-blue-950/40 flex items-center justify-center border border-blue-900/20">
+                      <Upload className="w-6 h-6 text-blue-400" />
+                    </div>
+                    <p className="text-sm font-medium text-slate-200">点击或拖拽视频文件上传</p>
+                    <p className="text-xs text-slate-500">支持 MP4, MOV, WEBM, AVI 等常见格式</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+                <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={shortDramaMode}
+                    onChange={(e) => setShortDramaMode(e.target.checked)}
+                    className="rounded border-slate-700 bg-slate-950 text-blue-600"
+                  />
+                  竖屏短剧分析模式(切分为每 3-5 秒一个镜头)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => navigateTo("#/analysis/demo")}
+                  className="text-xs text-slate-500 hover:text-blue-400 underline underline-offset-4 cursor-pointer"
+                >
+                  或先试用内置演示样本 →
+                </button>
+              </div>
+              {statusText && (
+                <div className="mt-3 p-2.5 bg-blue-950/20 border border-blue-900/40 rounded-lg text-xs text-blue-400 flex items-start gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{statusText}</span>
+                </div>
+              )}
+              {uploadError && (
+                <div className="mt-3 p-2.5 bg-rose-950/20 border border-rose-900/40 rounded-lg text-xs text-rose-400">{uploadError}</div>
+              )}
+            </section>
+
+            {records.length > 0 && (
+              <section>
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <h2 className="text-sm font-bold text-slate-200">
+                    视频分析记录 <span className="text-slate-500 font-normal">({records.length})</span>
+                  </h2>
+                  <input
+                    type="text"
+                    value={librarySearch}
+                    onChange={(e) => setLibrarySearch(e.target.value)}
+                    placeholder="搜索标题/标签/类型..."
+                    className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 w-56 outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {filteredRecords.map((rec) => (
+                    <div
+                      key={rec.id}
+                      onClick={() => navigateTo(`#/analysis/${rec.id}`)}
+                      className="group bg-slate-900/50 border border-slate-800 hover:border-blue-500/40 rounded-2xl p-4 cursor-pointer transition-all relative"
+                    >
+                      <h3 className="text-xs font-bold text-slate-200 truncate flex items-center gap-1.5 pr-6">
+                        <Film className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                        <span className="truncate">{rec.title}</span>
+                      </h3>
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        <span className="text-[9px] px-1.5 py-0.5 bg-slate-900/80 text-blue-400/80 rounded border border-blue-950">{rec.genre}</span>
+                        {rec.tags.slice(0, 3).map(tag => (
+                          <span key={tag} className="text-[9px] px-1.5 py-0.5 bg-slate-900/80 text-slate-400 rounded">{tag}</span>
+                        ))}
+                      </div>
+                      <div className="flex items-center justify-between mt-3">
+                        <span className="text-[9px] text-slate-500 font-mono flex items-center gap-1">
+                          <Calendar className="w-3 h-3 shrink-0" />
+                          {new Date(rec.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                        <span className="text-[9px] text-slate-600 font-mono">{rec.analysis?.shots?.length || 0} 分镜</span>
+                      </div>
+                      <button
+                        onClick={(e) => handleDeleteRecord(rec.id, e)}
+                        className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 hover:text-red-400 text-slate-600 p-1 rounded hover:bg-red-950/30 transition-all cursor-pointer"
+                        title="删除此视频"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        </main>
+      ) : route.page === "studio" && !route.projectId ? (
+        /* ── P1: 创意项目列表 ── */
+        <main className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+          <div className="max-w-5xl mx-auto px-6 py-10 space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-bold text-slate-200">
+                创意项目 <span className="text-slate-500 font-normal">({generatedScripts.length})</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => navigateTo("#/studio/new")}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold cursor-pointer"
+              >
+                + 新建项目
+              </button>
+            </div>
+            {generatedScripts.length === 0 ? (
+              <div className="border border-dashed border-slate-800 rounded-2xl p-12 text-center space-y-3">
+                <p className="text-sm text-slate-400">还没有创意项目</p>
+                <p className="text-xs text-slate-500">先到素材库分析一条参考视频,再点「以此为模板创作」。</p>
+                <button
+                  type="button"
+                  onClick={() => navigateTo("#/library")}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  去素材库 →
+                </button>
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {generatedScripts.map((script) => (
+                  <div
+                    key={script.id}
+                    onClick={() => navigateTo(`#/studio/${script.id}`)}
+                    className="bg-slate-900/50 border border-slate-800 hover:border-emerald-500/40 rounded-2xl p-4 cursor-pointer transition-all"
+                  >
+                    <h3 className="text-xs font-bold text-slate-200 truncate flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      <span className="truncate">{script.newTitle}</span>
+                    </h3>
+                    <p className="text-[10px] text-slate-500 mt-1.5 truncate">主题:{script.topic}</p>
+                    <p className="text-[10px] text-slate-600 mt-2 font-mono">
+                      {script.newShots?.length || 0} 分镜 · {new Date(script.createdAt).toLocaleDateString("zh-CN")}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </main>
+      ) : (
+      /* Main Workspace Area (3 columns: Library Sidebar, Player Column, Tabular Details) */
       <main className="admin-layout flex-1 flex flex-col md:flex-row overflow-hidden w-full mx-auto">
 
         {/* Column 1: Video Library & File Upload (width 320px) */}
@@ -3902,10 +4176,7 @@ export default function App() {
               <div className="divide-y divide-slate-900">
                 {/* Demo item card */}
                 <div
-                  onClick={() => {
-                    setSelectedRecord(null);
-                    setGeneratedScript(null);
-                  }}
+                  onClick={() => navigateTo("#/analysis/demo")}
                   className={`p-4 cursor-pointer transition-colors relative ${
                     selectedRecord === null && generatedScript === null
                       ? "bg-blue-950/20 border-l-2 border-blue-500"
@@ -3934,10 +4205,7 @@ export default function App() {
                     return (
                       <div
                         key={rec.id}
-                        onClick={() => {
-                          setSelectedRecord(rec);
-                          setGeneratedScript(null);
-                        }}
+                        onClick={() => navigateTo(`#/analysis/${rec.id}`)}
                         className={`p-4 cursor-pointer transition-colors relative group ${
                           isActive
                             ? "bg-blue-950/25 border-l-2 border-blue-500"
@@ -4005,22 +4273,7 @@ export default function App() {
                     return (
                       <div
                         key={script.id}
-                        onClick={() => {
-                          setGeneratedScript(script);
-                          setSelectedRecord(null); // clear video player record
-                          setActiveTab("generator");
-                          setGeneratorTopic(script.topic);
-                          // Initialize shotImages state with existing generated images
-                          const images: Record<string, string> = {};
-                          script.newShots.forEach((s: any) => {
-                            if (s.generatedImageUrl) {
-                              images[s.timestamp] = s.generatedImageUrl;
-                            } else if (s.imageUrl) {
-                              images[s.timestamp] = s.imageUrl;
-                            }
-                          });
-                          setShotImages(images);
-                        }}
+                        onClick={() => navigateTo(`#/studio/${script.id}`)}
                         className={`p-4 cursor-pointer transition-colors relative group ${
                           isActive
                             ? "bg-emerald-950/20 border-l-2 border-emerald-500"
@@ -5011,7 +5264,7 @@ export default function App() {
                             <div className="maintabs bg-slate-900/40 border-b border-slate-800/80">
                               <button type="button" className={workspaceTab === 'script' ? 'on' : ''} onClick={() => setWorkspaceTab('script')}>剧本描述</button>
                               <button type="button" className={workspaceTab === 'image' ? 'on' : ''} onClick={() => setWorkspaceTab('image')}>分镜画面</button>
-                              <button type="button" className={workspaceTab === 'video' ? 'on' : ''} onClick={() => setWorkspaceTab('video')}>动态视频</button>
+                              <button type="button" className={workspaceTab === 'video' ? 'on' : ''} onClick={() => setWorkspaceTab('video')}>视频资产</button>
                             </div>
 
                             {/* Tab Content */}
@@ -5135,39 +5388,22 @@ export default function App() {
                                 }
 
                                 if (workspaceTab === 'video') {
-                                  const videoProgressPercent = videoProgress[selectedShotIndex];
-                                  const isKlingGenerating = videoProgressPercent !== undefined || shot.videoStatus === 'submitted' || shot.videoStatus === 'processing';
+                                  // P1: 视频生成已下线,此 tab 只读展示既有视频资产(数据保留原则:成片不失去入口)
                                   return (
                                     <div className="w-full flex flex-col items-center justify-center gap-5">
                                       <div className="w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-slate-800 bg-slate-905 flex items-center justify-center relative group shadow-2xl">
                                         {shot.videoUrl ? (
-                                          <video src={shot.videoUrl} controls autoPlay loop muted className="w-full h-full object-cover animate-fade-in" />
+                                          <video src={shot.videoUrl} controls loop muted className="w-full h-full object-cover animate-fade-in" />
                                         ) : (
                                           <div className="text-center text-slate-500 text-xs flex flex-col items-center gap-2 p-6 font-normal">
                                             <span className="text-2xl">🎬</span>
-                                            <span>尚未生成动态视频片段</span>
-                                          </div>
-                                        )}
-
-                                        {isKlingGenerating && (
-                                          <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-10">
-                                            <Loader2 className="w-8 h-8 text-indigo-505 animate-spin" />
-                                            <span className="text-xs text-slate-350">
-                                              {videoProgressPercent !== undefined ? `正在生成动画片段 (${videoProgressPercent}%)...` : '正在排队生成动画...'}
-                                            </span>
+                                            <span>该分镜暂无视频资产</span>
                                           </div>
                                         )}
                                       </div>
-
-                                      <button
-                                        type="button"
-                                        onClick={() => handleGenerateVideoKling(shot, selectedShotIndex)}
-                                        disabled={!shotImg || isKlingGenerating}
-                                        className="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-950/20 transition-all cursor-pointer active:scale-95"
-                                      >
-                                        <Film className="w-4 h-4 text-indigo-200" />
-                                        <span>{shot.videoUrl ? '重新生成视频动画' : '生成视频动画片段'}</span>
-                                      </button>
+                                      <p className="text-[10px] text-slate-500 text-center max-w-md leading-relaxed">
+                                        视频生成已从创作向导下线(方案 v2.1),历史成片在此只读查看,未来将迁入独立的视频实验室模块。
+                                      </p>
                                     </div>
                                   );
                                 }
@@ -5597,6 +5833,7 @@ export default function App() {
           </div>
         </section>
       </main>
+      )}
 
       {/* Main Footer */}
       <footer className="h-8 bg-slate-950 border-t border-slate-900 px-6 flex items-center justify-between text-[10px] font-mono text-slate-500 sticky bottom-0 z-40 bg-slate-950/90 backdrop-blur-sm">
