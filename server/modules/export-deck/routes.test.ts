@@ -344,6 +344,201 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     // Verify README.txt and characters folder inside ZIP
     assert.ok(zip.file('README.txt'), 'README.txt exists inside zip');
     assert.ok(zip.file('characters/01_Captain_Jack/avatar.png'), 'Jack avatar exists inside zip');
+
+    // Verify scenes folder is absent for old projects
+    assert.ok(!zip.file('scenes/01_'), 'scenes files should not exist in zip for old projects');
+    assert.ok(readmeContent.includes('本项目未使用场景参考'), 'README should note scenes were not used');
+  });
+
+  await t.test('4. Unicode, scenes, fallback views, and traversal protection in POST export-deck', async () => {
+    const unicodeAndScenesScript = {
+      id: 'proj-2',
+      newTitle: 'ユニコードプロジェクト梅', // Japanese + CJK
+      topic: 'Testing Unicode and Scenes',
+      templateTitle: 'Template',
+      newNarrative: {
+        structure: 'Structure info',
+        rhythm: 'Rhythm info',
+        climaxDesign: 'Climax info',
+      },
+      newCharacters: [
+        {
+          id: 'char-unicode',
+          name: '角色梅_Mei', // Chinese + Japanese
+          role: '勇者🦸‍♂️👑主角', // Role with emojis (surrogate pairs)
+          avatarUrl: '/uploads/avatars/mei.png',
+          views: {
+            front: '/uploads/views/mei_front.png',
+            // side is missing
+          },
+          viewGenerations: {
+            back: { imageUrl: '/uploads/fallback/mei_back.png' }
+          }
+        },
+        {
+          id: 'char-traversal',
+          name: 'Bad Actor',
+          role: 'Traverser',
+          avatarUrl: '/uploads/../secret_file.png', // path traversal attempt
+        }
+      ],
+      newShots: [
+        {
+          id: 'shot-u-1',
+          timestamp: '00:00',
+          durationSec: 3,
+          description: 'First shot description text that runs long.',
+          optimizedPrompt: 'prompt',
+          camera: { move: 'pan', speed: 'medium', note: '' },
+          framing: { shotSize: 'medium', angle: 'front' },
+          cameraH: null,
+          cameraV: null,
+          cameraZoom: null,
+          derivedFromShotId: null,
+          isMaster: true,
+          finalTaskId: 'task-u1',
+          finalizedImageUrl: '/uploads/shot-u1.png',
+          isStale: false,
+          sceneId: 'scene-1', // maps to scene-1
+        },
+        {
+          id: 'shot-u-2',
+          timestamp: '00:03',
+          durationSec: 2,
+          description: 'Second shot description',
+          optimizedPrompt: 'prompt2',
+          camera: { move: 'static', speed: 'medium', note: '' },
+          framing: { shotSize: 'closeup', angle: 'front' },
+          cameraH: null,
+          cameraV: null,
+          cameraZoom: null,
+          derivedFromShotId: null,
+          isMaster: false,
+          finalTaskId: null,
+          finalizedImageUrl: null,
+          isStale: false,
+          sceneId: 'scene-missing', // maps to a scene that is not in references
+        }
+      ],
+      sceneReferences: [
+        {
+          id: 'scene-1',
+          name: '近未来都市_Tokyo', // Unicode name
+          imageUrl: '/uploads/scenes/tokyo.png', // exists
+          overlay: 'Tokyo Cyberpunk style overlay with long description over sixty characters to test truncation',
+          updatedAt: '2026-07-15T00:00:00Z',
+        },
+        {
+          id: 'scene-2',
+          name: '无图场景_NoImage',
+          // imageUrl missing
+          overlay: 'Overlay 2 description',
+          updatedAt: '2026-07-15T00:00:00Z',
+        },
+        {
+          id: 'scene-3',
+          name: '图不存在场景_NotExistingImage',
+          imageUrl: '/uploads/scenes/non_existent.png', // path exists but file is missing
+          overlay: 'Overlay 3 description',
+          updatedAt: '2026-07-15T00:00:00Z',
+        }
+      ]
+    };
+
+    // Write mock database entry by updating the existing store row
+    db.prepare("UPDATE store SET value = ? WHERE key = 'generated_scripts'").run(
+      JSON.stringify([mockScript, unicodeAndScenesScript])
+    );
+
+    // Create directories and mock files
+    fs.mkdirSync(path.join(tempUploadsDir, 'avatars'), { recursive: true });
+    fs.mkdirSync(path.join(tempUploadsDir, 'views'), { recursive: true });
+    fs.mkdirSync(path.join(tempUploadsDir, 'fallback'), { recursive: true });
+    fs.mkdirSync(path.join(tempUploadsDir, 'scenes'), { recursive: true });
+
+    fs.writeFileSync(path.join(tempUploadsDir, 'avatars', 'mei.png'), 'avatar-mei-content');
+    fs.writeFileSync(path.join(tempUploadsDir, 'views', 'mei_front.png'), 'front-mei-content');
+    fs.writeFileSync(path.join(tempUploadsDir, 'fallback', 'mei_back.png'), 'back-mei-content');
+    fs.writeFileSync(path.join(tempUploadsDir, 'shot-u1.png'), 'shot-u1-content');
+    fs.writeFileSync(path.join(tempUploadsDir, 'scenes', 'tokyo.png'), 'scene-tokyo-content');
+
+    // Path traversal target outside tempUploadsDir (parent folder)
+    const secretPath = path.resolve(tempUploadsDir, '..', 'secret_file.png');
+    fs.writeFileSync(secretPath, 'secret-data');
+
+    const req: any = {
+      params: { id: 'proj-2' },
+      body: { mode: 'review' },
+    };
+    const res = makeMockRes();
+
+    const postHandler = routes['POST:/api/generated-scripts/:id/export-deck'];
+    await postHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    const data = res.body;
+    assert.ok(data.success);
+
+    // Verify files existence
+    const pptxPath = path.join(data.exportDir, 'storyboard-deck.pptx');
+    const manifestPath = path.join(data.exportDir, 'storyboard-manifest.json');
+    const zipPath = path.join(data.exportDir, 'storyboard-delivery.zip');
+
+    assert.ok(fs.existsSync(pptxPath));
+    assert.ok(fs.existsSync(manifestPath));
+    assert.ok(fs.existsSync(zipPath));
+
+    // Verify ZIP file structure and entries using JSZip
+    const zipData = fs.readFileSync(zipPath);
+    const zip = await JSZipConstructor.loadAsync(zipData);
+
+    // 1. Unicode character directory name decoded properly (not broken)
+    assert.ok(zip.file('characters/01_角色梅_Mei/avatar.png'), 'Chinese/Unicode path avatar.png exists in zip');
+    assert.ok(zip.file('characters/01_角色梅_Mei/front.png'), 'Chinese/Unicode path front.png exists in zip');
+
+    // 2. viewGenerations fallback when views.* absent
+    assert.ok(zip.file('characters/01_角色梅_Mei/back.png'), 'back.png from viewGenerations fallback exists in zip');
+    assert.ok(!zip.file('characters/01_角色梅_Mei/side.png'), 'side.png is absent');
+
+    // 3. Traversal protection: avatar of Bad Actor (traversal attempt) should NOT be exported
+    assert.ok(!zip.file('characters/02_Bad_Actor/avatar.png'), 'Traversal avatar should NOT be exported');
+
+    // 4. Scenes copy check
+    assert.ok(zip.file('scenes/01_近未来都市_Tokyo.png'), 'Scene 1 image exists in zip');
+    assert.ok(!zip.file('scenes/02_无图场景_NoImage.png'), 'Scene 2 has no image');
+    assert.ok(!zip.file('scenes/03_图不存在场景_NotExistingImage.png'), 'Scene 3 has missing image file');
+
+    // 5. README verification
+    const readmeContent = fs.readFileSync(path.join(data.exportDir, 'README.txt'), 'utf8');
+    assert.ok(readmeContent.includes('3.5 场景参考清单'));
+    assert.ok(readmeContent.includes('scenes/01_近未来都市_Tokyo.png'));
+    assert.ok(readmeContent.includes('无参考图'));
+
+    // Truncated overlay snippet check
+    const expectedSnippet = 'Tokyo Cyberpunk style overlay with long description over sixty characters to test truncation'.slice(0, 60);
+    assert.ok(readmeContent.includes(expectedSnippet));
+    assert.ok(!readmeContent.includes('aracters to test truncation')); // overlay truncated to 60 characters
+
+    // Missing views check
+    assert.ok(readmeContent.includes('缺失视图: side'));
+    assert.ok(readmeContent.includes('缺失视图: avatar, front, side, back')); // Bad Actor missing all views
+
+    // 6. Manifest verification
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.ok(manifest.scenes);
+    assert.equal(manifest.scenes.length, 3);
+    assert.equal(manifest.scenes[0].name, '近未来都市_Tokyo');
+    assert.equal(manifest.scenes[0].imageFile, 'scenes/01_近未来都市_Tokyo.png');
+    assert.equal(manifest.scenes[0].overlay, 'Tokyo Cyberpunk style overlay with long description over sixty characters to test truncation');
+    assert.equal(manifest.scenes[1].imageFile, null);
+    assert.equal(manifest.scenes[2].imageFile, null);
+
+    // Shot mapping check
+    assert.equal(manifest.shots[0].sceneId, 'scene-1');
+    assert.equal(manifest.shots[1].sceneId, 'scene-missing');
+
+    // Cleanup travel file
+    fs.rmSync(secretPath, { force: true });
   });
 
   // 3. Clean up temp files

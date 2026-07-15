@@ -39,7 +39,7 @@ function isReadableFile(filePath: string): boolean {
  * Sanitizes folder and file names to prevent path traversal and bad characters.
  */
 function sanitizeFilename(name: string): string {
-  return name.replace(/[^\u4e00-\u9fa5a-zA-Z0-9_\-]/g, '_');
+  return name.replace(/[^\p{L}\p{N}_\-]/gu, '_');
 }
 
 /**
@@ -241,6 +241,7 @@ export function registerExportDeckModule(
         isStale: !!shot.isStale,
         localImagePath: resolvedLocalPath,
         imageExt: resolvedExt,
+        sceneId: shot.sceneId || null,
       };
     });
 
@@ -382,6 +383,44 @@ export function registerExportDeckModule(
         characterStatuses.push(status);
       });
 
+      // Process scenes directory and copy references if present (Objective 1 under P4b)
+      const sceneRefs = (script as any).sceneReferences;
+      const hasScenes = Array.isArray(sceneRefs) && sceneRefs.length > 0;
+      let scenesReadmeSection = '3.5 场景参考清单\n本项目未使用场景参考\n';
+      let scenesDirReadmeDesc = '';
+
+      if (hasScenes) {
+        const scenesDir = path.join(exportDir, 'scenes');
+        fs.mkdirSync(scenesDir, { recursive: true });
+
+        scenesDirReadmeDesc = '   - scenes/:\n     存放该剧本中所有场景的参考图，文件命名格式为 NN_名称.png，用于辅助三维空间重建或构图参考。\n';
+        scenesReadmeSection = '3.5 场景参考清单\n';
+
+        sceneRefs.forEach((scene: any, idx: number) => {
+          let hasLocal = false;
+          let destFileName = '';
+
+          if (scene.imageUrl) {
+            const localPath = getLocalPath(scene.imageUrl, uploadsDir);
+            if (localPath && isReadableFile(localPath)) {
+              const ext = path.extname(localPath) || '.png';
+              const twoDigitIdx = String(idx + 1).padStart(2, '0');
+              const sanitizedName = sanitizeFilename(scene.name || 'scene');
+              destFileName = `${twoDigitIdx}_${sanitizedName}${ext}`;
+              const destPath = path.join(scenesDir, destFileName);
+              fs.copyFileSync(localPath, destPath);
+              hasLocal = true;
+            }
+          }
+
+          const overlaySnippet = scene.overlay ? scene.overlay.slice(0, 60) : '无';
+          const fileStatus = hasLocal ? `scenes/${destFileName}` : '无参考图';
+          scenesReadmeSection += `- 场景: ${scene.name || '未命名'} (ID: ${scene.id})\n`;
+          scenesReadmeSection += `  * 导出状态: ${fileStatus}\n`;
+          scenesReadmeSection += `  * 描述/Overlay: ${overlaySnippet}\n`;
+        });
+      }
+
       // Generate README.txt (Objective 2)
       const readmeFileName = 'README.txt';
       const readmePath = path.join(exportDir, readmeFileName);
@@ -422,10 +461,10 @@ export function registerExportDeckModule(
      存放导出的所有分镜对应的高清大图或降级图，文件命名格式为 shot-xx.png。
    - characters/:
      存放该剧本中所包含的角色的三视图（avatar、front、side、back），用于保持角色的一致性（Role Identity）。
-
+${scenesDirReadmeDesc}
 3. 角色文件清单及缺失视图说明
 ${characterViewsLog}
-
+${scenesReadmeSection}
 4. 正式交付包与审阅稿的区别
    - 审阅稿 (Review Mode):
      允许包含未完全定稿的分镜（标注有红色 DRAFT 警示角标），用于前中期对剧本、角色与画面布局的快速迭代与意见反馈。
