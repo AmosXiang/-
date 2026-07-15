@@ -39,6 +39,8 @@ import { Shot, Character, VideoRecord, GeneratedScriptRecord } from "./types";
 import CameraDerivePanel from "./components/CameraDerivePanel";
 import StoryEditor from "./components/StoryEditor";
 import ShotVersionPanel from "./components/ShotVersionPanel";
+import DeliveryPanel from "./components/DeliveryPanel";
+import StoryboardReview from "./components/StoryboardReview";
 import { useHashRoute, navigateTo } from "./router";
 
 // 图片资源失败态:src 为空显示"暂无图片",加载 404/失败显示"加载失败",不出现浏览器破图图标(P0)。
@@ -3549,6 +3551,9 @@ export default function App() {
   // P2a: 故事编辑模态(结构化 beat sheet + 版本历史)
   const [showStoryEditor, setShowStoryEditor] = useState<boolean>(false);
 
+  // P2b: 工具内 HTML 审阅预览(打印即 PDF)
+  const [showReviewPreview, setShowReviewPreview] = useState<boolean>(false);
+
   // 主区顶部功能导航:分析三 tab 页内切换(tab 记入 URL);创意生成已独立成 #/studio 路由
   const onStudioPage = activeTab === "generator";
   const mainTabsBar = (
@@ -5391,13 +5396,13 @@ export default function App() {
                                     <div key={idx} className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-850 flex flex-col gap-2">
                                       <div className="w-full aspect-video rounded overflow-hidden border border-white/5 bg-slate-900 relative">
                                         {shotImg ? (
-                                          <img src={shotImg} alt={`分镜 &lcub;idx+1&rcub;`} className="w-full h-full object-cover" />
+                                          <img src={shotImg} alt={`分镜 ${idx + 1}`} className="w-full h-full object-cover" />
                                         ) : (
                                           <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 bg-slate-955/60 font-mono">
                                             [未生成图片]
                                           </div>
                                         )}
-                                        <span className="absolute top-1 left-1 bg-black/75 px-1.5 py-0.5 rounded text-[8px] font-mono text-slate-400">#${idx+1}</span>
+                                        <span className="absolute top-1 left-1 bg-black/75 px-1.5 py-0.5 rounded text-[8px] font-mono text-slate-400">#{idx + 1}</span>
                                       </div>
                                       <div className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed font-normal">
                                         {shot.description}
@@ -5410,6 +5415,25 @@ export default function App() {
 
                             {/* Right Column: Controls & Metrics */}
                             <div className="space-y-4 flex flex-col">
+                              {/* P2b: 交付检查与双模式导出(接 export-deck API) */}
+                              <DeliveryPanel
+                                projectId={String(generatedScript.id)}
+                                onJumpToShot={(shotId: string) => {
+                                  const idx = generatedScript.newShots.findIndex((s: Shot) => String(s.id) === String(shotId));
+                                  if (idx >= 0) {
+                                    setSelectedShotIndex(idx);
+                                    setWorkspaceTab("image");
+                                    setCreativeStep(3);
+                                  }
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowReviewPreview(true)}
+                                className="w-full py-2 bg-slate-850 hover:bg-slate-800 border border-slate-700/60 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
+                              >
+                                👁 审阅预览（打印即 PDF）
+                              </button>
                               {/* Status Metrics */}
                               <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/80 space-y-3">
                                 <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">幕后渲染进度与状态</h5>
@@ -5751,6 +5775,13 @@ export default function App() {
               />
             </div>
           </div>
+        </div>
+      )}
+
+      {/* P2b: 工具内审阅预览(全屏) */}
+      {showReviewPreview && generatedScript && (
+        <div className="fixed inset-0 z-[400] bg-slate-950 overflow-y-auto custom-scrollbar">
+          <StoryboardReview script={generatedScript} onClose={() => setShowReviewPreview(false)} />
         </div>
       )}
 
