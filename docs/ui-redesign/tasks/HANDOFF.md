@@ -18,7 +18,7 @@
 
 ## 铁律（踩过坑固化的，务必守）
 
-1. **主工作区永久归 CC**（前端热区 `src/App.tsx`/`index.css`/`router.ts`/`main.tsx` 独占）。外部 agent **强制 `git worktree add`**，禁止在主工作区切分支——违反过一次，CC 的提交落错分支，做过手术。
+1. **主工作区归 CC；外部 agent 强制 `git worktree add`**，禁止在主工作区切分支——违反过一次，CC 的提交落错分支，做过手术。**热区规则 2026-07-15 修订（用户拍板）**：前端热区（App.tsx 等）向 Codex 放权，但仅限任务书列明的区域，CC 逐行严审；分工=CC review/合并/回归，Codex coding/验证/提交。
 2. **视觉/交互验收以复核方(CC)为准**，agent 自报 PASS 不作数（Antigravity 自报 COM 渲染通过却没拦住画布越界，就是这条的由来）。
 3. **合并只经集成分支**，CC 统一执行 + 回归(lint + 全量 node:test + 真机冒烟)。
 4. 外包套路（已验证 5 次，省 CC 额度）：**Codex 写后端模块 + 独立前端组件文件；CC 只做 App.tsx 热区接线**。后端模块照抄 `server/modules/camera-derive/` 结构；server.ts 每包只许 1 行 import + 1 行 register。
