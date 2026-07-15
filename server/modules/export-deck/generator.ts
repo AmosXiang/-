@@ -88,7 +88,8 @@ export async function generatePptx(
   uploadsDir: string
 ): Promise<void> {
   const pres = new PptxGenConstructor();
-  pres.layout = 'LAYOUT_16x9';
+  // Using WIDE layout (13.33 x 7.5 inches) to prevent layout overflows
+  pres.layout = 'LAYOUT_WIDE';
 
   // Calculate stats for cover
   const total = shotsData.length;
@@ -547,6 +548,171 @@ export async function generatePptx(
         color: 'EF4444',
       });
     }
+  }
+
+  // 3. Contact Sheet Summary Slide(s)
+  const shotsPerPage = 16;
+  const numPages = Math.ceil(total / shotsPerPage);
+
+  for (let pageIdx = 0; pageIdx < numPages; pageIdx++) {
+    const csSlide = pres.addSlide();
+    csSlide.background = { fill: '121214' };
+
+    // Slide Title
+    csSlide.addText(`镜头总览 (Contact Sheet) - 第 ${pageIdx + 1}/${numPages} 页`, {
+      x: 0.5,
+      y: 0.4,
+      w: 12.33,
+      h: 0.4,
+      fontFace: FONT_FACE,
+      fontSize: 18,
+      bold: true,
+      color: 'FFFFFF',
+    });
+
+    const startIdx = pageIdx * shotsPerPage;
+    const endIdx = Math.min(startIdx + shotsPerPage, total);
+
+    for (let i = startIdx; i < endIdx; i++) {
+      const shot = shotsData[i];
+      const relativeIdx = i - startIdx;
+      const row = Math.floor(relativeIdx / 4);
+      const col = relativeIdx % 4;
+
+      const x = 0.76 + col * 3.0;
+      const y = 1.1 + row * 1.4;
+
+      // Draw slot background card
+      csSlide.addShape(pres.ShapeType.rect, {
+        x,
+        y,
+        w: 2.8,
+        h: 1.2,
+        fill: { color: '1A1A1E' },
+        line: { color: '2E2E34', width: 1 },
+      });
+
+      // Image or placeholder
+      const imgX = x + 0.1;
+      const imgY = y + 0.15;
+      const imgW = 1.6;
+      const imgH = 0.9; // 16:9 ratio fits nicely in 1.2 height leaving 0.15 margins
+
+      if (shot.localImagePath) {
+        csSlide.addImage({
+          path: shot.localImagePath,
+          x: imgX,
+          y: imgY,
+          w: imgW,
+          h: imgH,
+          sizing: { type: 'contain', w: imgW, h: imgH },
+        });
+      } else {
+        csSlide.addShape(pres.ShapeType.rect, {
+          x: imgX,
+          y: imgY,
+          w: imgW,
+          h: imgH,
+          fill: { color: '2D2D30' },
+          line: { color: '4B5563', width: 1 },
+        });
+        csSlide.addText('无图', {
+          x: imgX,
+          y: imgY,
+          w: imgW,
+          h: imgH,
+          fontFace: FONT_FACE,
+          fontSize: 10,
+          color: '6B7280',
+          align: 'center',
+          valign: 'middle',
+        });
+      }
+
+      // Add Corner Badges: DRAFT (unfinalized) or N/A (no image)
+      const isDraft = !shot.finalized;
+      const isNoImage = !shot.localImagePath;
+
+      if (isDraft || isNoImage) {
+        const badgeW = 0.45;
+        const badgeH = 0.22;
+        const badgeX = imgX + imgW - badgeW;
+        const badgeY = imgY;
+
+        csSlide.addShape(pres.ShapeType.rect, {
+          x: badgeX,
+          y: badgeY,
+          w: badgeW,
+          h: badgeH,
+          fill: { color: 'EF4444' }, // Red
+        });
+        csSlide.addText(isDraft ? 'DRAFT' : 'N/A', {
+          x: badgeX,
+          y: badgeY,
+          w: badgeW,
+          h: badgeH,
+          fontFace: FONT_FACE,
+          fontSize: 7.5,
+          bold: true,
+          color: 'FFFFFF',
+          align: 'center',
+          valign: 'middle',
+        });
+      }
+
+      // Metadata text on the right side of the image
+      const textX = x + 1.75;
+      const textW = 0.95;
+
+      // 1. #序号
+      const twoDigitIdx = String(shot.index).padStart(2, '0');
+      csSlide.addText(`#${twoDigitIdx}`, {
+        x: textX,
+        y: y + 0.15,
+        w: textW,
+        h: 0.25,
+        fontFace: FONT_FACE,
+        fontSize: 11,
+        bold: true,
+        color: 'FFFFFF',
+      });
+
+      // 2. Shot size & Framing (small size)
+      const sizeText = shot.framing.shotSize || '-';
+      csSlide.addText(sizeText, {
+        x: textX,
+        y: y + 0.45,
+        w: textW,
+        h: 0.2,
+        fontFace: FONT_FACE,
+        fontSize: 8,
+        color: '9CA3AF',
+      });
+
+      // 3. Duration & master status
+      const durationText = `${shot.durationSec}s${shot.isMaster ? ' ★' : ''}`;
+      csSlide.addText(durationText, {
+        x: textX,
+        y: y + 0.75,
+        w: textW,
+        h: 0.25,
+        fontFace: FONT_FACE,
+        bold: shot.isMaster,
+        fontSize: 8.5,
+        color: shot.isMaster ? 'F59E0B' : '9CA3AF',
+      });
+    }
+
+    // Footers
+    csSlide.addText(`审阅稿 · 镜头总览页面`, {
+      x: 0.5,
+      y: 6.9,
+      w: 5.0,
+      h: 0.3,
+      fontFace: FONT_FACE,
+      fontSize: 10,
+      color: '9CA3AF',
+    });
   }
 
   // Save the slide deck file

@@ -269,6 +269,14 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     assert.ok(fs.existsSync(manifestPath), 'storyboard-manifest.json exists');
     assert.ok(fs.existsSync(zipPath), 'storyboard-delivery.zip exists');
 
+    // Slide Count verification (1 cover + 3 shots + 1 contact sheet slide = 5 slides)
+    const pptxData = fs.readFileSync(pptxPath);
+    const pptxZip = await JSZipConstructor.loadAsync(pptxData);
+    const slideXmlFiles = Object.keys(pptxZip.files).filter(filename =>
+      filename.startsWith('ppt/slides/slide') && filename.endsWith('.xml')
+    );
+    assert.equal(slideXmlFiles.length, 5, 'PPTX should have exactly 5 slides (1 cover + 3 shots + 1 contact sheet)');
+
     // Check copied finals images
     const finalsDir = path.join(data.exportDir, 'finals');
     assert.ok(fs.existsSync(finalsDir), 'finals directory exists');
