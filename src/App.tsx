@@ -37,6 +37,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { videoAnalysisData } from "./data";
 import { Shot, Character, VideoRecord, GeneratedScriptRecord } from "./types";
 import CameraDerivePanel from "./components/CameraDerivePanel";
+import StoryEditor from "./components/StoryEditor";
+import ShotVersionPanel from "./components/ShotVersionPanel";
 import { useHashRoute, navigateTo } from "./router";
 
 // 图片资源失败态:src 为空显示"暂无图片",加载 404/失败显示"加载失败",不出现浏览器破图图标(P0)。
@@ -3544,6 +3546,9 @@ export default function App() {
   // P1b: 分析页右栏统计默认收起(顶部一行摘要),点击展开
   const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
 
+  // P2a: 故事编辑模态(结构化 beat sheet + 版本历史)
+  const [showStoryEditor, setShowStoryEditor] = useState<boolean>(false);
+
   // 主区顶部功能导航:分析三 tab 页内切换(tab 记入 URL);创意生成已独立成 #/studio 路由
   const onStudioPage = activeTab === "generator";
   const mainTabsBar = (
@@ -4568,6 +4573,14 @@ export default function App() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      {/* P2a: 故事编辑(结构化 beat sheet,版本化保存) */}
+                      <button
+                        type="button"
+                        onClick={() => setShowStoryEditor(true)}
+                        className="px-3 py-1.5 rounded-lg border border-blue-800/40 bg-blue-950/20 text-[10px] font-semibold text-blue-300 hover:bg-blue-900/30 transition-all cursor-pointer font-bold"
+                      >
+                        📖 故事编辑{generatedScript.storyVersion ? ` v${generatedScript.storyVersion}` : ""}
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -5085,7 +5098,11 @@ export default function App() {
                                     }`}
                                   >
                                     <div className="flex items-center justify-between">
-                                      <span className="text-[10px] font-mono text-slate-500">#{idx + 1} ({(shot.timestamp || "").split(" - ")[0]})</span>
+                                      <span className="text-[10px] font-mono text-slate-500 flex items-center gap-1">
+                                        #{idx + 1} ({(shot.timestamp || "").split(" - ")[0]})
+                                        {shot.finalTaskId && <span className="px-1 rounded bg-emerald-950/60 text-emerald-400 text-[8px] font-bold" title="已定稿">定</span>}
+                                        {shot.isStale && <span className="px-1 rounded bg-amber-950/60 text-amber-400 text-[8px] font-bold" title="基于旧输入">旧</span>}
+                                      </span>
                                       <input
                                         type="checkbox"
                                         checked={isChecked}
@@ -5243,6 +5260,20 @@ export default function App() {
                                             <span>ComfyUI 高级调整</span>
                                           </button>
                                         )}
+                                      </div>
+
+                                      {/* P2a: 生成版本历史与定稿(接 shot-review API) */}
+                                      <div className="w-full max-w-xl">
+                                        <ShotVersionPanel
+                                          projectId={String(generatedScript.id)}
+                                          shotId={String(shot.id || "")}
+                                          finalTaskId={shot.finalTaskId}
+                                          onShotUpdated={(updatedShot: any) => {
+                                            setGeneratedScript((current: any) => current
+                                              ? { ...current, newShots: current.newShots.map((item: Shot) => String(item.id) === String(updatedShot.id) ? { ...item, ...updatedShot } : item) }
+                                              : current);
+                                          }}
+                                        />
                                       </div>
                                     </div>
                                   );
@@ -5695,6 +5726,32 @@ export default function App() {
         </section>
         )}
       </main>
+      )}
+
+      {/* P2a: 故事编辑模态 */}
+      {showStoryEditor && generatedScript && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowStoryEditor(false)} />
+          <div className="relative bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between p-4 border-b border-slate-800 shrink-0">
+              <span className="text-sm font-bold text-slate-100 flex items-center gap-2">📖 故事编辑</span>
+              <button
+                type="button"
+                onClick={() => setShowStoryEditor(false)}
+                className="text-slate-500 hover:text-slate-200 p-1 rounded cursor-pointer"
+                aria-label="关闭"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-4">
+              <StoryEditor
+                projectId={String(generatedScript.id)}
+                onSaved={() => { void refreshGeneratedScripts(); }}
+              />
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Main Footer */}
