@@ -78,6 +78,15 @@ function truncateText(text: string | undefined | null, maxLength: number): strin
 }
 
 /**
+ * Truncates role text and appends "..." if it exceeds maxLength.
+ */
+function truncateRole(text: string | undefined | null, maxLength: number): string {
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + '…';
+}
+
+/**
  * Generates the PowerPoint file.
  */
 export async function generatePptx(
@@ -258,15 +267,16 @@ export async function generatePptx(
     });
 
     // Role
-    cover.addText(char.role || '', {
+    cover.addText(truncateRole(char.role, 14), {
       x: cardX + 0.9,
       y: charY + 0.45,
-      w: 0.85,
-      h: 0.4,
+      w: 0.82,
+      h: 0.38,
       fontFace: FONT_FACE,
-      fontSize: 8.5,
+      fontSize: 7.5,
       color: '9CA3AF',
       valign: 'top',
+      shrinkText: true,
     });
   }
 
