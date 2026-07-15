@@ -354,6 +354,11 @@ if (!comfyTaskColumns.has('queuePosition')) {
 if (!comfyTaskColumns.has('stateDetail')) {
   dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN stateDetail TEXT');
 }
+// P3 参数快照:每个 shot main 生成任务记录 { storyVersion, styleContractVersion, basedOnStoryVersion, seed }
+// (taskId=行 id、resultPath=imageUrl 已有,不重复存)。旧任务行留空,派生逻辑按缺省处理。
+if (!comfyTaskColumns.has('generationSnapshotJson')) {
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN generationSnapshotJson TEXT');
+}
 
 dbSqlite.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_comfy_manual_import_unique
@@ -1754,6 +1759,52 @@ function projectComfyPreferences(projectId: string): ComfyProjectPreferences {
     ...LEGACY_PROJECT_COMFY_PREFERENCES,
     ...(saved && typeof saved === 'object' ? saved : {}),
   };
+}
+
+// P3 参数快照:项目当前故事版本 + 风格契约版本。旧项目缺字段 = 0(未初始化,优雅降级)。
+function projectSnapshotVersions(projectId: string): { storyVersion: number; styleContractVersion: number } {
+  const script = readDb().generated_scripts.find((item: any) => String(item.id) === String(projectId));
+  return {
+    storyVersion: Number(script?.storyVersion) || 0,
+    styleContractVersion: Number(script?.styleContract?.version) || 0,
+  };
+}
+
+// 组装一个 shot main 生成任务的参数快照 JSON。seed 取任务解析后的实际值(random 时可能为空)。
+function buildShotGenerationSnapshot(projectId: string, seed: unknown): { json: string; storyVersion: number } {
+  const { storyVersion, styleContractVersion } = projectSnapshotVersions(projectId);
+  const seedNum = seed === undefined || seed === null || seed === '' ? null : Number(seed);
+  return {
+    json: JSON.stringify({
+      storyVersion,
+      styleContractVersion,
+      basedOnStoryVersion: storyVersion,
+      seed: Number.isFinite(seedNum as number) ? seedNum : null,
+    }),
+    storyVersion,
+  };
+}
+
+// 生成时把 basedOnStoryVersion / basedOnStyleContractVersion 落到对应 shot JSON,并清除 isStale
+// (刚生成 = 基于当前故事+当前风格契约,非过期)。
+// isStale 语义收敛(2026-07-15, v1.1):派生权威口径 = basedOnStoryVersion < 当前 storyVersion 或
+// basedOnStyleContractVersion < 当前 styleContract.version;story-version 的 markShotsStale 仍可显式置 true。
+async function stampShotGenerationProvenance(projectId: string, shotTargetIds: string[]) {
+  const idSet = new Set(shotTargetIds.map(String));
+  if (idSet.size === 0) return;
+  const { storyVersion, styleContractVersion } = projectSnapshotVersions(projectId);
+  await mutateDb(db => {
+    const index = db.generated_scripts.findIndex((item: any) => String(item.id) === String(projectId));
+    if (index < 0) return;
+    const script = db.generated_scripts[index];
+    if (!Array.isArray(script.newShots)) return;
+    script.newShots = script.newShots.map((shot: any) =>
+      idSet.has(String(shot.id))
+        ? { ...shot, basedOnStoryVersion: storyVersion, basedOnStyleContractVersion: styleContractVersion, isStale: false }
+        : shot
+    );
+    db.generated_scripts[index] = script;
+  });
 }
 
 function normalizeComfyPreferences(requested: any): ComfyProjectPreferences {
@@ -6021,8 +6072,8 @@ app.post('/api/comfyui/tasks/:id/retry', async (req, res) => {
           prompt, negativePrompt, seed, model, width, height, status, retryCount, retryOfTaskId,
           apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
           workflowPresetId, workflowFamily, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson,
-          characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, workflowBatchId, batchOrder
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, workflowBatchId, batchOrder, generationSnapshotJson
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         newTaskId,
         oldTask.projectId,
@@ -6054,7 +6105,8 @@ app.post('/api/comfyui/tasks/:id/retry', async (req, res) => {
         oldTask.characterReferenceTaskId,
         oldTask.lockCharacterIdentity,
         oldTask.workflowBatchId,
-        oldTask.batchOrder
+        oldTask.batchOrder,
+        oldTask.generationSnapshotJson ?? null  // P3:重试沿用原任务的参数快照
       );
     });
     tx();
@@ -6278,8 +6330,8 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
             prompt, negativePrompt, seed, model, width, height, status, retryCount,
             apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
             workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson,
-            characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, batchOrder
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, batchOrder, generationSnapshotJson
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           t.id,
           t.projectId,
@@ -6310,11 +6362,14 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
           t.characterReferenceImageUrl,
           t.characterReferenceTaskId,
           t.lockCharacterIdentity,
-          t.batchOrder
+          t.batchOrder,
+          buildShotGenerationSnapshot(projectId, t.seed).json  // P3 参数快照(generate-all 全为 shot main)
         );
       }
     });
     tx();
+    // P3:把 basedOnStoryVersion / basedOnStyleContractVersion 落到本批次涉及的 shots(全批版本一致)。
+    await stampShotGenerationProvenance(projectId, tasksToCreate.map(t => String(t.targetId)));
 
     console.log(`[Generate All] Successfully enqueued batch ${workflowBatchId} with ${tasksToCreate.length} tasks.`);
     return res.json({
@@ -7216,6 +7271,11 @@ app.post('/api/generate-image', async (req, res) => {
         const taskId = crypto.randomUUID();
         const prepared = await prepareComfyTaskData(req.body);
 
+        // P3 参数快照:仅 shot 主画面生成记录故事/风格契约版本快照。
+        const shotSnapshot = (prepared.taskData.targetType === 'shot' && prepared.taskData.viewType === 'main')
+          ? buildShotGenerationSnapshot(prepared.taskData.projectId, prepared.taskData.seed)
+          : null;
+
         const tx = dbSqlite.transaction(() => {
           dbSqlite.prepare(`
             UPDATE comfyui_tasks
@@ -7229,8 +7289,8 @@ app.post('/api/generate-image', async (req, res) => {
               prompt, negativePrompt, seed, model, width, height, status, retryCount,
               apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
               workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson,
-              characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, generationSnapshotJson
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             taskId,
             prepared.taskData.projectId,
@@ -7260,10 +7320,14 @@ app.post('/api/generate-image', async (req, res) => {
             prepared.taskData.presetParametersJson,
             prepared.taskData.characterReferenceImageUrl,
             prepared.taskData.characterReferenceTaskId,
-            prepared.taskData.lockCharacterIdentity
+            prepared.taskData.lockCharacterIdentity,
+            shotSnapshot?.json ?? null
           );
         });
         tx();
+        if (shotSnapshot) {
+          await stampShotGenerationProvenance(prepared.taskData.projectId, [String(prepared.taskData.targetId)]);
+        }
 
         console.log(`[Queue] Enqueued preset/custom task ${taskId} for ${prepared.taskData.targetId}:${prepared.taskData.viewType}`);
         if (prepared.taskData.targetType === 'shot') {

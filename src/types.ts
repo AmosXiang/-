@@ -47,6 +47,9 @@ export interface Shot {
   finalTaskId?: string;               // 已定稿的 ComfyUI main-shot task id
   finalizedImageUrl?: string;         // 定稿任务对应的本地 /uploads/... 图片 URL
   isStale?: boolean;                  // 上游故事/风格/角色变化后标记为基于旧输入
+  basedOnStoryVersion?: number;       // P3:生成时的故事版本号
+  basedOnStyleContractVersion?: number; // P3:生成时的风格契约版本号
+  // isStale 派生权威口径:basedOnStoryVersion < 当前 storyVersion 或 basedOnStyleContractVersion < 当前 styleContract.version
 }
 
 export interface Character {
