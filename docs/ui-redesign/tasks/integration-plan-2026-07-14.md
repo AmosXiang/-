@@ -65,7 +65,7 @@ WP-C 阻塞根因（Codex 视觉复验确认）：`pres.layout = 'LAYOUT_16x9'` 
 | **0 立即** | WP-C 修复 + Contact Sheet + 视觉 PASS | Antigravity（worktree 强制） |
 | **1 集成** | 契约抽查 → ui-v2-integration 三分支合并 → 回归 → 合回主线 | CC |
 | **P1b** | 分析页布局重构、系统抽屉收紧、tab 进 URL、项目卡"继续上次工作" | CC |
-| **P2a** | 故事编辑三块 + 故事版本存储 + 分镜"基于故事 v几"标记（接 WP-B stale）+ 定稿 UI（版本对比/设为定稿，接 WP-B API） | CC 前端；故事版本后端 API 可切 Codex（届时另出契约） |
+| **P2a** | 故事编辑三块 + 故事版本存储 + 分镜"基于旧输入"标注（`isStale`；与具体故事版本号的数值绑定 `basedOnStoryVersion` 需写生成链路，**收敛归 P3 参数快照**，2026-07-15 裁决）+ 定稿 UI（版本对比/设为定稿，接 WP-B API） | Codex：后端模块 + StoryEditor/ShotVersionPanel 两个独立组件（契约 codex-story-version.md）；CC：App.tsx 热区接线 |
 | **P2b** | 检查器五区重组、交付检查 + 导出 UI（接 WP-C）、工具内 HTML 审阅预览 | CC |
 | **P3** | 风格契约 + 参数快照、场景参考轻量版 | CC + Codex（后端） |
 | **P4** | 交付包增强：characters/ 目录、README.txt（Contact Sheet 已提前到批次 0） | Antigravity |
