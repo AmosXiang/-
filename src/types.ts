@@ -120,6 +120,17 @@ export interface GeneratedScript {
   newShots: Shot[];
 }
 
+export interface StyleContract {
+  version: number;
+  locked: boolean;
+  updatedAt: string;
+  storyboardPresetId: string;
+  styleOverlay: string;
+  width: number;
+  height: number;
+  loraStrength: number;
+}
+
 export interface GeneratedScriptRecord extends GeneratedScript {
   id: string;
   templateId: string;
@@ -140,6 +151,7 @@ export interface GeneratedScriptRecord extends GeneratedScript {
     note?: string;
     storyDraft: NonNullable<GeneratedScriptRecord['storyDraft']>;
   }>;
+  styleContract?: StyleContract;
 }
 
 

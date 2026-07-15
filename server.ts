@@ -18,6 +18,7 @@ import { registerShotReviewModule } from './server/modules/shot-review/index.ts'
 import { detectComfyProcesses, getPort8001OwnerPids as port8001OwnerPids } from './comfyui-health.ts';
 import { registerExportDeckModule } from './server/modules/export-deck/index.ts';
 import { registerStoryVersionModule } from './server/modules/story-version/index.ts';
+import { registerStyleContractModule } from './server/modules/style-contract/index.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -7487,6 +7488,7 @@ registerShotReviewModule(app, dbSqlite, { mutateDb, uploadsDir: UPLOADS_DIR });
 
 registerExportDeckModule(app, dbSqlite, { uploadsDir: UPLOADS_DIR });
 registerStoryVersionModule(app, dbSqlite, { mutateDb });
+registerStyleContractModule(app, { readDb, mutateDb });
 
 // Keep unknown API routes machine-readable. This must precede the production
 // SPA fallback, otherwise an API typo receives index.html and breaks JSON parsing.
