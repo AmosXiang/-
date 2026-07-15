@@ -25,9 +25,9 @@
 - **linter (`npm run lint`)**: `tsc --noEmit` 通过，无任何类型与代码规范警告。
 - **build (`npm run build`)**: Vite 生产构建打包成功，输出正常。
 
-### 1.3 溢出 (Overflow) 审计与高清渲染验证 (240 DPI)
-使用 `render_pdf.js` 配合 `puppeteer-core` 调用本地 Chrome 以 `deviceScaleFactor: 3`
-逐页独立渲染 PDF 为高精度 PNG 截图，人工核对结果：
+### 1.3 溢出 (Overflow) 审计与高清渲染验证 (300 DPI)
+使用 Poppler `pdftoppm` 以 300 DPI 逐页独立渲染 PDF 为 PNG 截图（每页一次调用，
+`pdftoppm -f N -l N -singlefile -png -r 300`），人工核对结果：
 - **封面**: 角色简介应用 14 字安全截断 + `shrinkText` 策略，完全包容在 0.9 英寸卡片内。
 - **分镜页面**: 情节描述、英文提示词均正确截断，页面各边距、页脚、DRAFT 角标均在画布范围内。
 - **镜头总览**: DRAFT 角标 `wrap: false` + `margin: 0`，单行显示无折行。
@@ -100,13 +100,12 @@ characters/
 
 - **验收 PDF**: `docs/ui-redesign/tasks/evidence/storyboard-deck.pdf`
 - **低分辨率缩略图**: `docs/ui-redesign/tasks/evidence/storyboard-deck.png`
-- **高清逐页截图**: 可随时使用 `render_pdf.js` 重新生成
+- **高清逐页截图**: 使用 Poppler `pdftoppm -r 300` 逐页渲染生成（`slide-1.png` … `slide-6.png`）
 - **修改与新增的文件**:
   - `server/modules/export-deck/generator.ts` (核心修改)
   - `server/modules/export-deck/routes.ts`
   - `server/modules/export-deck/routes.test.ts`
   - `server/modules/export-deck/generate_visual_deck.js`
-  - `server/modules/export-deck/render_pdf.js` (可移植 PDF 渲染工具)
 
 ---
 
@@ -116,4 +115,5 @@ characters/
 |------|---------|
 | `00ce1ec` | `feat(export-deck): add character assets and package readme` |
 | `a97ec1e` | `fix(export-deck): contain cover character text` |
-| (pending) | `chore(export-deck): clean acceptance evidence` |
+| `d621059` | `chore(export-deck): clean acceptance evidence` |
+| (pending) | `chore(export-deck): replace invalid PDF evidence` |
