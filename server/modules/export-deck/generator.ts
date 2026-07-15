@@ -78,6 +78,15 @@ function truncateText(text: string | undefined | null, maxLength: number): strin
 }
 
 /**
+ * Truncates role text and appends "..." if it exceeds maxLength.
+ */
+function truncateRole(text: string | undefined | null, maxLength: number): string {
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + '…';
+}
+
+/**
  * Generates the PowerPoint file.
  */
 export async function generatePptx(
@@ -258,15 +267,16 @@ export async function generatePptx(
     });
 
     // Role
-    cover.addText(char.role || '', {
+    cover.addText(truncateRole(char.role, 14), {
       x: cardX + 0.9,
       y: charY + 0.45,
-      w: 0.85,
-      h: 0.4,
+      w: 0.82,
+      h: 0.38,
       fontFace: FONT_FACE,
-      fontSize: 8.5,
+      fontSize: 7.5,
       color: '9CA3AF',
       valign: 'top',
+      shrinkText: true,
     });
   }
 
@@ -345,6 +355,8 @@ export async function generatePptx(
         color: 'FFFFFF',
         align: 'center',
         valign: 'middle',
+        margin: 0,
+        wrap: false,
       });
     }
 
@@ -646,6 +658,7 @@ export async function generatePptx(
           h: badgeH,
           fill: { color: 'EF4444' }, // Red
         });
+        // Disabling wrapping and setting margins to 0 ensures "DRAFT" never gets wrapped as "DRA FT"
         csSlide.addText(isDraft ? 'DRAFT' : 'N/A', {
           x: badgeX,
           y: badgeY,
@@ -657,6 +670,8 @@ export async function generatePptx(
           color: 'FFFFFF',
           align: 'center',
           valign: 'middle',
+          margin: 0,
+          wrap: false,
         });
       }
 
@@ -775,31 +790,33 @@ export function generateManifest(
 }
 
 /**
- * Creates the zip deliverable archive containing pptx, manifest, and finals image directory.
+ * Creates the zip deliverable archive containing the entire exportDir structure.
  */
 export async function createExportZip(
-  pptxPath: string,
-  manifestPath: string,
-  finalsDir: string,
+  exportDir: string,
   destZipPath: string
 ): Promise<void> {
   const zip = new JSZipConstructor();
+  const zipFileName = path.basename(destZipPath);
 
-  // Add root files
-  zip.file('storyboard-deck.pptx', fs.readFileSync(pptxPath));
-  zip.file('storyboard-manifest.json', fs.readFileSync(manifestPath));
+  function addDirRecursively(localDir: string, zipFolder: any) {
+    const entries = fs.readdirSync(localDir);
+    for (const entry of entries) {
+      const fullPath = path.join(localDir, entry);
+      const stats = fs.statSync(fullPath);
 
-  // Add finals directory
-  if (fs.existsSync(finalsDir)) {
-    const finalsFolder = zip.folder('finals')!;
-    const files = fs.readdirSync(finalsDir);
-    for (const file of files) {
-      const filePath = path.join(finalsDir, file);
-      if (fs.statSync(filePath).isFile()) {
-        finalsFolder.file(file, fs.readFileSync(filePath));
+      if (stats.isDirectory()) {
+        const subFolder = zipFolder.folder(entry)!;
+        addDirRecursively(fullPath, subFolder);
+      } else {
+        if (entry !== zipFileName) {
+          zipFolder.file(entry, fs.readFileSync(fullPath));
+        }
       }
     }
   }
+
+  addDirRecursively(exportDir, zip);
 
   // Generate buffer and write to file
   const buffer = await zip.generateAsync({ type: 'nodebuffer' });
