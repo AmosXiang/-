@@ -8,16 +8,24 @@ import { useEffect, useState } from "react";
 //   #/studio           创意项目列表
 //   #/studio/new       创意工作室 · 新建(以当前选中影片为模板)
 //   #/studio/:id       创意工作室 · 指定项目
+export type AnalysisTab = "shots" | "characters" | "narrative";
+
 export type Route =
   | { page: "library" }
-  | { page: "analysis"; videoId: string }
+  | { page: "analysis"; videoId: string; tab?: AnalysisTab }
   | { page: "studio"; projectId?: string };
 
 export function parseHash(hash: string): Route {
   const clean = hash.replace(/^#\/?/, "");
-  const [seg, ...rest] = clean.split("/");
+  const [pathPart, queryPart] = clean.split("?");
+  const [seg, ...rest] = pathPart.split("/");
   const id = rest.join("/");
-  if (seg === "analysis" && id) return { page: "analysis", videoId: decodeURIComponent(id) };
+  if (seg === "analysis" && id) {
+    const tabRaw = new URLSearchParams(queryPart || "").get("tab");
+    const tab: AnalysisTab | undefined =
+      tabRaw === "characters" || tabRaw === "narrative" || tabRaw === "shots" ? tabRaw : undefined;
+    return { page: "analysis", videoId: decodeURIComponent(id), tab };
+  }
   if (seg === "studio") return id ? { page: "studio", projectId: decodeURIComponent(id) } : { page: "studio" };
   return { page: "library" };
 }

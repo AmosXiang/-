@@ -3497,6 +3497,10 @@ export default function App() {
 
   useEffect(() => {
     if (route.page === "analysis") {
+      const applyAnalysisTab = () => {
+        if (route.tab && route.tab !== activeTab) setActiveTab(route.tab);
+        else if (activeTab === "generator") setActiveTab("shots");
+      };
       if (route.videoId === "demo") {
         if (selectedRecord !== null) setSelectedRecord(null);
         if (generatedScript !== null) {
@@ -3504,7 +3508,7 @@ export default function App() {
           setGeneratorTopic("");
           setGeneratorError(null);
         }
-        if (activeTab === "generator") setActiveTab("shots");
+        applyAnalysisTab();
       } else {
         const rec = records.find(r => r.id === route.videoId);
         if (rec) {
@@ -3514,7 +3518,7 @@ export default function App() {
             setGeneratorTopic("");
             setGeneratorError(null);
           }
-          if (activeTab === "generator") setActiveTab("shots");
+          applyAnalysisTab();
         } else if (records.length > 0) {
           navigateTo("#/library"); // 记录不存在(已删除/坏链接)时回素材库
         }
@@ -3537,7 +3541,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, records, generatedScripts]);
 
-  // 主区顶部功能导航:分析三 tab 页内切换;创意生成已独立成 #/studio 路由
+  // P1b: 分析页右栏统计默认收起(顶部一行摘要),点击展开
+  const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
+
+  // 主区顶部功能导航:分析三 tab 页内切换(tab 记入 URL);创意生成已独立成 #/studio 路由
   const onStudioPage = activeTab === "generator";
   const mainTabsBar = (
     <nav className="maintabs" role="tablist" aria-label="分析功能">
@@ -3552,7 +3559,10 @@ export default function App() {
           role="tab"
           aria-selected={activeTab === key}
           className={activeTab === key ? "on" : ""}
-          onClick={() => setActiveTab(key)}
+          onClick={() => {
+            if (route.page === "analysis") navigateTo(`#/analysis/${route.videoId}?tab=${key}`);
+            else setActiveTab(key);
+          }}
         >
           {label}
         </button>
@@ -3563,16 +3573,37 @@ export default function App() {
           创意工作室
         </span>
       )}
-      <div className="ml-auto flex items-center py-1.5">
+      <div className="ml-auto flex items-center gap-2 py-1.5">
         {!onStudioPage && (
-          <button
-            type="button"
-            onClick={() => navigateTo("#/studio/new")}
-            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            以此为模板创作 →
-          </button>
+          <>
+            {/* P1b: 右栏统计默认收起为一行摘要,按需展开 */}
+            <span className="hidden lg:inline text-[10px] text-slate-500 font-mono">
+              {activeShots.length} 分镜 · 平均 {activeShots.length > 0 ? (duration / activeShots.length).toFixed(1) : "0"}s · {activeCharacters.length} 角色
+            </span>
+            <button
+              type="button"
+              onClick={() => setInspectorOpen(v => !v)}
+              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-slate-800 transition-colors cursor-pointer"
+            >
+              {inspectorOpen ? "收起分析摘要" : "展开分析摘要"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowJsonModal(true)}
+              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-slate-800 flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <FileJson className="w-3 h-3" />
+              导出 JSON
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateTo("#/studio/new")}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              以此为模板创作 →
+            </button>
+          </>
         )}
       </div>
     </nav>
@@ -3715,8 +3746,37 @@ export default function App() {
 
             {showComfyPop && (
               <>
-                <div className="fixed inset-0 z-[290]" onClick={() => setShowComfyPop(false)} />
+                <div className="fixed inset-0 z-[290] bg-black/30" onClick={() => setShowComfyPop(false)} />
                 <div className="comfy-pop space-y-2.5 p-3">
+                  {/* P1b: 系统状态抽屉头 + 任务队列摘要(只放系统健康类内容) */}
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <span className="text-xs font-bold text-slate-200 tracking-wider">系统状态</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowComfyPop(false)}
+                      className="text-slate-500 hover:text-slate-200 p-1 rounded cursor-pointer"
+                      aria-label="关闭"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">生成任务队列</span>
+                    <div className="grid grid-cols-3 gap-1.5 mt-1 text-center">
+                      <div className="bg-slate-950/60 rounded-lg py-1.5">
+                        <div className="text-sm font-bold text-blue-400 font-mono">{comfyTasks.filter((t: any) => t.status === "pending").length}</div>
+                        <div className="text-[9px] text-slate-500">排队</div>
+                      </div>
+                      <div className="bg-slate-950/60 rounded-lg py-1.5">
+                        <div className="text-sm font-bold text-indigo-400 font-mono">{comfyTasks.filter((t: any) => t.status === "processing").length}</div>
+                        <div className="text-[9px] text-slate-500">生成中</div>
+                      </div>
+                      <div className="bg-slate-950/60 rounded-lg py-1.5">
+                        <div className="text-sm font-bold text-rose-400 font-mono">{comfyTasks.filter((t: any) => t.status === "failed").length}</div>
+                        <div className="text-[9px] text-slate-500">失败</div>
+                      </div>
+                    </div>
+                  </div>
                   <label className="block space-y-1">
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">默认生图平台</span>
                     <select
@@ -3829,14 +3889,6 @@ export default function App() {
             )}
           </div>
 
-          <button
-            id="export-json-btn"
-            onClick={() => setShowJsonModal(true)}
-            className="bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-xs font-medium py-1.5 px-3 md:px-4 rounded-md transition-all flex items-center gap-2 cursor-pointer shadow-lg shadow-blue-900/15"
-          >
-            <FileJson className="w-3.5 h-3.5" />
-            <span>导出 JSON 报告</span>
-          </button>
         </div>
       </header>
 
@@ -3995,22 +4047,45 @@ export default function App() {
               </div>
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {generatedScripts.map((script) => (
-                  <div
-                    key={script.id}
-                    onClick={() => navigateTo(`#/studio/${script.id}`)}
-                    className="bg-slate-900/50 border border-slate-800 hover:border-emerald-500/40 rounded-2xl p-4 cursor-pointer transition-all"
-                  >
-                    <h3 className="text-xs font-bold text-slate-200 truncate flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                      <span className="truncate">{script.newTitle}</span>
-                    </h3>
-                    <p className="text-[10px] text-slate-500 mt-1.5 truncate">主题:{script.topic}</p>
-                    <p className="text-[10px] text-slate-600 mt-2 font-mono">
-                      {script.newShots?.length || 0} 分镜 · {new Date(script.createdAt).toLocaleDateString("zh-CN")}
-                    </p>
-                  </div>
-                ))}
+                {generatedScripts.map((script) => {
+                  const shotsTotal = script.newShots?.length || 0;
+                  const finalizedCount = (script.newShots || []).filter((s: any) => s.finalTaskId).length;
+                  const staleCount = (script.newShots || []).filter((s: any) => s.isStale).length;
+                  const charsWithAvatar = (script.newCharacters || []).filter(
+                    (c: any) => c.avatarImageUrl || c.avatarUrl || c.avatarGeneration?.imageUrl
+                  ).length;
+                  return (
+                    <div
+                      key={script.id}
+                      onClick={() => navigateTo(`#/studio/${script.id}`)}
+                      className="bg-slate-900/50 border border-slate-800 hover:border-emerald-500/40 rounded-2xl p-4 cursor-pointer transition-all flex flex-col gap-2"
+                    >
+                      <h3 className="text-xs font-bold text-slate-200 truncate flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                        <span className="truncate">{script.newTitle}</span>
+                      </h3>
+                      <p className="text-[10px] text-slate-500 truncate">主题:{script.topic}</p>
+                      {/* P1b: "继续上次工作"进度摘要 */}
+                      <div className="flex flex-wrap gap-1.5 text-[9px] font-mono">
+                        <span className={`px-1.5 py-0.5 rounded ${finalizedCount === shotsTotal && shotsTotal > 0 ? "bg-emerald-950/50 text-emerald-400" : "bg-slate-900/80 text-slate-400"}`}>
+                          分镜定稿 {finalizedCount}/{shotsTotal}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-900/80 text-slate-400">
+                          角色画像 {charsWithAvatar}/{script.newCharacters?.length || 0}
+                        </span>
+                        {staleCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-400">
+                            {staleCount} 镜基于旧输入
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between mt-auto pt-1">
+                        <span className="text-[10px] text-slate-600 font-mono">{new Date(script.createdAt).toLocaleDateString("zh-CN")}</span>
+                        <span className="text-[10px] font-semibold text-emerald-400">继续编辑 →</span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -4021,307 +4096,92 @@ export default function App() {
 
         {/* Column 1: Video Library & File Upload (width 320px) */}
         <aside className="admin-navigation w-full md:w-80 border-r border-slate-800/60 bg-slate-950/40 flex flex-col shrink-0 overflow-y-auto custom-scrollbar">
-          {/* Header */}
-          <div className="p-4 border-b border-slate-800/80 flex items-center gap-2 bg-slate-900/10">
-            <Database className="w-4 h-4 text-blue-500" />
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300">本地视频分析库</h2>
-          </div>
-
-          {/* Upload Zone */}
-          <div className="p-4 border-b border-slate-800/50">
-            <div
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleDrop}
-              onClick={triggerFileSelect}
-              className={`border border-dashed rounded-xl p-5 text-center cursor-pointer transition-all duration-300 ${
-                isUploading || isAnalyzing
-                  ? "border-blue-500/50 bg-blue-950/10 cursor-not-allowed"
-                  : "border-slate-800 bg-slate-900/30 hover:border-blue-500/40 hover:bg-slate-900/60"
-              }`}
-            >
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileChange}
-                accept="video/*"
-                className="hidden"
-              />
-
-              {isUploading || isAnalyzing ? (
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-                  <div className="space-y-1">
-                    <p className="text-xs font-semibold text-slate-200">
-                      {isUploading ? `视频上传中 (${uploadProgress}%)` : "Gemini 分析中..."}
-                    </p>
-                    <p className="text-[10px] text-slate-500 leading-relaxed max-w-[200px] mx-auto">
-                      {isUploading ? "正在将本地大视频同步至服务器..." : "正在通过云端 Gemini 识别结构化分镜与剧情..."}
-                    </p>
-                  </div>
-                  {isUploading && (
-                    <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden mt-1">
-                      <div
-                        className="bg-blue-600 h-full transition-all duration-300"
-                        style={{ width: `${uploadProgress}%` }}
-                      ></div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-10 h-10 rounded-full bg-blue-950/40 flex items-center justify-center border border-blue-900/20">
-                    <Upload className="w-4 h-4 text-blue-400" />
-                  </div>
-                  <p className="text-xs font-medium text-slate-300">点击或拖拽视频文件上传</p>
-                  <p className="text-[10px] text-slate-500">支持 MP4, MOV, WEBM, AVI 等常见格式</p>
-                </div>
-              )}
-            </div>
-
-            {/* Status alerts */}
-            {statusText && (
-              <div className="mt-3 p-2 bg-blue-950/20 border border-blue-900/40 rounded-lg text-[10px] text-blue-400 leading-normal flex items-start gap-1.5 animate-pulse">
-                <Sparkles className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                <span>{statusText}</span>
-              </div>
-            )}
-
-            {uploadError && (
-              <div className="mt-3 p-2 bg-red-950/20 border border-red-900/30 rounded-lg text-[10px] text-red-400 leading-normal flex items-start gap-1.5">
-                <X className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                <span>{uploadError}</span>
-              </div>
-            )}
-
-            {/* Short Drama Mode Toggle */}
-            <div className="mt-3 flex items-center justify-between bg-slate-900/45 border border-slate-800/80 rounded-xl p-3 shadow-inner transition-all hover:bg-slate-900/60">
-              <div className="flex flex-col">
-                <span className="text-xs font-semibold text-slate-200">竖屏短剧分析模式</span>
-                <span className="text-[10px] text-slate-500 mt-0.5">切分为每3-5秒一个镜头</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShortDramaMode(!shortDramaMode)}
-                className={`w-9 h-5 rounded-full p-0.5 transition-all duration-300 focus:outline-none relative flex items-center cursor-pointer ${
-                  shortDramaMode ? 'bg-gradient-to-r from-blue-500 to-indigo-600 shadow-md shadow-blue-500/25' : 'bg-slate-800'
-                }`}
-              >
-                <div
-                  className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-all duration-300 ${
-                    shortDramaMode ? 'translate-x-4' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-          </div>
-
-          {/* Search & Metadata Filters */}
-          <div className="p-4 border-b border-slate-800/50 space-y-3 bg-slate-950/20">
-            {/* Search Box */}
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="搜索视频标题/标签/分类..."
-                value={librarySearch}
-                onChange={(e) => setLibrarySearch(e.target.value)}
-                className="w-full bg-slate-900 text-slate-200 pl-9 pr-4 py-1.5 rounded-lg border border-slate-800 focus:outline-none focus:border-blue-500 text-xs transition-colors"
-              />
-              {librarySearch && (
-                <button onClick={() => setLibrarySearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
-                  <X className="w-3.5 h-3.5" />
+          {route.page === "analysis" ? (
+            <>
+              {/* P1b: 分析页左栏 = 当前视频分镜时间轴(记录列表已归素材库首页) */}
+              <div className="p-4 border-b border-slate-800/80 flex items-center justify-between gap-2 bg-slate-900/10">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                  <Film className="w-4 h-4 text-blue-500" />
+                  分镜时间轴
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => navigateTo("#/library")}
+                  className="text-[10px] text-slate-500 hover:text-blue-400 transition-colors cursor-pointer"
+                >
+                  ← 素材库
                 </button>
-              )}
-            </div>
-
-            {/* Genre & Tag Dropdown selectors */}
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">类型筛选</span>
-                <select
-                  value={selectedGenre}
-                  onChange={(e) => setSelectedGenre(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-md p-1.5 text-[11px] text-slate-300 outline-none focus:border-blue-500"
-                >
-                  <option value="all">全部类型</option>
-                  {uniqueGenres.map(g => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
               </div>
-
-              <div className="space-y-1">
-                <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">标签筛选</span>
-                <select
-                  value={selectedTag}
-                  onChange={(e) => setSelectedTag(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-md p-1.5 text-[11px] text-slate-300 outline-none focus:border-blue-500"
-                >
-                  <option value="all">全部标签</option>
-                  {uniqueTags.map(t => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
+              <div className="flex-1 overflow-y-auto custom-scrollbar py-1">
+                {activeShots.map((shot, idx) => {
+                  const isActiveShot = activeShot?.timestamp === shot.timestamp;
+                  return (
+                    <div
+                      key={shot.id || idx}
+                      onClick={() => handleShotClick(shot)}
+                      className={`px-4 py-2 cursor-pointer transition-colors border-l-2 ${
+                        isActiveShot ? "bg-blue-950/25 border-blue-500" : "border-transparent hover:bg-slate-900/40"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-slate-500 w-10 shrink-0">
+                          {(shot.timestamp || "").split(" - ")[0]}
+                        </span>
+                        <span className={`text-xs truncate ${isActiveShot ? "text-blue-300 font-semibold" : "text-slate-300"}`}>
+                          {shot.movement}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 truncate mt-0.5 pl-12">{shot.description}</p>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
-          </div>
-
-          {/* Records List */}
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-900 custom-scrollbar">
-            {/* Group 1: Videos */}
-            <div>
-              <div className="px-4 py-2 bg-slate-900/35 text-[9px] uppercase font-bold tracking-widest font-mono text-slate-500 border-b border-slate-900/80">
-                视频分析记录
-              </div>
-              <div className="divide-y divide-slate-900">
-                {/* Demo item card */}
-                <div
-                  onClick={() => navigateTo("#/analysis/demo")}
-                  className={`p-4 cursor-pointer transition-colors relative ${
-                    selectedRecord === null && generatedScript === null
-                      ? "bg-blue-950/20 border-l-2 border-blue-500"
-                      : "hover:bg-slate-900/30 border-l-2 border-transparent"
-                  }`}
+            </>
+          ) : (
+            <>
+              {/* P1b: 创意工作室左栏 = 项目切换器(含定稿进度) */}
+              <div className="p-4 border-b border-slate-800/80 flex items-center justify-between gap-2 bg-slate-900/10">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-emerald-500" />
+                  创意项目
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => navigateTo("#/studio")}
+                  className="text-[10px] text-slate-500 hover:text-emerald-400 transition-colors cursor-pointer"
                 >
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="min-w-0">
-                      <h3 className="text-xs font-bold text-slate-200 truncate flex items-center gap-1.5">
-                        <Tv className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                        <span>蒸汽飞空艇与少女 (演示样本)</span>
+                  全部 →
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto custom-scrollbar divide-y divide-slate-900">
+                {generatedScripts.map((script) => {
+                  const isActiveScript = generatedScript !== null && generatedScript.id === script.id;
+                  const finalizedCount = (script.newShots || []).filter((s: any) => s.finalTaskId).length;
+                  return (
+                    <div
+                      key={script.id}
+                      onClick={() => navigateTo(`#/studio/${script.id}`)}
+                      className={`p-3.5 cursor-pointer transition-colors border-l-2 ${
+                        isActiveScript ? "bg-emerald-950/20 border-emerald-500" : "border-transparent hover:bg-slate-900/30"
+                      }`}
+                    >
+                      <h3 className={`text-xs font-bold truncate ${isActiveScript ? "text-emerald-400" : "text-slate-200"}`}>
+                        {script.newTitle}
                       </h3>
-                      <p className="text-[10px] text-slate-500 mt-1">内置静态模拟数据，支持完整操作联动</p>
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        <span className="text-[9px] px-1.5 py-0.5 bg-slate-850 text-slate-400 rounded">奇幻科幻</span>
-                        <span className="text-[9px] px-1.5 py-0.5 bg-slate-850 text-slate-400 rounded">朋克</span>
-                      </div>
+                      <p className="text-[10px] text-slate-500 font-mono mt-1">
+                        定稿 {finalizedCount}/{script.newShots?.length || 0} · {new Date(script.createdAt).toLocaleDateString("zh-CN")}
+                      </p>
                     </div>
-                  </div>
-                </div>
-
-                {/* Dynamic DB items */}
-                {filteredRecords.length > 0 ? (
-                  filteredRecords.map((rec) => {
-                    const isActive = selectedRecord !== null && selectedRecord.id === rec.id;
-                    return (
-                      <div
-                        key={rec.id}
-                        onClick={() => navigateTo(`#/analysis/${rec.id}`)}
-                        className={`p-4 cursor-pointer transition-colors relative group ${
-                          isActive
-                            ? "bg-blue-950/25 border-l-2 border-blue-500"
-                            : "hover:bg-slate-900/30 border-l-2 border-transparent"
-                        }`}
-                      >
-                        <div className="flex justify-between items-start gap-2">
-                          <div className="min-w-0 flex-1">
-                            <h3 className={`text-xs font-bold truncate flex items-center gap-1.5 ${
-                              isActive ? "text-blue-400" : "text-slate-200"
-                            }`}>
-                              <Film className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              <span className="truncate">{rec.title}</span>
-                            </h3>
-
-                            <div className="flex flex-wrap gap-1 mt-1.5">
-                              <span className="text-[9px] px-1.5 py-0.5 bg-slate-900/80 text-blue-400/80 rounded border border-blue-950">
-                                {rec.genre}
-                              </span>
-                              {rec.tags.slice(0, 2).map(tag => (
-                                <span key={tag} className="text-[9px] px-1.5 py-0.5 bg-slate-900/80 text-slate-400 rounded">
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-
-                            <span className="text-[9px] text-slate-500 font-mono flex items-center gap-1 mt-2">
-                              <Calendar className="w-3 h-3 shrink-0" />
-                              {new Date(rec.createdAt).toLocaleString('zh-CN', {
-                                month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
-                              })}
-                            </span>
-                          </div>
-
-                          <button
-                            onClick={(e) => handleDeleteRecord(rec.id, e)}
-                            className="opacity-0 group-hover:opacity-100 hover:text-red-400 text-slate-600 p-1 rounded hover:bg-red-950/30 transition-all cursor-pointer shrink-0"
-                            title="删除此视频"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  records.length > 0 && (
-                    <div className="p-4 text-center text-slate-600 text-[10px]">
-                      未匹配到过滤视频
-                    </div>
-                  )
-                )}
+                  );
+                })}
               </div>
-            </div>
-
-            {/* Group 2: Generated Scripts */}
-            <div>
-              <div className="px-4 py-2 bg-slate-900/35 text-[9px] uppercase font-bold tracking-widest font-mono text-slate-500 border-b border-slate-900/80">
-                历史生成剧本
-              </div>
-              <div className="divide-y divide-slate-900">
-                {generatedScripts.length > 0 ? (
-                  generatedScripts.map((script) => {
-                    const isActive = generatedScript !== null && generatedScript.id === script.id;
-                    return (
-                      <div
-                        key={script.id}
-                        onClick={() => navigateTo(`#/studio/${script.id}`)}
-                        className={`p-4 cursor-pointer transition-colors relative group ${
-                          isActive
-                            ? "bg-emerald-950/20 border-l-2 border-emerald-500"
-                            : "hover:bg-slate-900/30 border-l-2 border-transparent"
-                        }`}
-                      >
-                        <div className="flex justify-between items-start gap-2">
-                          <div className="min-w-0 flex-1">
-                            <h3 className={`text-xs font-bold truncate flex items-center gap-1.5 ${
-                              isActive ? "text-emerald-400" : "text-slate-200"
-                            }`}>
-                              <Sparkles className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                              <span className="truncate">{script.newTitle}</span>
-                            </h3>
-                            <p className="text-[10px] text-slate-500 mt-1 truncate">主题：{script.topic}</p>
-
-                            <span className="text-[9px] text-slate-500 font-mono flex items-center gap-1 mt-2">
-                              <Clock className="w-3 h-3 shrink-0" />
-                              {new Date(script.createdAt).toLocaleString('zh-CN', {
-                                month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
-                              })}
-                            </span>
-                          </div>
-
-                          <button
-                            onClick={(e) => handleDeleteScript(script.id, e)}
-                            className="opacity-0 group-hover:opacity-100 hover:text-red-400 text-slate-600 p-1 rounded hover:bg-red-950/30 transition-all cursor-pointer shrink-0"
-                            title="删除此剧本"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="p-6 text-center text-slate-600 text-[10px] leading-normal">
-                    暂无生成剧本记录，可在“创意生成”选项卡中创建！
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+            </>
+          )}
         </aside>
 
         {/* Column 2: 主功能区（顶部导航 + 当前面板）；创意生成时隐藏，向导占满右侧 */}
         {activeTab !== "generator" && (
-          <section className="admin-workspace w-full flex flex-col border-r border-slate-800/60 bg-slate-950/20">
+          <section className={`admin-workspace w-full flex flex-col border-r border-slate-800/60 bg-slate-950/20${inspectorOpen ? "" : " workspace-span"}`}>
             {mainTabsBar}
 
             {activeTab === "shots" && (<>
@@ -4659,7 +4519,8 @@ export default function App() {
           </section>
         )}
 
-        {/* Column 3: 右栏（统计 + 上下文）；创意生成 tab 时承载全宽向导 */}
+        {/* Column 3: 右栏（统计 + 上下文，P1b 默认收起）；创意生成 tab 时承载全宽向导 */}
+        {(activeTab === "generator" || inspectorOpen) && (
         <section className="admin-inspector flex-1 flex flex-col bg-slate-900/30 overflow-y-auto custom-scrollbar">
           {activeTab === "generator" ? (
             <>
@@ -5832,6 +5693,7 @@ export default function App() {
             </div>
           </div>
         </section>
+        )}
       </main>
       )}
 
