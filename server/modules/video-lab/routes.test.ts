@@ -5,7 +5,12 @@ import type { AddressInfo } from 'node:net';
 import express from 'express';
 
 import { AGNES_VIDEO_CAPABILITY, type VideoProviderCapability } from './capability.ts';
-import { registerVideoLabModule, type SubmitVideoTaskInput, type VideoLabDeps } from './routes.ts';
+import {
+  registerVideoLabModule,
+  type SubmitVideoTaskInput,
+  type VideoLabDeps,
+  type VideoTaskRow,
+} from './routes.ts';
 import { assembleVideoPrompt, type MotionPrompt } from './workflow.ts';
 
 const FIXTURE_PROVIDER: VideoProviderCapability = {
@@ -25,7 +30,12 @@ function project(id: string, width: number, height: number) {
   return {
     id,
     newShots: [
-      { id: `${id}-shot-1`, description: 'Opening shot' },
+      {
+        id: `${id}-shot-1`,
+        description: 'Opening shot',
+        optimizedPrompt: 'Optimized opening shot',
+        cameraPromptUsed: 'Slow push in',
+      },
       { id: `${id}-shot-2`, description: 'Closing shot' },
     ],
     styleContract: {
@@ -50,6 +60,9 @@ function createFixture(configuredProviders = ['agnes']) {
   };
   const configured = new Set(configuredProviders);
   const submissions: SubmitVideoTaskInput[] = [];
+  const videoTasks: VideoTaskRow[] = [];
+  const readableLocalPaths = new Set<string>();
+  let mutateCalls = 0;
   const deps: VideoLabDeps = {
     readDb: () => store,
     isProviderConfigured: providerId => configured.has(providerId),
@@ -57,8 +70,23 @@ function createFixture(configuredProviders = ['agnes']) {
       submissions.push(input);
       return { taskId: `task-${submissions.length}` };
     },
+    mutateDb: mutator => {
+      mutateCalls += 1;
+      mutator(store);
+    },
+    listVideoTasksByShot: shotId => videoTasks.filter(row => row.shot_id === shotId),
+    getVideoTask: taskId => videoTasks.find(row => row.id === taskId),
+    isLocalVideoReadable: localPath => readableLocalPaths.has(localPath),
   };
-  return { store, configured, submissions, deps };
+  return {
+    store,
+    configured,
+    submissions,
+    videoTasks,
+    readableLocalPaths,
+    get mutateCalls() { return mutateCalls; },
+    deps,
+  };
 }
 
 async function withServer(
@@ -104,6 +132,48 @@ function validBody(projectId = 'project-3x2', overrides: Record<string, unknown>
 
 function post(baseUrl: string, body: unknown) {
   return fetch(`${baseUrl}/api/video-lab/shot-tasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+function videoTask(overrides: Partial<VideoTaskRow> = {}): VideoTaskRow {
+  return {
+    id: 'take-1',
+    shot_id: 'project-3x2-shot-1',
+    status: 'completed',
+    local_path: '/uploads/video-tasks/take-1.mp4',
+    download_error: null,
+    created_at: '2026-07-16T01:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function finalVideo(baseUrl: string, shotId: string, taskId: string | null, projectId = 'project-3x2') {
+  return fetch(`${baseUrl}/api/video-lab/shots/${encodeURIComponent(shotId)}/final-video?projectId=${encodeURIComponent(projectId)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ taskId }),
+  });
+}
+
+function validBatchBody(projectId = 'project-3x2', overrides: Record<string, unknown> = {}) {
+  return {
+    projectId,
+    shotIds: [`${projectId}-shot-1`, `${projectId}-shot-2`],
+    provider: 'agnes',
+    durationSec: 5,
+    fps: 24,
+    resolution: '1152x768',
+    motionStrength: 'natural',
+    confirmed: true,
+    ...overrides,
+  };
+}
+
+function postBatch(baseUrl: string, body: unknown) {
+  return fetch(`${baseUrl}/api/video-lab/batch-shot-tasks`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -300,5 +370,178 @@ test('empty subjectScene is rejected before submission', async () => {
       field: 'subjectScene',
     });
     assert.equal(fixture.submissions.length, 0);
+  });
+});
+
+test('GET shot tasks verifies project ownership and returns newest takes first', async () => {
+  const fixture = createFixture();
+  fixture.videoTasks.push(
+    videoTask({ id: 'older', created_at: '2026-07-16T01:00:00.000Z' }),
+    videoTask({ id: 'newer', created_at: '2026-07-16T03:00:00.000Z' }),
+    videoTask({ id: 'middle', created_at: '2026-07-16T02:00:00.000Z' }),
+    videoTask({ id: 'other-shot', shot_id: 'project-3x2-shot-2' }),
+  );
+  await withServer(fixture, async baseUrl => {
+    const response = await fetch(`${baseUrl}/api/video-lab/shots/project-3x2-shot-1/tasks?projectId=project-3x2`);
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json() as any).tasks.map((row: any) => row.id), ['newer', 'middle', 'older']);
+
+    for (const [projectId, shotId, code] of [
+      ['missing-project', 'project-3x2-shot-1', 'PROJECT_NOT_FOUND'],
+      ['project-3x2', 'missing-shot', 'SHOT_NOT_FOUND'],
+    ]) {
+      const missing = await fetch(`${baseUrl}/api/video-lab/shots/${shotId}/tasks?projectId=${projectId}`);
+      assert.equal(missing.status, 404);
+      assert.equal((await missing.json() as any).code, code);
+    }
+  });
+});
+
+test('final-video rejects all five unsafe take states without mutating the project', async () => {
+  const fixture = createFixture();
+  fixture.videoTasks.push(
+    videoTask({ id: 'wrong-shot', shot_id: 'project-3x2-shot-2' }),
+    videoTask({ id: 'still-running', status: 'in_progress' }),
+    videoTask({ id: 'not-downloaded', local_path: null, download_error: 'disk full' }),
+    videoTask({ id: 'missing-file', local_path: '/uploads/video-tasks/missing.mp4' }),
+  );
+  await withServer(fixture, async baseUrl => {
+    const cases = [
+      ['unknown-take', 'TAKE_NOT_FOUND'],
+      ['wrong-shot', 'TAKE_SHOT_MISMATCH'],
+      ['still-running', 'TAKE_NOT_COMPLETED'],
+      ['not-downloaded', 'TAKE_NOT_DOWNLOADED'],
+      ['missing-file', 'TAKE_FILE_MISSING'],
+    ] as const;
+    for (const [taskId, code] of cases) {
+      const response = await finalVideo(baseUrl, 'project-3x2-shot-1', taskId);
+      assert.equal(response.status, 422, code);
+      const data: any = await response.json();
+      assert.equal(data.code, code);
+      if (code === 'TAKE_NOT_DOWNLOADED') assert.equal(data.download_error, 'disk full');
+    }
+    assert.equal(fixture.mutateCalls, 0);
+    assert.equal((fixture.store.generated_scripts[0].newShots[0] as any).finalVideoTaskId, undefined);
+  });
+});
+
+test('final-video writes a readable local take and null removes the JSON field', async () => {
+  const fixture = createFixture();
+  const row = videoTask({ id: 'gold-take' });
+  fixture.videoTasks.push(row);
+  fixture.readableLocalPaths.add(String(row.local_path));
+  await withServer(fixture, async baseUrl => {
+    const selected = await finalVideo(baseUrl, 'project-3x2-shot-1', 'gold-take');
+    assert.equal(selected.status, 200);
+    assert.equal((await selected.json() as any).shot.finalVideoTaskId, 'gold-take');
+    assert.equal((fixture.store.generated_scripts[0].newShots[0] as any).finalVideoTaskId, 'gold-take');
+
+    const cleared = await finalVideo(baseUrl, 'project-3x2-shot-1', null);
+    assert.equal(cleared.status, 200);
+    assert.equal(Object.hasOwn((await cleared.json() as any).shot, 'finalVideoTaskId'), false);
+    assert.equal(Object.hasOwn(fixture.store.generated_scripts[0].newShots[0], 'finalVideoTaskId'), false);
+    assert.equal(fixture.mutateCalls, 2);
+  });
+});
+
+test('batch generation requires confirmed true and performs zero submissions otherwise', async () => {
+  const fixture = createFixture();
+  await withServer(fixture, async baseUrl => {
+    for (const confirmed of [false, undefined]) {
+      const response = await postBatch(baseUrl, validBatchBody('project-3x2', { confirmed }));
+      assert.equal(response.status, 422);
+      assert.equal((await response.json() as any).code, 'BATCH_NOT_CONFIRMED');
+    }
+    assert.equal(fixture.submissions.length, 0);
+  });
+});
+
+test('batch generation rejects oversized, foreign, and promptless selections before submission', async () => {
+  const fixture = createFixture();
+  await withServer(fixture, async baseUrl => {
+    const oversized = await postBatch(baseUrl, validBatchBody('project-3x2', {
+      shotIds: Array.from({ length: 101 }, (_, index) => `shot-${index}`),
+    }));
+    assert.equal(oversized.status, 422);
+    assert.equal((await oversized.json() as any).code, 'BATCH_TOO_LARGE');
+
+    const foreign = await postBatch(baseUrl, validBatchBody('project-3x2', {
+      shotIds: ['project-3x2-shot-1', 'project-wide-shot-1'],
+    }));
+    assert.equal(foreign.status, 404);
+    assert.deepEqual((await foreign.json() as any).missingShotIds, ['project-wide-shot-1']);
+
+    fixture.store.generated_scripts[0].newShots[1].description = '   ';
+    const promptless = await postBatch(baseUrl, validBatchBody());
+    assert.equal(promptless.status, 422);
+    const promptlessData: any = await promptless.json();
+    assert.equal(promptlessData.code, 'SHOTS_MISSING_PROMPT');
+    assert.deepEqual(promptlessData.missingShotIds, ['project-3x2-shot-2']);
+    assert.equal(fixture.submissions.length, 0);
+  });
+});
+
+test('batch generation shares the M1 aspect decision gate', async () => {
+  const fixture = createFixture();
+  await withServer(fixture, async baseUrl => {
+    const response = await postBatch(baseUrl, validBatchBody('project-wide'));
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      error: 'The selected provider does not support the project aspect ratio.',
+      code: 'ASPECT_UNSUPPORTED',
+      projectAspect: '16:9',
+      supportedAspectRatios: ['3:2'],
+    });
+    assert.equal(fixture.submissions.length, 0);
+  });
+});
+
+test('batch generation continues after a per-shot failure and gives each shot an independent seed and snapshot', async () => {
+  const fixture = createFixture();
+  fixture.deps.submitVideoTask = async input => {
+    fixture.submissions.push(input);
+    if (input.shotId === 'project-3x2-shot-1') throw new Error('provider rejected opening shot');
+    return { taskId: 'closing-task' };
+  };
+  await withServer(fixture, async baseUrl => {
+    const response = await postBatch(baseUrl, validBatchBody('project-3x2', {
+      shotIds: ['project-3x2-shot-1', 'project-3x2-shot-1', 'project-3x2-shot-2'],
+    }));
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), {
+      submitted: [{ shotId: 'project-3x2-shot-2', taskId: 'closing-task' }],
+      failed: [{ shotId: 'project-3x2-shot-1', error: 'provider rejected opening shot' }],
+    });
+    assert.equal(fixture.submissions.length, 2);
+    assert.notEqual(fixture.submissions[0].seed, fixture.submissions[1].seed);
+
+    const openingSnapshot = JSON.parse(fixture.submissions[0].generationSnapshotJson);
+    const closingSnapshot = JSON.parse(fixture.submissions[1].generationSnapshotJson);
+    assert.equal(openingSnapshot.seed, fixture.submissions[0].seed);
+    assert.equal(closingSnapshot.seed, fixture.submissions[1].seed);
+    assert.deepEqual(openingSnapshot.motionPrompt, {
+      subjectScene: 'Optimized opening shot',
+      cameraMove: 'Slow push in',
+    });
+    assert.deepEqual(closingSnapshot.motionPrompt, { subjectScene: 'Closing shot' });
+  });
+});
+
+test('batch generation reports 502 only when every independent submission fails', async () => {
+  const fixture = createFixture();
+  fixture.deps.submitVideoTask = async input => {
+    fixture.submissions.push(input);
+    throw new Error(`failed ${input.shotId}`);
+  };
+  await withServer(fixture, async baseUrl => {
+    const response = await postBatch(baseUrl, validBatchBody());
+    assert.equal(response.status, 502);
+    const data: any = await response.json();
+    assert.deepEqual(data.submitted, []);
+    assert.deepEqual(data.failed.map((item: any) => item.shotId), [
+      'project-3x2-shot-1',
+      'project-3x2-shot-2',
+    ]);
+    assert.equal(fixture.submissions.length, 2);
   });
 });

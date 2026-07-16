@@ -1,4 +1,9 @@
-export { registerVideoLabModule, type SubmitVideoTaskInput, type VideoLabDeps } from './routes.ts';
+export {
+  registerVideoLabModule,
+  type SubmitVideoTaskInput,
+  type VideoLabDeps,
+  type VideoTaskRow,
+} from './routes.ts';
 export {
   AGNES_VIDEO_CAPABILITY,
   VIDEO_PROVIDER_CAPABILITIES,
