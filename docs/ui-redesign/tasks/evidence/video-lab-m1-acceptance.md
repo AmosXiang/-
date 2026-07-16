@@ -91,3 +91,32 @@ npx tsx --test server/modules/video-lab/routes.test.ts
 - 使用真实 Agnes key + `db.sqlite` 副本完成一条 text-to-video：提交 → Provider 完成 → 本地 MP4 落盘 → `local_path` → AnimaticPlayer 播放 → 快照列核对；
 - 回归既有 `POST /api/video-tasks` 直调路径，确认提取重构前后行为不变；
 - 真机补测下载失败语义：`completed + download_error` 必须停止等待并显示错误。
+
+---
+
+## 7. CC 复核与真机全链路记录（2026-07-16，review PASS，合入 6b50a21 + 接线 5fae841）
+
+### 代码 review（亲验）
+- 边界审计：单提交 `6629e7a` 基于 `c56ae25`，仅白名单 7 文件；capability 声明与任务书 v1.1 逐字一致，帧数映射与 server.ts:465 相同来源。
+- 存疑点核销：`local_path` 落库值为 `/uploads/videos/<id>.mp4` URL 形式（server.ts 下载函数），面板 videoUrl 直用成立；style-contract GET 返回 `{contract}` 形状吻合。
+- 自动化亲跑：lint PASS、video-lab 9/9、全模块 46/46、build PASS；合并接线后复跑 46/46 + server.test.ts 4/4（进程常驻为既知行为）。
+
+### CC 接线（5fae841）
+- `video_tasks.generation_snapshot_json` PRAGMA 守卫迁移；
+- Agnes 创建内核提取为 `createAgnesVideoTask`（失败行保留审计），既有 POST /api/video-tasks 消费同一内核——真机回归：无效 body 返回 400 "prompt is required." 与提取前逐字一致；
+- `registerVideoLabModule` 注入 readDb / isProviderConfigured(AGNES_API_KEY 在位) / submitVideoTask；
+- App.tsx 交付步 "Video Lab（单镜头视频）" 按钮 + 全屏覆层挂 VideoLabPanel。
+
+### 真机全链路（真实 Agnes key，孤岛豪宅 74 镜项目，task af994104）
+1. providers 端点返回完整 capability + configured:true；
+2. 面板 capability 驱动成立：模式仅"文生视频"、时长 3/5/10/18 按钮组、项目画幅 1:1；
+3. **409 主路径**：提交 → 画幅弹层显示 1:1 vs 3:2、裁切/留边可选、"更换模型"置灰并注明"当前无支持 1:1 的模型"；
+4. 选"裁切适配" → 真实生成：in_progress(30%) → completed → 远程 URL → 服务端下载 → `local_path=/uploads/videos/af994104….mp4` 落盘（426KB）→ 面板"已落盘"；
+5. **快照落列核对**：schemaVersion 1、aspect `{1:1 → 3:2, user_adaptation, crop}` 完整审计链、六段式 prompt、seed/prompt 与 db 行逐字一致、参数全录；
+6. 视频实体 ffprobe：H.264+AAC、24fps、3.375s（=81 帧÷24，与 num_frames 精确吻合）。
+
+### 环境说明与 M2 备忘
+- 浏览器面板 `<video>` 未加载属本会话面板降级（截图超时/媒体请求挂起同源）；curl 实证 express 直连与 vite 代理对该 mp4 的 full 200 / range 206 均正常，文件为标准 H.264+AAC，任何真实浏览器可播。
+- **M2 备忘①**：实际输出尺寸 1088×832 ≠ 请求 1152×768，且 `normalized_size` 回显 "1152x768" 也非实际——**provider 回显不可信，输出维度以 ffprobe/实物为准**；M2 定稿/交付涉及尺寸声明时必须探测实物。
+- **M2 备忘②**：实际视频时长 3.375s > durationSec 3，AnimaticPlayer 的 durationSec 兜底会提前 0.375s 切镜（"先到先切"语义）；M2 定稿 take 的 durationSec 应回填 `normalized_seconds`（本例 3.4）。
+- 小观察：镜头 #1 无 optimizedPrompt 时预填按钮正确置灰（非缺陷）。
