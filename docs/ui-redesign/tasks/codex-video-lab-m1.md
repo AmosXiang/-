@@ -7,9 +7,9 @@
 > ① WP-Animatic 已合入主线（`3dc2777`，结果预览复用其 AnimaticPlayer）——**已满足✓**；
 > ② 主工作区改动已落定（`90f64fd` feat(studio)，用户真机复核 PASS，六文件入库、工作区干净）——**已满足✓**；
 > ③ Agnes capability 契约已按代码可证事实修订（v1.1，见 §二）——**已满足✓**。
-> 基线：`90f64fd`（CC 于 2026-07-16 核验：lint 净 + 模块测试 37/37 + playlist 7/7）。
+> 基线：`c56ae25`（含 Animatic 接线与播放器计时加固；CC 于 2026-07-16 核验：lint 净 + 模块测试 37/37 + playlist 7/7 + 真机 74 镜项目播放验证）。
 > 分发状态：**可立即分发**。
-> 分支：`git worktree add -b feat/video-lab-m1 ../wt-video-lab-m1 90f64fd`（强制独立 worktree）。
+> 分支：`git worktree add -b feat/video-lab-m1 ../wt-video-lab-m1 c56ae25`（强制独立 worktree）。
 
 ## 一、M1 范围拍板（用户定，越界即返工）
 
