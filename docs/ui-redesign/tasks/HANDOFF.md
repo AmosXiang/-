@@ -38,7 +38,8 @@ WP-B(shot-review) · WP-C(export-deck) · WP-E(story-version) · WP-F(delivery-u
 
 ## 下一步候选（无强制排期，按需开工）
 
-- **Video Lab**（裁决 #12）：**方案已定稿** → `docs/ui-redesign/video-lab-plan-2026-07-15.md`（v1.0，用户拍板 + CC review 合并）。WP-Animatic（交付域播放器）可立即立项；Video Lab 从 M1 起立项，无需再等。要点：三生成模式作 provider capability 静态声明、沿用 video_tasks 表（已核实追加式，多 Take 无需修复）+ Shot 仅增 finalVideoTaskId、四硬规则（画幅继承/定稿落盘校验/成本闸门/视频默认不进 ZIP）+ 禁止静默降级 + motionPrompt 独立。**两份任务书已出**（用户拍板拆分，不合并）：`tasks/codex-wp-animatic.md`（纯前端组件，基线 226ec80，可立即分发）、`tasks/codex-video-lab-m1.md`（前置=Animatic 合入，基线待填）。M1 的 server.ts 接线（submitVideoTask 提取+快照列迁移+register）归 CC。**注意**：主工作区有他人未提交的 server.ts/App.tsx/index.css 改动（regenerate-storyboard 半成品，约 345 行，非 CC 工作），两任务书已把这些文件划为 Codex 禁碰；CC 的 App.tsx 接线也应等该改动落定。
+- **Video Lab**（裁决 #12）：**方案已定稿** → `docs/ui-redesign/video-lab-plan-2026-07-15.md`（v1.0，用户拍板 + CC review 合并）。WP-Animatic（交付域播放器）可立即立项；Video Lab 从 M1 起立项，无需再等。要点：三生成模式作 provider capability 静态声明、沿用 video_tasks 表（已核实追加式，多 Take 无需修复）+ Shot 仅增 finalVideoTaskId、四硬规则（画幅继承/定稿落盘校验/成本闸门/视频默认不进 ZIP）+ 禁止静默降级 + motionPrompt 独立。**两份任务书已出并经用户核对修订（v1.1）**：`tasks/codex-wp-animatic.md`（纯前端组件，基线 226ec80，**可立即分发**；证据文档列入允许新增例外；App.tsx 旧 `animaticVideoUrl` 合成 MP4 是另一功能勿混）、`tasks/codex-video-lab-m1.md`（**暂缓**，三阻断：①Animatic 未合入 ②工作区未落定 ③capability 已修订✓——agnes 固定声明 3/5/10/18s·24fps·1152×768·3:2，normalized_size 是响应记录禁止推导输入能力；409 画幅流程是常态路径）。M1 的 server.ts 接线（submitVideoTask 提取+快照列迁移+register）归 CC。
+  **工作区未提交改动（2026-07-16 用户核对，非来源不明）**：6 文件约 576 行 = 故事创意编辑、分镜重生成、图片加载优化、ComfyUI 打开/下载/导回等已验证功能（server.ts/App.tsx/ShotVersionPanel/StyleContractReadonly/index.css + 新增 src/api.ts），仍在增长中。两任务书已把这些文件划为 Codex 禁碰。**推进顺序（用户拍板）**：①审查落定这批改动 → ②Animatic 开工（226ec80 worktree）→ ③合入后填 M1 基线 → ④启动 M1。另：**Agnes 静态图片 provider（生成分镜图）是独立需求，另开任务书，不混入视频任务书**。
 - **风格锚点 IPAdapter**（方案 §六.4，P3 时判为需 ComfyUI 工作流预设扩展而后置）：定稿首图作风格参考注入后续分镜。属"真开放注入"范畴，先确认 manifest/工作流映射能力再评估。
 - **场景参考增强**：现为轻量版（纯文本 overlay 注入，图不参与 conditioning）；若需要图像 conditioning 再扩。
 

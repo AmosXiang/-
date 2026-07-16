@@ -55,7 +55,8 @@ Props（签名不写显式 `JSX.Element`，仓库无 @types/react）：
 
 ## 三、边界（违反即返工）
 
-- **只新增上述文件与其测试；禁碰 App.tsx、server.ts、router.ts、main.tsx、types.ts、任何 server/modules/**——主工作区当前有他人未提交的 App.tsx/server.ts 改动，你从干净基线拉的 worktree 看不到它们，碰了必然合并冲突；挂载接线全部由 CC 做；
+- **允许新增的文件仅限**：§二两个源文件、其测试、§四的验收证据文档（`evidence/animatic-acceptance.md` 及其截图）——此外零新增；**禁碰 App.tsx、server.ts、router.ts、main.tsx、types.ts、任何 server/modules/**——主工作区当前有他人未提交的 App.tsx/server.ts 等改动，你从干净基线拉的 worktree 看不到它们，碰了必然合并冲突；挂载接线全部由 CC 做；
+- App.tsx 里已有旧的 `animaticVideoUrl` 合成 MP4 功能，与本包的前端混合媒体播放器**不是同一功能**，不要复用、不要重构它（App.tsx 本就禁碰，此处仅防误解）；
 - 不新增后端 API、不接任何视频 Provider、不改 Video Lab 数据模型（方案 §二明确）；
 - 不加 npm 依赖；正式 db.sqlite 与 uploads 零污染。
 
