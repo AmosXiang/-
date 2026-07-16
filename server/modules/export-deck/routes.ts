@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Express, Request, Response } from 'express';
 import type Database from 'better-sqlite3';
 import { generatePptx, generateManifest, createExportZip } from './generator.ts';
+import { isReadableFile, getLocalPath, sanitizeFilename, sceneExportFile } from './naming.ts';
 
 type DatabaseInstance = Database.Database;
 
@@ -19,51 +20,6 @@ function readScripts(db: DatabaseInstance): any[] {
   } catch {
     return [];
   }
-}
-
-/**
- * Checks if a file exists, is actually a file, and has read permissions.
- */
-function isReadableFile(filePath: string): boolean {
-  try {
-    const stats = fs.statSync(filePath);
-    if (!stats.isFile()) return false;
-    fs.accessSync(filePath, fs.constants.R_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Sanitizes folder and file names to prevent path traversal and bad characters.
- */
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^\p{L}\p{N}_\-]/gu, '_');
-}
-
-/**
- * Resolves a URL of the format /uploads/... to a local absolute path,
- * checking that it lies within the uploadsDir to prevent directory traversal.
- */
-function getLocalPath(url: string | undefined | null, uploadsDir: string): string | null {
-  if (!url) return null;
-  const cleanUrl = url.startsWith('/') ? url.slice(1) : url;
-  if (!cleanUrl.startsWith('uploads/')) {
-    return null;
-  }
-  const relativePart = cleanUrl.slice('uploads/'.length);
-  // Ensure we resolve against the exact absolute path of uploadsDir
-  const absoluteUploadsDir = path.resolve(uploadsDir);
-  const absolutePath = path.resolve(absoluteUploadsDir, relativePart);
-
-  // Prevent path traversal
-  const relative = path.relative(absoluteUploadsDir, absolutePath);
-  const isInside = relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-  if (!isInside) {
-    return null;
-  }
-  return absolutePath;
 }
 
 export function registerExportDeckModule(
@@ -397,24 +353,16 @@ export function registerExportDeckModule(
         scenesReadmeSection = '3.5 场景参考清单\n';
 
         sceneRefs.forEach((scene: any, idx: number) => {
-          let hasLocal = false;
-          let destFileName = '';
+          const { fileName, localPath } = sceneExportFile(scene, idx, uploadsDir);
+          const hasLocal = fileName !== null && localPath !== null;
 
-          if (scene.imageUrl) {
-            const localPath = getLocalPath(scene.imageUrl, uploadsDir);
-            if (localPath && isReadableFile(localPath)) {
-              const ext = path.extname(localPath) || '.png';
-              const twoDigitIdx = String(idx + 1).padStart(2, '0');
-              const sanitizedName = sanitizeFilename(scene.name || 'scene');
-              destFileName = `${twoDigitIdx}_${sanitizedName}${ext}`;
-              const destPath = path.join(scenesDir, destFileName);
-              fs.copyFileSync(localPath, destPath);
-              hasLocal = true;
-            }
+          if (hasLocal) {
+            const destPath = path.join(scenesDir, fileName);
+            fs.copyFileSync(localPath, destPath);
           }
 
           const overlaySnippet = scene.overlay ? scene.overlay.slice(0, 60) : '无';
-          const fileStatus = hasLocal ? `scenes/${destFileName}` : '无参考图';
+          const fileStatus = hasLocal ? `scenes/${fileName}` : '无参考图';
           scenesReadmeSection += `- 场景: ${scene.name || '未命名'} (ID: ${scene.id})\n`;
           scenesReadmeSection += `  * 导出状态: ${fileStatus}\n`;
           scenesReadmeSection += `  * 描述/Overlay: ${overlaySnippet}\n`;
