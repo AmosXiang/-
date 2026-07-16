@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { apiFetch } from '../api';
 
 interface ShotVersion {
   taskId: string;
@@ -38,7 +39,7 @@ export default function ShotVersionPanel({
     setLoading(true);
     setError('');
     try {
-      const data = await readJson(await fetch(`${baseUrl}/versions`, { signal }));
+      const data = await readJson(await apiFetch(`${baseUrl}/versions`, { signal }));
       setVersions(Array.isArray(data.versions) ? data.versions : []);
       setFailedImages(new Set());
     } catch (loadError) {

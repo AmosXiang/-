@@ -179,7 +179,8 @@
     display: grid;
     grid-template-columns: 240px minmax(0, 1fr) 260px;
     min-height: 640px;
-    max-height: calc(100vh - 15rem);
+    height: clamp(640px, calc(100dvh - 15rem), 900px);
+    max-height: none;
   }
 
   .wizard-shot-column {
@@ -187,6 +188,14 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+
+  .studio-workspace-scroll {
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: auto;
+    scrollbar-gutter: stable;
   }
 
   @media (max-width: 1200px) {
@@ -345,19 +354,24 @@
     color: #eef2ff;
   }
 
-  /* P1b: 系统状态抽屉(原顶栏锚定弹层升级为右侧抽屉) */
+  /* ComfyUI 系统状态：居中对话框，避免窄抽屉压缩运行信息。 */
   .comfy-pop {
     position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
+    /* topbar uses backdrop-filter, so percentage-based fixed positioning would
+       resolve against the 48px header containing block instead of the viewport. */
+    top: 50dvh;
+    left: 50%;
+    transform: translate(-50%, -50%);
     z-index: 300;
-    width: min(320px, 90vw);
-    padding: 12px;
+    width: min(560px, calc(100vw - 32px));
+    max-height: min(720px, calc(100dvh - 32px));
+    padding: 20px;
     overflow-y: auto;
     background: var(--surface-2);
-    border-left: 1px solid var(--border-default);
-    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.45);
+    border: 1px solid var(--border-default);
+    border-radius: 16px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.58);
+    scrollbar-gutter: stable;
   }
 
   .admin-inspector-toolbar {

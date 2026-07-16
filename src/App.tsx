@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { videoAnalysisData } from "./data";
-import { Shot, Character, VideoRecord, GeneratedScriptRecord, SceneReference } from "./types";
+import { Shot, Character, VideoRecord, GeneratedScriptRecord, SceneReference, Narrative } from "./types";
 import CameraDerivePanel from "./components/CameraDerivePanel";
 import StoryEditor from "./components/StoryEditor";
 import ShotVersionPanel from "./components/ShotVersionPanel";
@@ -45,12 +45,29 @@ import SceneReferencePanel from "./components/SceneReferencePanel";
 import DeliveryPanel from "./components/DeliveryPanel";
 import StoryboardReview from "./components/StoryboardReview";
 import { useHashRoute, navigateTo } from "./router";
+import { apiFetch } from "./api";
 import { DEFAULT_COMFY_NEGATIVE_PROMPT } from "../server/constants/comfyDefaults";
 
 // 图片资源失败态:src 为空显示"暂无图片",加载 404/失败显示"加载失败",不出现浏览器破图图标(P0)。
-function SafeImg({ src, alt, className, onClick }: { src?: string; alt?: string; className?: string; onClick?: () => void }) {
+const optimizedAssetUrl = (src: string | undefined, width: number, height?: number): string | undefined => {
+  if (!src || !src.startsWith('/uploads/')) return src;
+  const params = new URLSearchParams({ src, width: String(width) });
+  if (height) params.set('height', String(height));
+  return `/api/assets/image-preview?${params.toString()}`;
+};
+
+function SafeImg({ src, alt, className, onClick, loading = 'lazy' }: { src?: string; alt?: string; className?: string; onClick?: () => void; loading?: 'eager' | 'lazy' }) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => { setFailed(false); }, [src]);
+  const [attempt, setAttempt] = useState(0);
+  const retryTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    setFailed(false);
+    setAttempt(0);
+    if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
+    return () => {
+      if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
+    };
+  }, [src]);
   if (!src || failed) {
     return (
       <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 bg-slate-950/60 font-medium">
@@ -58,7 +75,25 @@ function SafeImg({ src, alt, className, onClick }: { src?: string; alt?: string;
       </div>
     );
   }
-  return <img src={src} alt={alt || ""} className={className} onClick={onClick} onError={() => setFailed(true)} />;
+  const separator = src.includes('?') ? '&' : '?';
+  const resolvedSrc = attempt > 0 ? `${src}${separator}assetRetry=${attempt}` : src;
+  return (
+    <img
+      src={resolvedSrc}
+      alt={alt || ""}
+      className={className}
+      onClick={onClick}
+      loading={loading}
+      decoding="async"
+      onError={() => {
+        if (attempt >= 3) {
+          setFailed(true);
+          return;
+        }
+        retryTimerRef.current = window.setTimeout(() => setAttempt(value => value + 1), 600 * (attempt + 1));
+      }}
+    />
+  );
 }
 
 type ComfyProjectPreferences = {
@@ -105,6 +140,22 @@ const inferShotCharacterIds = (description: string, characters: Character[]): st
   return characters
     .filter(character => character.id && characterTerms(character).some(term => searchable.includes(term)))
     .map(character => String(character.id));
+};
+
+const EMPTY_STORY_IDEA: Narrative = { structure: '', rhythm: '', climaxDesign: '' };
+
+const normalizeStoryIdea = (value?: Partial<Narrative> | null): Narrative => ({
+  structure: String(value?.structure || '').trim(),
+  rhythm: String(value?.rhythm || '').trim(),
+  climaxDesign: String(value?.climaxDesign || '').trim(),
+});
+
+const sameStoryIdea = (left?: Partial<Narrative> | null, right?: Partial<Narrative> | null): boolean => {
+  const normalizedLeft = normalizeStoryIdea(left);
+  const normalizedRight = normalizeStoryIdea(right);
+  return normalizedLeft.structure === normalizedRight.structure
+    && normalizedLeft.rhythm === normalizedRight.rhythm
+    && normalizedLeft.climaxDesign === normalizedRight.climaxDesign;
 };
 
 const LEGACY_COMFY_PROJECT_PREFERENCES: ComfyProjectPreferences = {
@@ -256,12 +307,12 @@ function StoryboardInspector({ shot, characters, provider, onProviderChange, onC
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
-        const response = await fetch('/api/video-prompt/preview', {
+        const response = await apiFetch('/api/video-prompt/preview', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ shot: localShot, provider }),
           signal: controller.signal
-        });
+        }, { retryUnsafeMethod: true });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || '提示词预览失败');
         setPreview(result); setPreviewError('');
@@ -310,6 +361,8 @@ export default function App() {
 
   // Generated Scripts State
   const [generatedScripts, setGeneratedScripts] = useState<GeneratedScriptRecord[]>([]);
+  const [scriptsLoaded, setScriptsLoaded] = useState(false);
+  const [scriptsLoadError, setScriptsLoadError] = useState<string | null>(null);
 
   // Editing state for table cells
   const [editingCell, setEditingCell] = useState<{ idx: number; field: string } | null>(null);
@@ -393,7 +446,9 @@ export default function App() {
   const [showJsonModal, setShowJsonModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [audioMuted, setAudioMuted] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<"narrative" | "shots" | "characters" | "generator">("shots");
+  const [activeTab, setActiveTab] = useState<"narrative" | "shots" | "characters" | "generator">(
+    () => route.page === "studio" ? "generator" : "shots"
+  );
   const [shotFilterCategory, setShotFilterCategory] = useState<string>("all");
   const [showComfyPop, setShowComfyPop] = useState<boolean>(false);
 
@@ -414,6 +469,9 @@ export default function App() {
   const [generatedScript, setGeneratedScript] = useState<any | null>(null);
   const [generatorError, setGeneratorError] = useState<string | null>(null);
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
+  const [storyIdeaDraft, setStoryIdeaDraft] = useState<Narrative>(EMPTY_STORY_IDEA);
+  const [isRegeneratingStoryboard, setIsRegeneratingStoryboard] = useState(false);
+  const [storyIdeaFeedback, setStoryIdeaFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
 
   // Custom script details/drawers states
   const [activeDrawerChar, setActiveDrawerChar] = useState<Character | null>(null);
@@ -501,7 +559,7 @@ export default function App() {
     let active = true;
     const fetchRuntime = async () => {
       try {
-        const res = await fetch('/api/comfyui/runtime');
+        const res = await apiFetch('/api/comfyui/runtime');
         if (res.ok && active) {
           const data = await res.json();
           setComfyRuntime(data);
@@ -580,7 +638,7 @@ export default function App() {
   }, [generatedScript]);
 
   const loadGeneratedScripts = React.useCallback(async () => {
-    const response = await fetch('/api/generated-scripts');
+    const response = await apiFetch('/api/generated-scripts', {}, { attempts: 8 });
     if (!response.ok) throw new Error(`刷新项目失败 (HTTP ${response.status})`);
     return await response.json();
   }, []);
@@ -604,7 +662,7 @@ export default function App() {
   const loadComfyProjectPreferences = React.useCallback(async (requestedProjectId?: string) => {
     const projectId = requestedProjectId || generatedScriptRef.current?.id;
     if (!projectId) return;
-    const response = await fetch(`/api/generated-scripts/${projectId}/comfyui-preferences`);
+    const response = await apiFetch(`/api/generated-scripts/${projectId}/comfyui-preferences`);
     if (!response.ok) throw new Error(`读取项目预设失败 (HTTP ${response.status})`);
     const data = await response.json();
     setComfyProjectPreferences(data.preferences || LEGACY_COMFY_PROJECT_PREFERENCES);
@@ -615,7 +673,7 @@ export default function App() {
   const loadWorkflowPresets = React.useCallback(async () => {
     setPresetsLoading(true);
     try {
-      const response = await fetch('/api/comfyui/presets');
+      const response = await apiFetch('/api/comfyui/presets');
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       setWorkflowPresets(Array.isArray(data.presets) && data.presets.length ? data.presets : BUILTIN_WORKFLOW_PRESET_FALLBACKS);
@@ -629,7 +687,7 @@ export default function App() {
   }, []);
 
   const loadDefaultComfyPreferences = React.useCallback(async () => {
-    const response = await fetch('/api/comfyui/default-preferences');
+    const response = await apiFetch('/api/comfyui/default-preferences');
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     const preferences = data.preferences || LEGACY_COMFY_PROJECT_PREFERENCES;
@@ -1008,7 +1066,7 @@ export default function App() {
   const pollComfyTasks = React.useCallback(async () => {
     if (!generatedScriptRef.current) return;
     try {
-      const res = await fetch(`/api/comfyui/tasks?projectId=${generatedScriptRef.current.id}`);
+      const res = await apiFetch(`/api/comfyui/tasks?projectId=${generatedScriptRef.current.id}`);
       if (res.ok) {
         const data = await res.json();
         setComfyTasks(data);
@@ -1248,38 +1306,41 @@ export default function App() {
 
   const isLegacyComfyTask = (task: any) => !task?.workflowPresetId || task.workflowPresetId === 'sdxl_legacy';
 
+  const downloadAdvancedWorkflow = async (task: any): Promise<string> => {
+    const res = await apiFetch(`/api/comfyui/tasks/${task.id}/export-workflow`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const contentDisposition = res.headers.get("Content-Disposition");
+    let filename = `comfyui_${task.targetType || 'unknown'}_${task.viewType || 'main'}_${task.id}.json`;
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="?([^"]+)"?/);
+      if (match && match[1]) filename = match[1];
+    }
+    const downloadUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = downloadUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    window.setTimeout(() => {
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(downloadUrl);
+    }, 1500);
+    return filename;
+  };
+
   const handleAdvancedAdjust = async (task: any, existingTab?: Window | null) => {
     if (!task) return;
-    const comfyTab = existingTab || window.open("about:blank", "_blank");
+    const comfyTab = existingTab || window.open(comfyRuntime.url || "/api/comfyui/open-ui", "_blank");
     if (!comfyTab) {
       alert("无法打开新标签页，请允许浏览器弹出窗口。");
       return;
     }
     try {
-      const res = await fetch(`/api/comfyui/tasks/${task.id}/export-workflow`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-      const blob = await res.blob();
-      const contentDisposition = res.headers.get("Content-Disposition");
-      let filename = `comfyui_${task.targetType || 'unknown'}_${task.viewType || 'main'}_${task.id}.json`;
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename="?([^"]+)"?/);
-        if (match && match[1]) {
-          filename = match[1];
-        }
-      }
-      const downloadUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = downloadUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(downloadUrl);
-      }, 100);
+      const filename = await downloadAdvancedWorkflow(task);
       comfyTab.location.href = "/api/comfyui/open-ui";
       if (task.targetType === 'shot' && Number.isInteger(Number(task.shotIndex))) {
         alert(`已准备分镜 ${Number(task.shotIndex) + 1} 的专属工作流\n文件：${filename}`);
@@ -1302,7 +1363,7 @@ export default function App() {
   };
 
   const handleOpenDefaultWorkflow = async () => {
-    const comfyTab = window.open('about:blank', '_blank');
+    const comfyTab = window.open(comfyRuntime.url || '/api/comfyui/open-ui', '_blank');
     if (!comfyTab) {
       alert('无法打开 ComfyUI，请允许浏览器弹出窗口。');
       return;
@@ -1343,14 +1404,12 @@ export default function App() {
   const refreshCurrentScript = React.useCallback(async () => {
     const current = generatedScriptRef.current;
     if (!current?.id) return;
-    const response = await fetch('/api/generated-scripts');
-    if (!response.ok) throw new Error(`刷新项目失败 (HTTP ${response.status})`);
-    const scripts = await response.json();
+    const scripts = await loadGeneratedScripts();
     const data = scripts.find((item: any) => String(item.id) === String(current.id));
     if (!data) throw new Error('刷新后的项目列表中找不到当前剧本。');
     setGeneratedScript(data);
     setGeneratedScripts(previous => previous.map(item => item.id === data.id ? data : item));
-  }, []);
+  }, [loadGeneratedScripts]);
 
   const handlePrepareShotAdvanced = async (shot: Shot, shotIndex: number, existingTask: any | null) => {
     if (!checkComfyRuntimeBeforeAction()) return;
@@ -1359,7 +1418,7 @@ export default function App() {
       return;
     }
     if (!generatedScript || !shot.id || preparingAdvancedSlots[shot.id]) return;
-    const comfyTab = window.open('about:blank', '_blank');
+    const comfyTab = window.open(comfyRuntime.url || '/api/comfyui/open-ui', '_blank');
     if (!comfyTab) {
       alert('无法打开 ComfyUI，请允许浏览器弹出窗口。');
       return;
@@ -1430,7 +1489,7 @@ export default function App() {
       t => t.targetId === char.id && t.viewType === viewType && (t.status === 'pending' || t.status === 'processing')
     );
 
-    const comfyTab = window.open('about:blank', '_blank');
+    const comfyTab = window.open(comfyRuntime.url || '/api/comfyui/open-ui', '_blank');
     if (!comfyTab) {
       alert('无法打开 ComfyUI，请允许浏览器弹出窗口。');
       return;
@@ -1772,7 +1831,7 @@ export default function App() {
         title={state?.message || '仅上传由该分镜专属工作流生成的原始 PNG'}
         className={compact
           ? "absolute top-1 right-1 p-1 bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white disabled:opacity-50 rounded border border-white/10 opacity-0 group-hover:opacity-100 group-hover/view:opacity-100 transition-opacity z-20 cursor-pointer"
-          : "px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-all border border-slate-750 hover:border-slate-600 font-medium"}
+          : "w-full justify-center px-3 py-2 bg-emerald-950/40 hover:bg-emerald-900/60 disabled:opacity-50 text-emerald-200 rounded-lg text-[10px] flex items-center gap-1.5 cursor-pointer transition-all border border-emerald-800/60 hover:border-emerald-600 font-semibold"}
       >
         {uploading ? <Loader2 className={compact ? "w-3 h-3 animate-spin" : "w-3.5 h-3.5 animate-spin"} /> : <Upload className={compact ? "w-3 h-3 text-emerald-400" : "w-3.5 h-3.5 text-emerald-400"} />}
         {!compact && <span>{state?.status === 'success' ? '导入成功' : state?.status === 'error' ? '导入失败' : '导入 ComfyUI 结果'}</span>}
@@ -1914,7 +1973,7 @@ export default function App() {
   // Load database records on mount
   const fetchRecords = async () => {
     try {
-      const res = await fetch("/api/videos");
+      const res = await apiFetch("/api/videos", {}, { attempts: 8 });
       if (res.ok) {
         const data = await res.json();
         setRecords(data);
@@ -1928,8 +1987,12 @@ export default function App() {
     try {
       const data = await loadGeneratedScripts();
       setGeneratedScripts(data);
-    } catch (err) {
+      setScriptsLoadError(null);
+    } catch (err: any) {
+      setScriptsLoadError(err?.message || '无法加载创意项目。');
       console.error("Failed to load scripts:", err);
+    } finally {
+      setScriptsLoaded(true);
     }
   };
 
@@ -2183,6 +2246,8 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setGeneratedScript(data);
+        setStoryIdeaDraft(normalizeStoryIdea(data.newNarrative));
+        setStoryIdeaFeedback(null);
         setShotImages({});
         fetchGeneratedScripts(); // Refresh scripts sidebar list!
       } else {
@@ -2194,6 +2259,55 @@ export default function App() {
       setGeneratorError(err.message || "创意生成失败，请稍后重试");
     } finally {
       setIsGeneratingScript(false);
+    }
+  };
+
+  const handleConfirmStoryIdea = async () => {
+    if (!generatedScript) return;
+    const confirmedNarrative = normalizeStoryIdea(storyIdeaDraft);
+    if (!confirmedNarrative.structure || !confirmedNarrative.rhythm || !confirmedNarrative.climaxDesign) {
+      setStoryIdeaFeedback({ kind: 'error', message: '请完整填写叙事结构、视听节奏和高潮设计后再确认。' });
+      return;
+    }
+
+    if (sameStoryIdea(confirmedNarrative, generatedScript.newNarrative)) {
+      setStoryIdeaFeedback({ kind: 'success', message: '创意未发生变化，已沿用当前分镜脚本。' });
+      setCreativeStep(3);
+      return;
+    }
+
+    const hasExistingAssets = (generatedScript.newShots || []).some((shot: Shot) =>
+      Boolean(shot.generatedImageUrl || shot.imageUrl || shot.finalizedImageUrl || shot.videoUrl)
+    );
+    if (hasExistingAssets && !window.confirm('确认后的创意将重新生成整套分镜脚本，现有分镜图片仍会保留在本地，但不再绑定到新分镜。是否继续？')) {
+      return;
+    }
+
+    setIsRegeneratingStoryboard(true);
+    setStoryIdeaFeedback(null);
+    try {
+      const response = await fetch(`/api/generated-scripts/${encodeURIComponent(String(generatedScript.id))}/regenerate-storyboard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ narrative: confirmedNarrative }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `重新生成分镜失败（HTTP ${response.status}）`);
+      const updatedScript = result.script;
+      if (!updatedScript) throw new Error('服务端没有返回更新后的项目数据。');
+
+      setGeneratedScript(updatedScript);
+      setGeneratedScripts(previous => previous.map(script => String(script.id) === String(updatedScript.id) ? updatedScript : script));
+      setStoryIdeaDraft(normalizeStoryIdea(updatedScript.newNarrative));
+      setStoryIdeaFeedback({ kind: 'success', message: `已根据确认后的创意重新生成 ${updatedScript.newShots?.length || 0} 个分镜。` });
+      setSelectedShotIndex(0);
+      setBatchSelectedIds([]);
+      setShotImages({});
+      setCreativeStep(3);
+    } catch (error: any) {
+      setStoryIdeaFeedback({ kind: 'error', message: error.message || '重新生成分镜失败，请稍后重试。' });
+    } finally {
+      setIsRegeneratingStoryboard(false);
     }
   };
 
@@ -2225,8 +2339,16 @@ export default function App() {
     const matchedCharacters = (activeScript.newCharacters || []).filter((character: Character) => (shot.matchedCharacterIds || []).includes(String(character.id || '')));
     const hasCharacterReference = matchedCharacters.length > 0 && matchedCharacters.every((character: Character) => !!(character.avatarImageUrl || character.avatarUrl));
 
+    setGeneratingShotIndex(idx);
+    setShotCharacterFeedback(null);
     if (imagePlatform === 'comfyui') {
       try {
+        const runtimeResponse = await apiFetch('/api/comfyui/runtime');
+        const runtime = await runtimeResponse.json().catch(() => ({}));
+        if (!runtimeResponse.ok) throw new Error(runtime.error || `读取 ComfyUI 状态失败 (HTTP ${runtimeResponse.status})`);
+        if (!runtime.connected) throw new Error('ComfyUI 当前未连接，请先在右上角启动或打开 ComfyUI。');
+
+        // Generation is intentionally submitted once. Retrying this POST automatically could create duplicate paid tasks.
         const res = await fetch("/api/generate-image", {
           method: "POST",
           headers: {
@@ -2266,11 +2388,12 @@ export default function App() {
         await pollComfyTasks();
       } catch (err: any) {
         setShotCharacterFeedback({ kind: 'error', message: err.message || '提交任务失败' });
+      } finally {
+        setGeneratingShotIndex(null);
       }
       return;
     }
 
-    setGeneratingShotIndex(idx);
     try {
       const res = await fetch("/api/generate-image", {
         method: "POST",
@@ -3562,6 +3685,8 @@ export default function App() {
     setSelectedRecord(null);
     setActiveTab("generator");
     setGeneratorTopic(script.topic || "");
+    setStoryIdeaDraft(normalizeStoryIdea(script.newNarrative));
+    setStoryIdeaFeedback(null);
     const images: Record<string, string> = {};
     (script.newShots || []).forEach((s: any) => {
       if (s.generatedImageUrl) images[s.timestamp] = s.generatedImageUrl;
@@ -3602,6 +3727,8 @@ export default function App() {
     } else if (route.page === "studio") {
       if (route.projectId === "new") {
         if (generatedScript !== null) setGeneratedScript(null);
+        setStoryIdeaDraft(EMPTY_STORY_IDEA);
+        setStoryIdeaFeedback(null);
         if (activeTab !== "generator") setActiveTab("generator");
       } else if (route.projectId) {
         const script = generatedScripts.find(s => String(s.id) === String(route.projectId));
@@ -3783,6 +3910,19 @@ export default function App() {
     await saveStoryboardShot(shotIdx, enrichedShot);
   }, [saveStoryboardShot, generatedScript]);
 
+  const isStudioProjectHydrating = route.page === 'studio'
+    && Boolean(route.projectId)
+    && route.projectId !== 'new'
+    && !scriptsLoaded;
+  const isStudioProjectLoadFailed = route.page === 'studio'
+    && Boolean(route.projectId)
+    && route.projectId !== 'new'
+    && scriptsLoaded
+    && String(generatedScript?.id || '') !== String(route.projectId)
+    && Boolean(scriptsLoadError);
+  const storyIdeaDirty = Boolean(generatedScript)
+    && !sameStoryIdea(storyIdeaDraft, generatedScript?.newNarrative);
+
   return (
     <div className="admin-shell bg-slate-950 text-slate-200 min-h-screen flex flex-col font-sans select-none overflow-x-hidden antialiased">
       {/* Top Header */}
@@ -3863,15 +4003,23 @@ export default function App() {
 
             {showComfyPop && (
               <>
-                <div className="fixed inset-0 z-[290] bg-black/30" onClick={() => setShowComfyPop(false)} />
-                <div className="comfy-pop space-y-2.5 p-3">
+                <div className="fixed inset-0 z-[290] bg-black/55 backdrop-blur-[2px]" onClick={() => setShowComfyPop(false)} />
+                <div
+                  className="comfy-pop space-y-4"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="comfy-status-title"
+                >
                   {/* P1b: 系统状态抽屉头 + 任务队列摘要(只放系统健康类内容) */}
-                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                    <span className="text-xs font-bold text-slate-200 tracking-wider">系统状态</span>
+                  <div className="flex items-start justify-between gap-4 pb-3 border-b border-slate-800">
+                    <div>
+                      <span id="comfy-status-title" className="text-sm font-bold text-slate-100 tracking-wide">系统状态</span>
+                      <p className="mt-1 text-[10px] leading-relaxed text-slate-500">查看 ComfyUI 服务、生成队列和项目预设。</p>
+                    </div>
                     <button
                       type="button"
                       onClick={() => setShowComfyPop(false)}
-                      className="text-slate-500 hover:text-slate-200 p-1 rounded cursor-pointer"
+                      className="text-slate-500 hover:text-slate-200 p-1.5 rounded cursor-pointer"
                       aria-label="关闭"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -3945,6 +4093,16 @@ export default function App() {
                             <option value="qwen_2511_three_views">Qwen 2511 Three Views</option>
                             <option value="esrgan_4x">4x ESRGAN</option>
                           </select>
+                          <a
+                            href={comfyRuntime.url || '/api/comfyui/open-ui'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full min-h-8 px-2 py-1.5 rounded bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-800/70 text-emerald-200 cursor-pointer flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-all"
+                            title="直接在新标签页打开当前 ComfyUI 服务"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>直接打开 ComfyUI</span>
+                          </a>
                           <button
                             type="button"
                             onClick={() => handleOpenAdvanced(null)}
@@ -3952,7 +4110,7 @@ export default function App() {
                             title="通用模板不可直接导回；需要导回时请从具体图片点击高级调整。"
                           >
                             <ExternalLink className="w-3 h-3" />
-                            <span>打开工作流模板</span>
+                            <span>打开并下载工作流模板</span>
                           </button>
                         </div>
                       )}
@@ -4009,7 +4167,36 @@ export default function App() {
         </div>
       </header>
 
-      {route.page === "library" ? (
+      {isStudioProjectHydrating ? (
+        <main className="flex-1 min-h-0 grid place-items-center bg-slate-950" aria-live="polite">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <Loader2 className="h-7 w-7 animate-spin text-emerald-400" />
+            <div>
+              <p className="text-sm font-semibold text-slate-200">正在恢复创意项目</p>
+              <p className="mt-1 text-xs text-slate-500">加载项目数据后会回到上次的创作工作台。</p>
+            </div>
+          </div>
+        </main>
+      ) : isStudioProjectLoadFailed ? (
+        <main className="flex-1 min-h-0 grid place-items-center bg-slate-950 px-6" role="alert">
+          <div className="max-w-md rounded-2xl border border-rose-900/60 bg-rose-950/20 p-6 text-center">
+            <AlertTriangle className="mx-auto h-7 w-7 text-rose-400" />
+            <p className="mt-3 text-sm font-semibold text-slate-100">创意项目恢复失败</p>
+            <p className="mt-2 text-xs leading-relaxed text-slate-400">{scriptsLoadError}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setScriptsLoaded(false);
+                setScriptsLoadError(null);
+                void fetchGeneratedScripts();
+              }}
+              className="mt-4 rounded-lg border border-rose-700/70 bg-rose-900/40 px-4 py-2 text-xs font-semibold text-rose-100 hover:bg-rose-800/60"
+            >
+              重新连接后端
+            </button>
+          </div>
+        </main>
+      ) : route.page === "library" ? (
         /* ── P1: 素材库首页(上传优先落地页 + 记录网格) ── */
         <main className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
           <div className={`max-w-5xl mx-auto px-6 pb-16 space-y-10 ${records.length === 0 ? "pt-20" : "pt-10"}`}>
@@ -4638,11 +4825,11 @@ export default function App() {
 
         {/* Column 3: 右栏（统计 + 上下文，P1b 默认收起）；创意生成 tab 时承载全宽向导 */}
         {(activeTab === "generator" || inspectorOpen) && (
-        <section className="admin-inspector flex-1 flex flex-col bg-slate-900/30 overflow-y-auto custom-scrollbar">
+        <section className={`admin-inspector flex-1 flex flex-col bg-slate-900/30 custom-scrollbar ${activeTab === "generator" ? "overflow-hidden" : "overflow-y-auto"}`}>
           {activeTab === "generator" ? (
             <>
               {mainTabsBar}
-              <div className="p-6 flex-1 flex flex-col gap-6">
+              <div className="studio-workspace-scroll custom-scrollbar p-6 flex-1 flex flex-col gap-6">
 
             {activeTab === "generator" && (
               <div className="space-y-6">
@@ -4656,7 +4843,7 @@ export default function App() {
                       <div className="flex items-center gap-3">
                         {[
                           { num: 1, label: '风格设定' },
-                          { num: 2, label: '角色配置' },
+                          { num: 2, label: '创意与角色' },
                           { num: 3, label: '分镜生成' },
                           { num: 4, label: '导出' }
                         ].map((s) => {
@@ -4666,7 +4853,15 @@ export default function App() {
                             <button
                               key={s.num}
                               type="button"
-                              onClick={() => setCreativeStep(s.num)}
+                              onClick={() => {
+                                if (s.num >= 3 && storyIdeaDirty) {
+                                  setCreativeStep(2);
+                                  setStoryIdeaFeedback({ kind: 'error', message: '请先确认创意修改，再进入分镜工作台。' });
+                                  return;
+                                }
+                                setCreativeStep(s.num);
+                              }}
+                              disabled={isRegeneratingStoryboard}
                               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
                                 isActive
                                   ? 'bg-blue-600/25 border-blue-500/50 text-blue-100 shadow-md shadow-blue-950/20'
@@ -4696,11 +4891,17 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          setCreativeStep(3);
+                          if (creativeStep === 2) void handleConfirmStoryIdea();
+                          else setCreativeStep(2);
                         }}
+                        disabled={isRegeneratingStoryboard}
                         className="px-3 py-1.5 rounded-lg border border-purple-800/40 bg-purple-955/20 text-[10px] font-semibold text-purple-300 hover:bg-purple-900/30 transition-all cursor-pointer font-bold"
                       >
-                        ⚡ 一键进入高级工作台
+                        ⚡ {creativeStep === 2
+                          ? '确认创意后进入分镜工作台'
+                          : creativeStep >= 3
+                            ? '返回创意与角色'
+                            : '进入创意与角色'}
                       </button>
                     </div>
                   </div>
@@ -4983,18 +5184,53 @@ export default function App() {
                                 故事创意概览
                               </h4>
 
-                              <div className="space-y-3 flex-1 overflow-y-auto pr-1">
-                                <div>
+                              <div className="space-y-3 flex-1 pr-1">
+                                <p className="rounded-lg border border-emerald-900/50 bg-emerald-950/20 px-3 py-2 text-[10px] leading-relaxed text-emerald-200/80">
+                                  先修改并确认创意。只有内容发生变化时，系统才会重新生成整套分镜脚本。
+                                </p>
+                                <label className="block space-y-1.5">
                                   <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">叙事结构 (三幕式)</span>
-                                  <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.structure}</p>
-                                </div>
-                                <div>
+                                  <textarea
+                                    aria-label="叙事结构"
+                                    value={storyIdeaDraft.structure}
+                                    onChange={event => { setStoryIdeaDraft(previous => ({ ...previous, structure: event.target.value })); setStoryIdeaFeedback(null); }}
+                                    rows={5}
+                                    className="w-full resize-y rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-xs leading-relaxed text-slate-200 outline-none focus:border-emerald-500"
+                                  />
+                                </label>
+                                <label className="block space-y-1.5">
                                   <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">视听节奏</span>
-                                  <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.rhythm}</p>
-                                </div>
-                                <div>
+                                  <textarea
+                                    aria-label="视听节奏"
+                                    value={storyIdeaDraft.rhythm}
+                                    onChange={event => { setStoryIdeaDraft(previous => ({ ...previous, rhythm: event.target.value })); setStoryIdeaFeedback(null); }}
+                                    rows={5}
+                                    className="w-full resize-y rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-xs leading-relaxed text-slate-200 outline-none focus:border-emerald-500"
+                                  />
+                                </label>
+                                <label className="block space-y-1.5">
                                   <span className="text-[9px] font-mono text-slate-500 uppercase font-bold tracking-wider">高潮与爽点位置</span>
-                                  <p className="text-xs text-slate-300 leading-relaxed font-normal mt-0.5">{generatedScript.newNarrative.climaxDesign}</p>
+                                  <textarea
+                                    aria-label="高潮与爽点位置"
+                                    value={storyIdeaDraft.climaxDesign}
+                                    onChange={event => { setStoryIdeaDraft(previous => ({ ...previous, climaxDesign: event.target.value })); setStoryIdeaFeedback(null); }}
+                                    rows={5}
+                                    className="w-full resize-y rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-xs leading-relaxed text-slate-200 outline-none focus:border-emerald-500"
+                                  />
+                                </label>
+                                <div className="flex items-center justify-between gap-3 text-[10px]">
+                                  <span className={storyIdeaDirty ? 'text-amber-300' : 'text-emerald-400'}>
+                                    {storyIdeaDirty ? '有未确认的创意修改' : '当前创意已确认'}
+                                  </span>
+                                  {storyIdeaDirty && (
+                                    <button
+                                      type="button"
+                                      onClick={() => { setStoryIdeaDraft(normalizeStoryIdea(generatedScript.newNarrative)); setStoryIdeaFeedback(null); }}
+                                      className="border border-slate-700 px-2.5 py-1 text-slate-400 hover:text-slate-200"
+                                    >
+                                      撤销修改
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -5064,7 +5300,12 @@ export default function App() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex justify-between pt-2">
+                        {storyIdeaFeedback && (
+                          <div className={`rounded-lg border px-3 py-2 text-xs ${storyIdeaFeedback.kind === 'success' ? 'border-emerald-800/60 bg-emerald-950/25 text-emerald-300' : 'border-rose-800/60 bg-rose-950/25 text-rose-300'}`} role="status">
+                            {storyIdeaFeedback.message}
+                          </div>
+                        )}
+                        <div className="flex justify-between gap-3 pt-2">
                           <button
                             type="button"
                             onClick={() => setCreativeStep(1)}
@@ -5074,10 +5315,16 @@ export default function App() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setCreativeStep(3)}
-                            className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold py-2 px-6 rounded-xl shadow-lg shadow-blue-900/20"
+                            onClick={() => void handleConfirmStoryIdea()}
+                            disabled={isRegeneratingStoryboard}
+                            className="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-6 rounded-xl shadow-lg shadow-blue-900/20 flex items-center gap-2"
                           >
-                            确认角色并进入下一步：分镜生成 →
+                            {isRegeneratingStoryboard && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                            {isRegeneratingStoryboard
+                              ? '正在根据确认创意生成分镜…'
+                              : storyIdeaDirty
+                                ? '确认创意与角色，重新生成分镜 →'
+                                : '确认创意与角色，进入分镜工作台 →'}
                           </button>
                         </div>
                       </>
@@ -5239,7 +5486,11 @@ export default function App() {
                                     <div className="flex gap-2">
                                       <div className="w-14 aspect-video rounded overflow-hidden bg-slate-900 border border-white/5 shrink-0 relative">
                                         {shotImg ? (
-                                          <img src={shotImg} alt="" className="w-full h-full object-cover" />
+                                          <SafeImg
+                                            src={optimizedAssetUrl(shotImg, 160, 100)}
+                                            alt={`分镜 ${idx + 1}`}
+                                            className="w-full h-full object-cover"
+                                          />
                                         ) : (
                                           <span className="text-[8px] text-slate-700 absolute inset-0 flex items-center justify-center font-mono">[无图]</span>
                                         )}
@@ -5334,7 +5585,12 @@ export default function App() {
                                     <div className="w-full flex flex-col items-center justify-center gap-5">
                                       <div className="w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 flex items-center justify-center relative group shadow-2xl">
                                         {shotImg ? (
-                                          <img src={shotImg} alt={`分镜 ${selectedShotIndex + 1}`} className="w-full h-full object-cover" />
+                                          <SafeImg
+                                            src={optimizedAssetUrl(shotImg, 960, 540)}
+                                            alt={`分镜 ${selectedShotIndex + 1}`}
+                                            className="w-full h-full object-cover"
+                                            loading="eager"
+                                          />
                                         ) : (
                                           <div className="text-center text-slate-500 text-xs flex flex-col items-center gap-2 p-6 font-normal">
                                             <span className="text-2xl">🖼️</span>
@@ -5409,6 +5665,8 @@ export default function App() {
                               const shotImg = shotImages[shot.timestamp] || shot.generatedImageUrl || shot.imageUrl;
                               const sceneReferences: SceneReference[] = Array.isArray(generatedScript.sceneReferences) ? generatedScript.sceneReferences : [];
                               const currentScene = sceneReferences.find(scene => scene.id === shot.sceneId);
+                              const latestSucceededShotTask = shot.id ? getLatestSucceededTask(shot.id, 'main') : null;
+                              const isPreparingShotAdvanced = Boolean(shot.id && preparingAdvancedSlots[shot.id]);
                               return (
                                 <div className="space-y-3">
                                   <details open className="inspector-section">
@@ -5476,9 +5734,44 @@ export default function App() {
                                     <summary><span>④ 高级调整</span><span className="inspector-chevron">›</span></summary>
                                     <div className="inspector-section-body">
                                       {shotImg && imagePlatform === 'comfyui' ? (
-                                        <button type="button" onClick={() => handleOpenComfyParams(shot.id || '', 'main', 'shot', selectedShotIndex, undefined, shot.description)} className="w-full rounded-lg border border-slate-700 bg-slate-850 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800">
-                                          <ExternalLink className="mr-1.5 inline h-4 w-4 text-slate-400" />ComfyUI 高级调整
-                                        </button>
+                                        latestSucceededShotTask?.hasUiWorkflow ? (
+                                          <div className="space-y-2">
+                                            <a
+                                              href={comfyRuntime.url || 'http://127.0.0.1:8001'}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              onClick={() => {
+                                                const task = latestSucceededShotTask;
+                                                setShotCharacterFeedback({ kind: 'success', message: '正在准备当前分镜的工作流 JSON…' });
+                                                void downloadAdvancedWorkflow(task)
+                                                  .then(filename => {
+                                                    const message = `工作流已下载：${filename}`;
+                                                    setShotCharacterFeedback({ kind: 'success', message });
+                                                    window.setTimeout(() => setShotCharacterFeedback(current => current?.message === message ? null : current), 6000);
+                                                  })
+                                                  .catch(error => {
+                                                    setShotCharacterFeedback({ kind: 'error', message: `工作流下载失败：${error.message}` });
+                                                  });
+                                              }}
+                                              className="block w-full rounded-lg border border-blue-700/70 bg-blue-950/40 px-3 py-2 text-center text-xs font-semibold text-blue-200 hover:bg-blue-900/50"
+                                            >
+                                              <ExternalLink className="mr-1.5 inline h-4 w-4 text-blue-400" />新标签页打开 ComfyUI 并下载工作流
+                                            </a>
+                                            {renderComfyImportButton(latestSucceededShotTask)}
+                                            <p className="text-[10px] leading-relaxed text-slate-500">在 ComfyUI 中生成后，请保存原始 PNG；回到这里点击“导入 ComfyUI 结果”并选择该 PNG。截图、JPG 或缺少工作流元数据的 PNG 无法绑定到分镜。</p>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            disabled={!shot.id || isPreparingShotAdvanced}
+                                            onClick={() => void handlePrepareShotAdvanced(shot, selectedShotIndex, null)}
+                                            className="w-full rounded-lg border border-slate-700 bg-slate-850 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-wait disabled:opacity-50"
+                                          >
+                                            {isPreparingShotAdvanced
+                                              ? <><Loader2 className="mr-1.5 inline h-4 w-4 animate-spin text-blue-400" />正在准备工作流…</>
+                                              : <><ExternalLink className="mr-1.5 inline h-4 w-4 text-slate-400" />生成专属工作流并打开 ComfyUI</>}
+                                          </button>
+                                        )
                                       ) : <p className="text-[10px] text-slate-500">生成 ComfyUI 分镜画面后可用。</p>}
                                     </div>
                                   </details>
@@ -5546,7 +5839,11 @@ export default function App() {
                                     <div key={idx} className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-850 flex flex-col gap-2">
                                       <div className="w-full aspect-video rounded overflow-hidden border border-white/5 bg-slate-900 relative">
                                         {shotImg ? (
-                                          <img src={shotImg} alt={`分镜 ${idx + 1}`} className="w-full h-full object-cover" />
+                                          <SafeImg
+                                            src={optimizedAssetUrl(shotImg, 320, 180)}
+                                            alt={`分镜 ${idx + 1}`}
+                                            className="w-full h-full object-cover"
+                                          />
                                         ) : (
                                           <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 bg-slate-955/60 font-mono">
                                             [未生成图片]
@@ -6659,7 +6956,11 @@ export default function App() {
                       {/* Thumbnail or placeholder */}
                       <div className="w-20 h-14 rounded-lg bg-slate-900 overflow-hidden border border-slate-800 flex-shrink-0 relative">
                         {shotImg ? (
-                          <img key={shotImg} src={shotImg} alt={`Shot ${idx + 1}`} className="w-full h-full object-cover" />
+                          <SafeImg
+                            src={optimizedAssetUrl(shotImg, 200, 140)}
+                            alt={`Shot ${idx + 1}`}
+                            className="w-full h-full object-cover"
+                          />
                         ) : (
                           <div className="w-full h-full flex flex-col items-center justify-center text-[8px] text-slate-500">
                             <Film className="w-3.5 h-3.5 mb-1" />

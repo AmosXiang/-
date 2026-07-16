@@ -386,6 +386,78 @@ async function mutateDb(mutator: (db: any) => void | Promise<void>) {
 }
 
 app.use(express.json());
+const optimizedImageCache = new Map<string, Buffer>();
+const optimizedImageInFlight = new Map<string, Promise<Buffer>>();
+const OPTIMIZED_IMAGE_CACHE_LIMIT = 128;
+
+// Storyboard cells are small, but their source PNG files are often 500-1000 KB.
+// Returning display-sized WebP previews prevents a project with dozens of shots
+// from saturating the local HTTP server and delaying API/runtime status requests.
+app.get('/api/assets/image-preview', async (req, res) => {
+  const sourceUrl = String(req.query.src || '').trim();
+  if (!sourceUrl.startsWith('/uploads/')) {
+    return res.status(400).json({ error: 'src must reference a local /uploads asset.' });
+  }
+
+  const relativePath = sourceUrl.slice('/uploads/'.length).replaceAll('/', path.sep);
+  const uploadsRoot = path.resolve(UPLOADS_DIR);
+  const sourcePath = path.resolve(uploadsRoot, relativePath);
+  const uploadsPrefix = uploadsRoot.endsWith(path.sep) ? uploadsRoot : `${uploadsRoot}${path.sep}`;
+  if (!sourcePath.startsWith(uploadsPrefix)) {
+    return res.status(403).json({ error: 'Asset path is outside the uploads directory.' });
+  }
+
+  const parsedWidth = Number.parseInt(String(req.query.width || '960'), 10);
+  const parsedHeight = Number.parseInt(String(req.query.height || '0'), 10);
+  const width = Math.min(1600, Math.max(48, Number.isFinite(parsedWidth) ? parsedWidth : 960));
+  const height = Number.isFinite(parsedHeight) && parsedHeight > 0
+    ? Math.min(1200, Math.max(32, parsedHeight))
+    : undefined;
+
+  try {
+    const stat = await fs.promises.stat(sourcePath);
+    if (!stat.isFile()) return res.status(404).json({ error: 'Asset not found.' });
+
+    const cacheKey = `${sourcePath}:${stat.size}:${stat.mtimeMs}:${width}:${height || 0}`;
+    const etag = `"${crypto.createHash('sha1').update(cacheKey).digest('hex')}"`;
+    // Imported ComfyUI results may replace the file behind the same /uploads URL.
+    // Revalidate so the mtime-derived ETag can invalidate an older browser preview.
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.setHeader('ETag', etag);
+    res.type('image/webp');
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
+
+    let output = optimizedImageCache.get(cacheKey);
+    if (!output) {
+      let pending = optimizedImageInFlight.get(cacheKey);
+      if (!pending) {
+        pending = sharp(sourcePath)
+          .rotate()
+          .resize({ width, height, fit: 'inside', withoutEnlargement: true })
+          .webp({ quality: 80, effort: 3 })
+          .toBuffer();
+        optimizedImageInFlight.set(cacheKey, pending);
+      }
+      try {
+        output = await pending;
+      } finally {
+        optimizedImageInFlight.delete(cacheKey);
+      }
+      optimizedImageCache.set(cacheKey, output);
+      if (optimizedImageCache.size > OPTIMIZED_IMAGE_CACHE_LIMIT) {
+        const oldestKey = optimizedImageCache.keys().next().value;
+        if (oldestKey) optimizedImageCache.delete(oldestKey);
+      }
+    }
+
+    return res.send(output);
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return res.status(404).json({ error: 'Asset not found.' });
+    console.error('[Image Preview Error]', error);
+    return res.status(500).json({ error: error?.message || 'Failed to optimize image.' });
+  }
+});
+
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 const AGNES_POLL_INTERVAL_MS = 5_000;
@@ -1575,6 +1647,145 @@ ${topic}
   } catch (err: any) {
     console.error('[Script Generator Error]', err);
     res.status(500).json({ error: err.message || 'Failed to generate creative script.' });
+  }
+});
+
+// Regenerate only the storyboard script after the user confirms an edited story idea.
+// Existing media files remain on disk, but the new shots receive fresh ids so old
+// generation tasks cannot be mistaken for results of the confirmed narrative.
+const activeStoryboardRegenerations = new Set<string>();
+app.post('/api/generated-scripts/:id/regenerate-storyboard', async (req, res) => {
+  const projectId = String(req.params.id);
+  const narrativeInput = req.body?.narrative;
+  if (!narrativeInput || typeof narrativeInput !== 'object' || Array.isArray(narrativeInput)) {
+    return res.status(400).json({ error: 'narrative is required.' });
+  }
+
+  const narrative = {
+    structure: String(narrativeInput.structure || '').trim(),
+    rhythm: String(narrativeInput.rhythm || '').trim(),
+    climaxDesign: String(narrativeInput.climaxDesign || '').trim(),
+  };
+  if (!narrative.structure || !narrative.rhythm || !narrative.climaxDesign) {
+    return res.status(400).json({ error: 'Narrative structure, rhythm, and climaxDesign are all required.' });
+  }
+
+  if (activeStoryboardRegenerations.has(projectId)) {
+    return res.status(409).json({ error: 'Storyboard regeneration is already in progress for this project.' });
+  }
+  activeStoryboardRegenerations.add(projectId);
+
+  try {
+    const snapshot = readDb();
+    const script = snapshot.generated_scripts.find((item: any) => String(item.id) === projectId);
+    if (!script) return res.status(404).json({ error: 'Script not found.' });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY environment variable is not configured.' });
+
+    const characters = Array.isArray(script.newCharacters) ? script.newCharacters : [];
+    const previousShots = Array.isArray(script.newShots) ? script.newShots : [];
+    const shotCount = Math.max(1, Math.min(30, previousShots.length || 12));
+    const timingSkeleton = previousShots.map((shot: any, index: number) => ({
+      index: index + 1,
+      timestamp: shot.timestamp,
+      timeSeconds: shot.timeSeconds,
+      durationSec: shot.durationSec,
+      movement: shot.movement,
+    }));
+    const characterBrief = characters.map((character: any) => ({
+      id: character.id,
+      name: character.name,
+      role: character.role,
+      personality: character.personality,
+      clothing: character.clothing,
+    }));
+
+    const storyboardSchema = {
+      type: 'OBJECT',
+      properties: {
+        newShots: {
+          type: 'ARRAY',
+          minItems: shotCount,
+          maxItems: shotCount,
+          items: {
+            type: 'OBJECT',
+            properties: {
+              timestamp: { type: 'STRING' },
+              timeSeconds: { type: 'INTEGER' },
+              movement: { type: 'STRING' },
+              composition: { type: 'STRING' },
+              emotion: { type: 'STRING' },
+              description: { type: 'STRING' },
+              ...enrichmentProperties,
+            },
+            required: ['timestamp', 'timeSeconds', 'movement', 'composition', 'emotion', 'description', 'camera', 'framing', 'blocking', 'durationSec', 'provenance'],
+          },
+        },
+      },
+      required: ['newShots'],
+    };
+
+    const prompt = `You are a professional storyboard screenwriter and director.
+Generate exactly ${shotCount} storyboard shots from the CONFIRMED story idea below. The confirmed idea is the content authority; do not preserve story content from the previous shots.
+
+CONFIRMED STORY IDEA:
+${JSON.stringify(narrative, null, 2)}
+
+PROJECT TOPIC:
+${String(script.topic || '')}
+
+CHARACTERS (when blocking.characterId is used, copy the exact id):
+${JSON.stringify(characterBrief, null, 2)}
+
+TIMING AND CAMERA-RHYTHM SKELETON (reuse timing cadence where useful, not story content):
+${JSON.stringify(timingSkeleton, null, 2)}
+
+Requirements:
+- Return exactly ${shotCount} shots in chronological order.
+- Every description must directly realize the confirmed structure, rhythm, and climax design.
+- Keep character identity consistent and mention character names in descriptions when they appear.
+- Every shot must include camera, framing, blocking, durationSec, and provenance exactly "ai_optimized".
+- Return JSON only.`;
+
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: { responseMimeType: 'application/json', responseSchema: storyboardSchema },
+    });
+    const result = JSON.parse(response.text || '{}');
+    if (!Array.isArray(result.newShots) || result.newShots.length !== shotCount) {
+      throw new Error(`Gemini returned ${Array.isArray(result.newShots) ? result.newShots.length : 0} shots; expected ${shotCount}.`);
+    }
+    for (const shot of result.newShots) assertStoryboardEnrichment(shot, 'ai_optimized');
+
+    const regeneratedShots = result.newShots.map((shot: any) => ({
+      ...shot,
+      id: crypto.randomUUID(),
+      matchedCharacterIds: inferMatchedCharacterIds(shot.description, characters),
+      imageUrl: '',
+    }));
+
+    let updatedScript: any = null;
+    await mutateDb((db) => {
+      const index = db.generated_scripts.findIndex((item: any) => String(item.id) === projectId);
+      if (index < 0) return;
+      db.generated_scripts[index] = {
+        ...db.generated_scripts[index],
+        newNarrative: narrative,
+        newShots: regeneratedShots,
+        storyboardConfirmedAt: new Date().toISOString(),
+      };
+      updatedScript = db.generated_scripts[index];
+    });
+    if (!updatedScript) return res.status(404).json({ error: 'Script not found.' });
+    return res.json({ success: true, script: updatedScript });
+  } catch (error: any) {
+    console.error('[Storyboard Regeneration Error]', error);
+    return res.status(500).json({ error: error?.message || 'Failed to regenerate storyboard.' });
+  } finally {
+    activeStoryboardRegenerations.delete(projectId);
   }
 });
 

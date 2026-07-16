@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '../api';
 
 interface StyleContractFields {
   storyboardPresetId: string;
@@ -55,13 +56,13 @@ export default function StyleContractReadonly({ projectId }: { projectId: string
     setError('');
     setPresetWarning('');
     try {
-      const contractData = await readJson(await fetch(endpoint, { signal }));
+      const contractData = await readJson(await apiFetch(endpoint, { signal }));
       setContract(contractData.contract as StyleContractFields);
       setInitialized(Boolean(contractData.initialized));
       setVersion(Number(contractData.version || 0));
       setLocked(Boolean(contractData.locked));
       try {
-        const presetData = await readJson(await fetch('/api/comfyui/presets?purpose=storyboard', { signal }));
+        const presetData = await readJson(await apiFetch('/api/comfyui/presets?purpose=storyboard', { signal }));
         setPresets(Array.isArray(presetData.presets) ? presetData.presets : []);
       } catch (presetError) {
         if ((presetError as Error).name !== 'AbortError') setPresetWarning((presetError as Error).message);
