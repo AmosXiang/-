@@ -25,6 +25,7 @@ import {
   resolveEffectiveStyleContract,
 } from './server/modules/style-contract/index.ts';
 import { registerSceneReferenceModule, sceneForShot } from './server/modules/scene-reference/index.ts';
+import { registerVideoLabModule, type SubmitVideoTaskInput } from './server/modules/video-lab/index.ts';
 import { DEFAULT_COMFY_NEGATIVE_PROMPT } from './server/constants/comfyDefaults.ts';
 
 const require = createRequire(import.meta.url);
@@ -310,6 +311,14 @@ dbSqlite.exec(`
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_tasks_status_created ON video_tasks (status, created_at)`);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_tasks_shot_created ON video_tasks (shot_id, created_at)`);
 
+// Video Lab M1: 参数快照列（PRAGMA 守卫迁移，先例 comfyui_tasks.origin）。
+const videoTaskColumns = new Set(
+  (dbSqlite.prepare('PRAGMA table_info(video_tasks)').all() as Array<{ name: string }>).map(column => column.name)
+);
+if (!videoTaskColumns.has('generation_snapshot_json')) {
+  dbSqlite.exec('ALTER TABLE video_tasks ADD COLUMN generation_snapshot_json TEXT');
+}
+
 // Backward-compatible ComfyUI manual-import migration. Existing rows remain queue-originated.
 const comfyTaskColumns = new Set(
   (dbSqlite.prepare('PRAGMA table_info(comfyui_tasks)').all() as Array<{ name: string }>).map(column => column.name)
@@ -582,22 +591,23 @@ function enqueueVideoPoll(localTaskId: string) {
   void videoTaskQueue.add(() => executeVideoPoll(localTaskId));
 }
 
-app.post('/api/video-tasks', async (req, res) => {
+// Agnes 任务创建内核：INSERT → provider createTask → 回填 provider 字段 → 入轮询队列。
+// 供既有 POST /api/video-tasks 与 Video Lab 模块（经 submitVideoTask deps）双路复用；
+// 创建失败时任务行保留 failed 状态作审计，由 ok 标志区分。
+async function createAgnesVideoTask(input: {
+  shotId: string | null;
+  request: VideoTaskRequest;
+  generationSnapshotJson?: string | null;
+}): Promise<{ id: string; ok: boolean }> {
   const id = crypto.randomUUID();
-  let parsed: ReturnType<typeof validateVideoTaskBody>;
-  try {
-    parsed = validateVideoTaskBody(req.body);
-  } catch (error: any) {
-    return res.status(400).json({ error: String(error?.message || error) });
-  }
   const now = new Date().toISOString();
-  const request = parsed.request;
+  const request = input.request;
   dbSqlite.prepare(`
     INSERT INTO video_tasks (
       id, shot_id, provider, prompt, negative_prompt, seed, num_frames, frame_rate,
-      status, progress, created_at, updated_at
-    ) VALUES (?, ?, 'agnes', ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
-  `).run(id, parsed.shotId, request.prompt, request.negativePrompt || null, request.seed, request.numFrames, request.frameRate, now, now);
+      status, progress, generation_snapshot_json, created_at, updated_at
+    ) VALUES (?, ?, 'agnes', ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+  `).run(id, input.shotId, request.prompt, request.negativePrompt || null, request.seed, request.numFrames, request.frameRate, input.generationSnapshotJson ?? null, now, now);
 
   try {
     const provider = new AgnesVideoProvider(String(process.env.AGNES_API_KEY || ''));
@@ -620,15 +630,26 @@ app.post('/api/video-tasks', async (req, res) => {
       id,
     );
     enqueueVideoPoll(id);
-    return res.status(202).json(videoTaskRow(id));
+    return { id, ok: true };
   } catch (error: any) {
     const message = String(error?.message || error);
     const completedAt = new Date().toISOString();
     dbSqlite.prepare(`UPDATE video_tasks SET status = 'failed', error = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
       .run(message, completedAt, completedAt, id);
     console.error('[VideoProvider]', JSON.stringify({ timestamp: completedAt, provider: 'agnes', event: 'create_failed', local_task_id: id, status_code: error instanceof VideoProviderHttpError ? error.status : null, error: message, response: error instanceof VideoProviderHttpError ? error.responseBody : null }));
-    return res.status(502).json(videoTaskRow(id));
+    return { id, ok: false };
   }
+}
+
+app.post('/api/video-tasks', async (req, res) => {
+  let parsed: ReturnType<typeof validateVideoTaskBody>;
+  try {
+    parsed = validateVideoTaskBody(req.body);
+  } catch (error: any) {
+    return res.status(400).json({ error: String(error?.message || error) });
+  }
+  const { id, ok } = await createAgnesVideoTask({ shotId: parsed.shotId, request: parsed.request });
+  return res.status(ok ? 202 : 502).json(videoTaskRow(id));
 });
 
 app.get('/api/video-tasks', (_req, res) => {
@@ -7791,6 +7812,31 @@ registerExportDeckModule(app, dbSqlite, { uploadsDir: UPLOADS_DIR });
 registerStoryVersionModule(app, dbSqlite, { mutateDb });
 registerStyleContractModule(app, { readDb, mutateDb });
 registerSceneReferenceModule(app, { readDb, mutateDb, uploadsDir: UPLOADS_DIR });
+registerVideoLabModule(app, {
+  readDb,
+  isProviderConfigured: (providerId: string) =>
+    providerId === 'agnes' && Boolean(String(process.env.AGNES_API_KEY || '').trim()),
+  submitVideoTask: async (input: SubmitVideoTaskInput) => {
+    const { id, ok } = await createAgnesVideoTask({
+      shotId: input.shotId,
+      request: {
+        prompt: input.prompt,
+        negativePrompt: input.negativePrompt,
+        seed: input.seed,
+        width: 1152,
+        height: 768,
+        numFrames: input.numFrames,
+        frameRate: input.frameRate,
+      },
+      generationSnapshotJson: input.generationSnapshotJson,
+    });
+    if (!ok) {
+      const row = videoTaskRow(id);
+      throw new Error(String(row?.error || 'Agnes video task creation failed.'));
+    }
+    return { taskId: id };
+  },
+});
 
 // Keep unknown API routes machine-readable. This must precede the production
 // SPA fallback, otherwise an API typo receives index.html and breaks JSON parsing.

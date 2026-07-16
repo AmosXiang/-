@@ -46,6 +46,7 @@ import DeliveryPanel from "./components/DeliveryPanel";
 import StoryboardReview from "./components/StoryboardReview";
 import AnimaticPlayer from "./components/AnimaticPlayer";
 import { buildAnimaticPlaylist } from "./components/animaticPlaylist";
+import VideoLabPanel from "./components/VideoLabPanel";
 import { useHashRoute, navigateTo } from "./router";
 import { apiFetch } from "./api";
 import { DEFAULT_COMFY_NEGATIVE_PROMPT } from "../server/constants/comfyDefaults";
@@ -3770,6 +3771,9 @@ export default function App() {
   }, [generatedScript]);
   const handleAnimaticClose = React.useCallback(() => setShowAnimatic(false), []);
 
+  // Video Lab M1: 单镜头视频生成实验室(下游独立消费者,全屏覆层挂载)
+  const [showVideoLab, setShowVideoLab] = useState<boolean>(false);
+
   // 主区顶部功能导航:分析三 tab 页内切换(tab 记入 URL);创意生成已独立成 #/studio 路由
   const onStudioPage = activeTab === "generator";
   const mainTabsBar = (
@@ -5445,7 +5449,7 @@ export default function App() {
                         {/* Three-column layout */}
                         <div className="wizard-shot-grid border border-slate-800 rounded-2xl bg-slate-950/40 overflow-hidden mb-4">
                           {/* Column 1: Shot list sidebar */}
-                          <div className="wizard-shot-column border-r border-slate-800/80 bg-slate-900/40 p-3 overflow-y-auto custom-scrollbar flex flex-col gap-2">
+                          <div className="wizard-shot-column wizard-shot-list border-r border-slate-800/80 bg-slate-900/40 p-3 overflow-y-auto custom-scrollbar flex flex-col gap-2">
                             <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/60 pb-2 mb-1">
                               <span className="font-semibold text-slate-350">分镜列表</span>
                               <div className="flex items-center gap-1">
@@ -5523,7 +5527,7 @@ export default function App() {
                           </div>
 
                           {/* Column 2: Center Editor */}
-                          <div className="wizard-shot-column min-w-0 bg-slate-955/15 flex flex-col">
+                          <div className="wizard-shot-column wizard-shot-editor min-w-0 bg-slate-955/15 flex flex-col">
                             {/* Editor Tabs */}
                             <div className="maintabs bg-slate-900/40 border-b border-slate-800/80">
                               <button type="button" className={workspaceTab === 'script' ? 'on' : ''} onClick={() => setWorkspaceTab('script')}>剧本描述</button>
@@ -5672,7 +5676,7 @@ export default function App() {
                           </div>
 
                           {/* Column 3: Structured Inspector */}
-                          <div className="wizard-shot-column border-l border-slate-800 bg-slate-900/40 p-4 overflow-y-auto custom-scrollbar w-[280px] shrink-0">
+                          <div className="wizard-shot-column wizard-shot-context border-l border-slate-800 bg-slate-900/40 p-4 overflow-y-auto custom-scrollbar">
                             <div className="text-xs font-bold text-slate-450 border-b border-slate-800/60 pb-2 mb-3 font-mono">
                               检查器 / INSPECTOR
                             </div>
@@ -5905,6 +5909,14 @@ export default function App() {
                                 className="w-full py-2 bg-slate-850 hover:bg-slate-800 border border-slate-700/60 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
                               >
                                 ▶ 动态预览（Animatic）
+                              </button>
+                              {/* Video Lab M1: 单镜头视频生成 */}
+                              <button
+                                type="button"
+                                onClick={() => setShowVideoLab(true)}
+                                className="w-full py-2 bg-slate-850 hover:bg-slate-800 border border-slate-700/60 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
+                              >
+                                🎬 Video Lab（单镜头视频）
                               </button>
                               {/* Status Metrics */}
                               <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/80 space-y-3">
@@ -6264,6 +6276,24 @@ export default function App() {
           onShotChange={handleAnimaticShotChange}
           onClose={handleAnimaticClose}
         />
+      )}
+
+      {/* Video Lab M1: 单镜头视频生成实验室(全屏覆层) */}
+      {showVideoLab && generatedScript && (
+        <div className="fixed inset-0 z-[130] overflow-y-auto bg-slate-950/97 custom-scrollbar">
+          <div className="mx-auto max-w-4xl px-4 py-6">
+            <div className="mb-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowVideoLab(false)}
+                className="rounded-lg border border-slate-700 px-4 py-2 text-xs text-slate-300 hover:bg-slate-800"
+              >
+                关闭
+              </button>
+            </div>
+            <VideoLabPanel projectId={String(generatedScript.id)} shots={generatedScript.newShots} />
+          </div>
+        </div>
       )}
 
       {/* Main Footer */}
