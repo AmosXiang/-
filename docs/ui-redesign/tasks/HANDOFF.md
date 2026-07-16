@@ -46,6 +46,4 @@ WP-B(shot-review) · WP-C(export-deck) · WP-E(story-version) · WP-F(delivery-u
 ## 已知遗留（不阻断）
 
 - **游离分支/worktree**：`.pnpm-store/worktrees/style-contract-integration`（分支 `feat/style-contract-integration@f171884`）**未合入主线**，来源存疑、非本轮 CC 创建——清理前须先确认是否含未合并工作，**勿盲删**。另有 Agnes 相关分支（`codex/agnes-*`、`feat/video-retry-download`）与 `feat/ui-v2-integration`（批次1 旧集成分支，已合入可删）、`fix/fresh-db-import-sha256` 等，均非本轮范围。
-- **P3 级小项（cosmetic，随下次触碰对应文件顺手修）**：
-  1. export-deck `generateManifest` 的场景 `imageFile` 与 routes.ts 实际拷贝逻辑 + `sanitizeFilename` 是双副本，需人工同步（漂移即 manifest ≠ zip 实际）；
-  2. WP-P4 emoji 截断测试 fixture 名太短未真正触发截断路径（fix 本身正确）。
+- **P3 级小项两条已立项**：`tasks/antigravity-export-deck-followup.md`（基线 1c7d4ff，分支 feat/export-deck-followup）——①manifest/zip 场景文件名双副本收编进模块内 naming.ts 单一事实源 + 一致性回归用例；②emoji 截断 fixture 补真（原 fixture Array.from 计长仅约 9 < 阈值 14，截断分支从未执行）。全包限 export-deck 模块内部，与 wt-animatic 及主工作区未提交改动零交集，可并行。
