@@ -4,6 +4,7 @@ import path from 'node:path';
 import PptxGenJS from 'pptxgenjs';
 // @ts-ignore
 import JSZip from 'jszip';
+import { isReadableFile, getLocalPath, sanitizeFilename, sceneExportFile } from './naming.ts';
 
 const PptxGenConstructor = typeof PptxGenJS === 'function' ? PptxGenJS : (PptxGenJS as any).default;
 const JSZipConstructor = typeof JSZip === 'function' ? JSZip : (JSZip as any).default;
@@ -33,50 +34,6 @@ interface ShotExportData {
 }
 
 /**
- * Checks if a file exists, is actually a file, and has read permissions.
- */
-function isReadableFile(filePath: string): boolean {
-  try {
-    const stats = fs.statSync(filePath);
-    if (!stats.isFile()) return false;
-    fs.accessSync(filePath, fs.constants.R_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Resolves a URL of the format /uploads/... to a local absolute path,
- * checking that it lies within the uploadsDir to prevent directory traversal.
- */
-function getLocalPath(url: string | undefined | null, uploadsDir: string): string | null {
-  if (!url) return null;
-  const cleanUrl = url.startsWith('/') ? url.slice(1) : url;
-  if (!cleanUrl.startsWith('uploads/')) {
-    return null;
-  }
-  const relativePart = cleanUrl.slice('uploads/'.length);
-  const absoluteUploadsDir = path.resolve(uploadsDir);
-  const absolutePath = path.resolve(absoluteUploadsDir, relativePart);
-
-  // Prevent path traversal
-  const relative = path.relative(absoluteUploadsDir, absolutePath);
-  const isInside = relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-  if (!isInside) {
-    return null;
-  }
-  return absolutePath;
-}
-
-/**
- * Sanitizes folder and file names to prevent path traversal and bad characters.
- */
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^\p{L}\p{N}_\-]/gu, '_');
-}
-
-/**
  * Truncates text and appends "…（全文见 manifest）" if it exceeds maxLength.
  */
 function truncateText(text: string | undefined | null, maxLength: number): string {
@@ -89,7 +46,7 @@ function truncateText(text: string | undefined | null, maxLength: number): strin
  * Truncates role text and appends "..." if it exceeds maxLength.
  * Uses Array.from to prevent splitting surrogate pairs (emojis).
  */
-function truncateRole(text: string | undefined | null, maxLength: number): string {
+export function truncateRole(text: string | undefined | null, maxLength: number): string {
   if (!text) return '';
   const chars = Array.from(text);
   if (chars.length <= maxLength) return text;
@@ -802,15 +759,11 @@ export function generateManifest(
 
   if (hasScenes) {
     manifest.scenes = sceneReferences.map((scene: any, idx: number) => {
-      const localPath = scene.imageUrl ? getLocalPath(scene.imageUrl, uploadsDir) : null;
-      const hasLocal = localPath ? isReadableFile(localPath) : false;
-      const ext = localPath && hasLocal ? path.extname(localPath) || '.png' : '';
-      const twoDigitIdx = String(idx + 1).padStart(2, '0');
-      const sanitized = sanitizeFilename(scene.name || 'scene');
+      const { fileName } = sceneExportFile(scene, idx, uploadsDir);
       return {
         id: String(scene.id),
         name: scene.name || '',
-        imageFile: hasLocal ? `scenes/${twoDigitIdx}_${sanitized}${ext}` : null,
+        imageFile: fileName ? `scenes/${fileName}` : null,
         overlay: scene.overlay || null,
       };
     });

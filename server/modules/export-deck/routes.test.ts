@@ -8,6 +8,7 @@ import Database from 'better-sqlite3';
 // @ts-ignore
 import JSZip from 'jszip';
 import { registerExportDeckModule } from './routes.ts';
+import { truncateRole } from './generator.ts';
 
 const JSZipConstructor = typeof JSZip === 'function' ? JSZip : (JSZip as any).default;
 
@@ -365,7 +366,11 @@ test('Export Deck Module API and Generator Tests', async (t) => {
         {
           id: 'char-unicode',
           name: '角色梅_Mei', // Chinese + Japanese
-          role: '勇者🦸‍♂️👑主角', // Role with emojis (surrogate pairs)
+          // Role with emojis (surrogate pairs)
+          // Array.from length calculation:
+          // 'a' 'b' 'c' 'd' 'e' 'f' 'g' 'h' 'i' 'j' 'k' 'l' 'm' (13) + '🦸' (14) + ZWJ '\u200d' (15) + '♂' (16) + '\ufe0f' (17) + '👑' (18) = 18 code points.
+          // The 14th character boundary (at index 13) lands exactly on '🦸' (the first code point of the ZWJ sequence '🦸‍♂️').
+          role: 'abcdefghijklm🦸‍♂️👑',
           avatarUrl: '/uploads/avatars/mei.png',
           views: {
             front: '/uploads/views/mei_front.png',
@@ -380,6 +385,12 @@ test('Export Deck Module API and Generator Tests', async (t) => {
           name: 'Bad Actor',
           role: 'Traverser',
           avatarUrl: '/uploads/../secret_file.png', // path traversal attempt
+        },
+        {
+          id: 'char-short-role',
+          name: '短名角色',
+          role: '勇者🦸‍♂️👑主角', // Original role with emojis, Array.from length 9 <= 14, should not be truncated
+          avatarUrl: '/uploads/avatars/short.png',
         }
       ],
       newShots: [
@@ -457,6 +468,7 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     fs.mkdirSync(path.join(tempUploadsDir, 'scenes'), { recursive: true });
 
     fs.writeFileSync(path.join(tempUploadsDir, 'avatars', 'mei.png'), 'avatar-mei-content');
+    fs.writeFileSync(path.join(tempUploadsDir, 'avatars', 'short.png'), 'avatar-short-content');
     fs.writeFileSync(path.join(tempUploadsDir, 'views', 'mei_front.png'), 'front-mei-content');
     fs.writeFileSync(path.join(tempUploadsDir, 'fallback', 'mei_back.png'), 'back-mei-content');
     fs.writeFileSync(path.join(tempUploadsDir, 'shot-u1.png'), 'shot-u1-content');
@@ -537,8 +549,171 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     assert.equal(manifest.shots[0].sceneId, 'scene-1');
     assert.equal(manifest.shots[1].sceneId, 'scene-missing');
 
+    // 7. Role truncation assertions (direct test and pipeline fixture check)
+    // Direct truncateRole test for the long role containing ZWJ emojis on the boundary
+    const longRole = unicodeAndScenesScript.newCharacters[0].role;
+    const truncated = truncateRole(longRole, 14);
+    assert.ok(truncated.endsWith('…'), 'Truncated role should end with ellipsis');
+    assert.equal(Array.from(truncated).length, 15, 'Truncated length should be 15');
+    
+    const hasIsolatedHigh = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(truncated);
+    const hasIsolatedLow = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(truncated);
+    assert.ok(!hasIsolatedHigh, 'Should not contain isolated high surrogate');
+    assert.ok(!hasIsolatedLow, 'Should not contain isolated low surrogate');
+
+    // Direct truncateRole test for the short role that should remain unchanged
+    const shortRole = unicodeAndScenesScript.newCharacters[2].role;
+    const untruncated = truncateRole(shortRole, 14);
+    assert.equal(untruncated, shortRole, 'Short role should not be truncated');
+
     // Cleanup travel file
     fs.rmSync(secretPath, { force: true });
+  });
+
+  await t.test('5. Regression consistency test: manifest and zip scenes & characters alignment', async () => {
+    // Construct project with Chinese, emojis, special characters in scene and character names
+    const regressionScript = {
+      id: 'proj-regression',
+      newTitle: 'Regression Project',
+      topic: 'Consistency Testing',
+      templateTitle: 'Template',
+      newNarrative: {
+        structure: 'Structure',
+        rhythm: 'Rhythm',
+        climaxDesign: 'Climax',
+      },
+      newCharacters: [
+        {
+          id: 'char-reg-1',
+          name: '角色_🔥_Char', // Chinese + Emoji + special characters
+          role: 'Role A',
+          avatarUrl: '/uploads/avatars/char_reg_1.png',
+        }
+      ],
+      newShots: [
+        {
+          id: 'shot-reg-1',
+          timestamp: '00:00',
+          durationSec: 5,
+          description: 'Shot 1',
+          optimizedPrompt: 'Prompt 1',
+          camera: { move: 'pan', speed: 'medium', note: '' },
+          framing: { shotSize: 'medium', angle: 'front' },
+          cameraH: null,
+          cameraV: null,
+          cameraZoom: null,
+          derivedFromShotId: null,
+          isMaster: true,
+          finalTaskId: 'task-reg-1',
+          finalizedImageUrl: '/uploads/shot-reg-1.png',
+          isStale: false,
+          sceneId: 'scene-reg-1',
+        }
+      ],
+      sceneReferences: [
+        {
+          id: 'scene-reg-1',
+          name: '场景_🌟_Scene', // Chinese + Emoji + special characters
+          imageUrl: '/uploads/scenes/scene_reg_1.png',
+          overlay: 'Overlay text',
+          updatedAt: '2026-07-15T00:00:00Z',
+        },
+        {
+          id: 'scene-reg-2',
+          name: '无图场景_NoImage_🔥',
+          // imageUrl missing
+          overlay: 'Overlay 2',
+          updatedAt: '2026-07-15T00:00:00Z',
+        },
+        {
+          id: 'scene-reg-3',
+          name: '图不存在_NotExisting_✨',
+          imageUrl: '/uploads/scenes/non_existent_reg.png', // file is missing
+          overlay: 'Overlay 3',
+          updatedAt: '2026-07-15T00:00:00Z',
+        }
+      ]
+    };
+
+    // Update store with regression project
+    db.prepare("UPDATE store SET value = ? WHERE key = 'generated_scripts'").run(
+      JSON.stringify([mockScript, regressionScript])
+    );
+
+    // Create uploads folders & files
+    fs.mkdirSync(path.join(tempUploadsDir, 'avatars'), { recursive: true });
+    fs.mkdirSync(path.join(tempUploadsDir, 'scenes'), { recursive: true });
+
+    fs.writeFileSync(path.join(tempUploadsDir, 'avatars', 'char_reg_1.png'), 'char-avatar-content');
+    fs.writeFileSync(path.join(tempUploadsDir, 'shot-reg-1.png'), 'shot-1-content');
+    fs.writeFileSync(path.join(tempUploadsDir, 'scenes', 'scene_reg_1.png'), 'scene-1-content');
+
+    const req: any = {
+      params: { id: 'proj-regression' },
+      body: { mode: 'review' },
+    };
+    const res = makeMockRes();
+
+    const postHandler = routes['POST:/api/generated-scripts/:id/export-deck'];
+    await postHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    const data = res.body;
+    assert.ok(data.success);
+    assert.ok(data.exportDir);
+
+    // Verify files existence
+    const manifestPath = path.join(data.exportDir, 'storyboard-manifest.json');
+    assert.ok(fs.existsSync(manifestPath), 'manifest exists');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+    // Assert manifest scenes align with files in exportDir/scenes/
+    assert.ok(manifest.scenes, 'scenes field exists in manifest');
+    assert.equal(manifest.scenes.length, 3);
+
+    // scene-reg-1 has valid image
+    assert.equal(manifest.scenes[0].id, 'scene-reg-1');
+    assert.ok(manifest.scenes[0].imageFile, 'scene-reg-1 has image file');
+    const scene1FilePath = path.join(data.exportDir, manifest.scenes[0].imageFile);
+    assert.ok(fs.existsSync(scene1FilePath), 'scene-reg-1 image exists on disk');
+    assert.equal(fs.readFileSync(scene1FilePath, 'utf8'), 'scene-1-content');
+
+    // scene-reg-2 has no image URL
+    assert.equal(manifest.scenes[1].id, 'scene-reg-2');
+    assert.equal(manifest.scenes[1].imageFile, null, 'scene-reg-2 has null imageFile');
+
+    // scene-reg-3 has missing image file
+    assert.equal(manifest.scenes[2].id, 'scene-reg-3');
+    assert.equal(manifest.scenes[2].imageFile, null, 'scene-reg-3 has null imageFile');
+
+    // Check directory check - all files in exportDir/scenes/ must be in manifest.scenes[].imageFile
+    const scenesDir = path.join(data.exportDir, 'scenes');
+    if (fs.existsSync(scenesDir)) {
+      const filesInScenesDir = fs.readdirSync(scenesDir);
+      const manifestBasenames = manifest.scenes
+        .map((s: any) => s.imageFile ? path.basename(s.imageFile) : null)
+        .filter((name: string | null): name is string => name !== null);
+      
+      for (const file of filesInScenesDir) {
+        assert.ok(manifestBasenames.includes(file), `File ${file} in scenes/ must be declared in manifest`);
+      }
+      assert.equal(filesInScenesDir.length, manifestBasenames.length, 'Number of files in scenes/ matches manifest scenes imageFiles count');
+    }
+
+    // Character directory check: README and actual folder names must match the shared sanitizeFilename output
+    const charactersDir = path.join(data.exportDir, 'characters');
+    assert.ok(fs.existsSync(charactersDir), 'characters folder exists');
+    const charFolders = fs.readdirSync(charactersDir);
+    assert.equal(charFolders.length, 1);
+    
+    // Folder name should use sanitizeFilename
+    const expectedCharFolder = '01_角色___Char'; // sanitized name
+    assert.equal(charFolders[0], expectedCharFolder);
+
+    // Verify README logs the correct character status and name
+    const readmeContent = fs.readFileSync(path.join(data.exportDir, 'README.txt'), 'utf8');
+    assert.ok(readmeContent.includes('角色_🔥_Char'), 'README contains character name');
+    assert.ok(readmeContent.includes('avatar(exported)'), 'README contains avatar status');
   });
 
   // 3. Clean up temp files
