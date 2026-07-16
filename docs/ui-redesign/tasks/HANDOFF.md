@@ -38,7 +38,7 @@ WP-B(shot-review) · WP-C(export-deck) · WP-E(story-version) · WP-F(delivery-u
 
 ## 下一步候选（无强制排期，按需开工）
 
-- **Video Lab**（远期方向，裁决 #12）：读 `storyboard-manifest.json`（含 shots 的 camera/framing/durationSec/optimizedPrompt/sceneId、scenes 数组、角色资产），做独立视频生成实验室。既有 `/api/generate-video`、`/api/video-tasks` 后端保留可复用。需先出方案再立项。
+- **Video Lab**（裁决 #12）：**方案已定稿** → `docs/ui-redesign/video-lab-plan-2026-07-15.md`（v1.0，用户拍板 + CC review 合并）。WP-Animatic（交付域播放器）可立即立项；Video Lab 从 M1 起立项，无需再等。要点：三生成模式作 provider capability 静态声明、沿用 video_tasks 表（已核实追加式，多 Take 无需修复）+ Shot 仅增 finalVideoTaskId、四硬规则（画幅继承/定稿落盘校验/成本闸门/视频默认不进 ZIP）+ 禁止静默降级 + motionPrompt 独立。下一步 = CC 出 WP-Animatic 与 M1 任务书交 Codex。
 - **风格锚点 IPAdapter**（方案 §六.4，P3 时判为需 ComfyUI 工作流预设扩展而后置）：定稿首图作风格参考注入后续分镜。属"真开放注入"范畴，先确认 manifest/工作流映射能力再评估。
 - **场景参考增强**：现为轻量版（纯文本 overlay 注入，图不参与 conditioning）；若需要图像 conditioning 再扩。
 
