@@ -113,7 +113,7 @@ Props：`{ projectId: string; shots: Shot[] }`（挂载由 CC 接线；不写显
 
 ## 六、边界（违反即返工）
 
-- **禁碰 server.ts、App.tsx、router.ts、main.tsx、types.ts、其他 server/modules/**（style-contract 只读 import 纯函数例外）——server.ts 的 1 import + 1 register + `submitVideoTask` 提取 + `video_tasks.generation_snapshot_json` 列迁移（PRAGMA 守卫 ALTER，先例 comfyui_tasks.origin）全部由 CC 做；主工作区现有他人未提交的 server.ts/App.tsx 改动，你碰了必然冲突；
+- **禁碰 server.ts、App.tsx、router.ts、main.tsx、types.ts、其他 server/modules/**（style-contract 只读 import 纯函数例外）——server.ts 的 1 import + 1 register + `submitVideoTask` 提取 + `video_tasks.generation_snapshot_json` 列迁移（PRAGMA 守卫 ALTER，先例 comfyui_tasks.origin）全部由 CC 做；主工作区现有已知未提交改动（用户本人的进行中工作，涉及 server.ts/App.tsx），你碰了必然冲突；
 - 不建新表；不加 npm 依赖；正式 db.sqlite、uploads 正式目录、真实 provider 计费调用零发生（你的验收全走 stub）；
 - AnimaticPlayer/animaticPlaylist 只 import 不改；
 - 提交前缀 `feat(video-lab): ...`，不 push，完成通知 CC。
