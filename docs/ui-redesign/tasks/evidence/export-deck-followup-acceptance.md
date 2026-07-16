@@ -84,3 +84,12 @@ All tests in `server/modules/export-deck/` have been run and pass successfully. 
 ℹ todo 0
 ℹ duration_ms 484.4657
 ```
+
+---
+
+## 4. CC 复核记录（2026-07-16，review PASS）
+
+- 边界审计：单提交 `bdaaa3d` 基于 `1c7d4ff`，仅 4 模块文件 + 本证据文档，index.ts 对外导出面未动。
+- 逐行 diff：naming.ts 三函数为逐字迁移（CC 独立预比对 routes.ts:27-67 与 generator.ts:38-70 逐行等价后授权直并）；`sceneExportFile` 与原两段推导语义等价（不可读→null、ext 兜底 .png、两位序号补零）。
+- 自动化亲跑（非采信自报）：lint PASS、build PASS、`routes.test.ts` 6/6 PASS。
+- 真机 zip 核验（WP-J 同源管线）：隔离 harness 走真实 POST export-deck（:memory: db + mkdtemp uploads，含中文+emoji 场景/角色名）→ `storyboard-delivery.zip` 经 PowerShell `Expand-Archive`（.NET 解码=资源管理器同源）解包，`characters/01_梅_MeiFire/avatar.png`、`scenes/01_废弃实验室_Lab.png`、`finals/shot-01.png` 零乱码，与 manifest `imageFile` 及 README 声明一一对应；无图场景 imageFile=null 且无 stray 文件。
