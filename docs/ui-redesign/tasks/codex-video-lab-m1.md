@@ -4,11 +4,12 @@
 > 方案依据：`docs/ui-redesign/video-lab-plan-2026-07-15.md` §三/§五A/§六（本任务书与方案冲突时以方案为准）。
 > 分工：本包归你（coding+验证+提交）；CC 负责 server.ts 接线（deps 提取、迁移、register）、App.tsx 挂载、review、真机回归。
 > **前置（三项全满足才可分发，2026-07-16 用户核对确立）**：
-> ① WP-Animatic 已合入主线（结果预览复用其 AnimaticPlayer）；
-> ② 主工作区未提交改动（故事创意编辑/分镜重生成/图片加载优化/ComfyUI 打开下载导回等，6 文件约 576 行）已审查落定——否则 CC 无法安全执行 server.ts/App.tsx 接线；
-> ③ Agnes capability 契约已按代码可证事实修订（本版 v1.1 已完成，见 §二）。
-> 基线：以上全满足后的 `feature/camera-derive` HEAD（CC 分发时填写：`________`）。
-> 分支：`git worktree add -b feat/video-lab-m1 ../wt-video-lab-m1 <基线>`（强制独立 worktree）。
+> ① WP-Animatic 已合入主线（`3dc2777`，结果预览复用其 AnimaticPlayer）——**已满足✓**；
+> ② 主工作区改动已落定（`90f64fd` feat(studio)，用户真机复核 PASS，六文件入库、工作区干净）——**已满足✓**；
+> ③ Agnes capability 契约已按代码可证事实修订（v1.1，见 §二）——**已满足✓**。
+> 基线：`90f64fd`（CC 于 2026-07-16 核验：lint 净 + 模块测试 37/37 + playlist 7/7）。
+> 分发状态：**可立即分发**。
+> 分支：`git worktree add -b feat/video-lab-m1 ../wt-video-lab-m1 90f64fd`（强制独立 worktree）。
 
 ## 一、M1 范围拍板（用户定，越界即返工）
 
@@ -113,7 +114,7 @@ Props：`{ projectId: string; shots: Shot[] }`（挂载由 CC 接线；不写显
 
 ## 六、边界（违反即返工）
 
-- **禁碰 server.ts、App.tsx、router.ts、main.tsx、types.ts、其他 server/modules/**（style-contract 只读 import 纯函数例外）——server.ts 的 1 import + 1 register + `submitVideoTask` 提取 + `video_tasks.generation_snapshot_json` 列迁移（PRAGMA 守卫 ALTER，先例 comfyui_tasks.origin）全部由 CC 做；主工作区现有已知未提交改动（用户本人的进行中工作，涉及 server.ts/App.tsx），你碰了必然冲突；
+- **禁碰 server.ts、App.tsx、router.ts、main.tsx、types.ts、其他 server/modules/**（style-contract 只读 import 纯函数例外）——server.ts 的 1 import + 1 register + `submitVideoTask` 提取 + `video_tasks.generation_snapshot_json` 列迁移（PRAGMA 守卫 ALTER，先例 comfyui_tasks.origin）全部由 CC 做；server.ts/App.tsx 是 CC 接线领地，你在 worktree 里改动它们必然与 CC 接线冲突；
 - 不建新表；不加 npm 依赖；正式 db.sqlite、uploads 正式目录、真实 provider 计费调用零发生（你的验收全走 stub）；
 - AnimaticPlayer/animaticPlaylist 只 import 不改；
 - 提交前缀 `feat(video-lab): ...`，不 push，完成通知 CC。
