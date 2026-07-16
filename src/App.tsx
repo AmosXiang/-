@@ -1095,7 +1095,13 @@ export default function App() {
   useEffect(() => {
     const prevTasks = prevComfyTasksRef.current;
     const currentTasks = comfyTasks;
+    prevComfyTasksRef.current = currentTasks;
     let shouldReloadScript = false;
+
+    // 首轮轮询只建立基线：历史 succeeded 任务不算"刚完成"。此前 baseline 从不回写，
+    // 任何历史成功任务都会在每个轮询周期触发 refresh → setGeneratedScript(新引用) →
+    // 轮询 effect 重启 → 立即再轮询，形成失控请求循环（分钟级上万请求耗尽浏览器资源）。
+    if (prevTasks.length === 0) return;
 
     for (const task of currentTasks) {
       const prevTask = prevTasks.find(t => t.id === task.id);
