@@ -95,3 +95,12 @@ PASS
 - 未新增 npm 依赖，未修改锁文件。
 - 未读写正式 `db.sqlite`，未创建或修改 `uploads/` 内容。
 - 最终新增文件仅为任务书允许的两个源文件、playlist 测试、验收文档与四张截图。
+
+---
+
+## CC 复核记录（2026-07-16，review PASS，合入 3dc2777）
+
+- 边界审计：单提交 `dc98b1c` 基于 `226ec80`，仅白名单文件（2 源 + 1 测试 + 证据 + 4 截图），main.tsx 零差异确认。
+- 自动化亲跑：lint PASS、build PASS、playlist 测试 7/7 PASS。
+- 真机复核（CC 临时 demo 挂载 main.tsx，验后已还原）：自动推进两轮全片完播（2+4+3+2=11s）；末镜自动停播且 elapsed=duration；末镜点播放回镜头 1 重播；播放 800ms 计时 0.8s；暂停冻结（1s 后 elapsed 不变，pauseFrozen=true）；分段跳转即达且保持暂停态；上一镜首镜禁用、下一镜/上一镜边界正确；占位卡 "SHOT 04/无定稿图" 正常计时；图片分支渲染；onShotChange 逐镜单次触发；Escape 触发 onClose。
+- 澄清两则：console 中每条日志出现两次为浏览器工具复读伪影（单条 probe 亦显示两条），非组件双触发；早期日志的"回跳"序列为两次页面加载叠加，非播放回退。
