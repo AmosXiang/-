@@ -38,7 +38,7 @@ WP-B(shot-review) · WP-C(export-deck) · WP-E(story-version) · WP-F(delivery-u
 
 ## 下一步候选（无强制排期，按需开工）
 
-- **Video Lab**（裁决 #12）：**方案已定稿** → `docs/ui-redesign/video-lab-plan-2026-07-15.md`（v1.0，用户拍板 + CC review 合并）。WP-Animatic（交付域播放器）可立即立项；Video Lab 从 M1 起立项，无需再等。要点：三生成模式作 provider capability 静态声明、沿用 video_tasks 表（已核实追加式，多 Take 无需修复）+ Shot 仅增 finalVideoTaskId、四硬规则（画幅继承/定稿落盘校验/成本闸门/视频默认不进 ZIP）+ 禁止静默降级 + motionPrompt 独立。下一步 = CC 出 WP-Animatic 与 M1 任务书交 Codex。
+- **Video Lab**（裁决 #12）：**方案已定稿** → `docs/ui-redesign/video-lab-plan-2026-07-15.md`（v1.0，用户拍板 + CC review 合并）。WP-Animatic（交付域播放器）可立即立项；Video Lab 从 M1 起立项，无需再等。要点：三生成模式作 provider capability 静态声明、沿用 video_tasks 表（已核实追加式，多 Take 无需修复）+ Shot 仅增 finalVideoTaskId、四硬规则（画幅继承/定稿落盘校验/成本闸门/视频默认不进 ZIP）+ 禁止静默降级 + motionPrompt 独立。**两份任务书已出**（用户拍板拆分，不合并）：`tasks/codex-wp-animatic.md`（纯前端组件，基线 226ec80，可立即分发）、`tasks/codex-video-lab-m1.md`（前置=Animatic 合入，基线待填）。M1 的 server.ts 接线（submitVideoTask 提取+快照列迁移+register）归 CC。**注意**：主工作区有他人未提交的 server.ts/App.tsx/index.css 改动（regenerate-storyboard 半成品，约 345 行，非 CC 工作），两任务书已把这些文件划为 Codex 禁碰；CC 的 App.tsx 接线也应等该改动落定。
 - **风格锚点 IPAdapter**（方案 §六.4，P3 时判为需 ComfyUI 工作流预设扩展而后置）：定稿首图作风格参考注入后续分镜。属"真开放注入"范畴，先确认 manifest/工作流映射能力再评估。
 - **场景参考增强**：现为轻量版（纯文本 overlay 注入，图不参与 conditioning）；若需要图像 conditioning 再扩。
 
