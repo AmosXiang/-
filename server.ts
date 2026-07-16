@@ -17,6 +17,7 @@ import { registerCameraDeriveModule, cameraDeriveTaskNodeMappings, CAMERA_DERIVE
 import { registerShotReviewModule } from './server/modules/shot-review/index.ts';
 import { detectComfyProcesses, getPort8001OwnerPids as port8001OwnerPids } from './comfyui-health.ts';
 import { registerExportDeckModule } from './server/modules/export-deck/index.ts';
+import { getLocalPath, isReadableFile } from './server/modules/export-deck/naming.ts';
 import { registerStoryVersionModule } from './server/modules/story-version/index.ts';
 import {
   isStyleContractInitialized,
@@ -7835,6 +7836,16 @@ registerVideoLabModule(app, {
       throw new Error(String(row?.error || 'Agnes video task creation failed.'));
     }
     return { taskId: id };
+  },
+  mutateDb,
+  listVideoTasksByShot: (shotId: string) =>
+    dbSqlite
+      .prepare('SELECT * FROM video_tasks WHERE shot_id = ? ORDER BY created_at DESC')
+      .all(shotId) as any[],
+  getVideoTask: (taskId: string) => videoTaskRow(taskId) as any,
+  isLocalVideoReadable: (localPath: string) => {
+    const absolutePath = getLocalPath(localPath, UPLOADS_DIR);
+    return absolutePath ? isReadableFile(absolutePath) : false;
   },
 });
 

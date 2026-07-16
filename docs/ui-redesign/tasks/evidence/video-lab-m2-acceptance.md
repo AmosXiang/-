@@ -103,3 +103,38 @@ npm run build
 3. 核对定稿实物时，输出尺寸只信 ffprobe/实物，不信 provider `normalized_size`。实际时长回填 `normalized_seconds` 已按任务书顺延 M3，本面板当前显示 M1 请求快照时长。
 
 真 Agnes 与接线后浏览器链路：**UNVERIFIED（按分工留给 CC）**。
+
+---
+
+## 6. CC 接线与真机验证增补（2026-07-16，CC 执行）
+
+### 6.1 接线
+
+- 合并 `feat/video-lab-m2` → `feature/camera-derive`（干净合并，用户 `src/index.css` 未提交改动保持原样）。
+- `server.ts` 注入四个 deps：
+  - `mutateDb`：复用既有写队列版本；
+  - `listVideoTasksByShot`：`SELECT * FROM video_tasks WHERE shot_id = ? ORDER BY created_at DESC`；
+  - `getVideoTask`：复用既有 `videoTaskRow`；
+  - `isLocalVideoReadable`：复用 export-deck `naming.ts` 的 `getLocalPath`（含路径穿越防护）+ `isReadableFile`，语义与 getLocalPath 完全同源（直接 import，非复制）。
+- 接线后：`npm run lint` PASS；全模块测试 **54/54 PASS**（含 Video Lab 17/17）。
+
+### 6.2 真机全链路（真实 Agnes，项目 1783192733645《孤岛豪宅谋杀案》）
+
+1. **成本闸门（硬规则 C）**：选 2 镜 → 确认层三数字分开显示：镜头数量 2 / 预计生成任务 2 / 总输出时长 6 秒（精确）/ 估算运行时间 140 秒（2×70）/ Provider Agnes Video v2.0 / 费用=Provider 实际计费。
+2. **409 画幅层**：项目 1:1 vs Agnes 3:2 → 三选层（更换模型置灰/裁切/留边）→ 选裁切后重提成功，快照 `aspect.adaptMode="crop"`、`source="user_adaptation"`。
+3. **部分失败真机复现**：Agnes 实际限流「1 请求/分钟」，串行第二镜被拒 → HTTP 201，UI 明细「已提交 1（shotId→taskId）/ 提交失败 1（附完整限流错误）」，failed 任务行保留审计（fc2113ca）。第一镜不受影响完成。1 分钟后单选 #2 重批（再次走成本闸门+画幅层）成功。
+4. **Take 列表**：#1 两条 completed Take（M1 的 af994104 + 批量的 6a6ed127，倒序、seed/时间/时长齐全）；#2 列表含失败 Take（红标限流错误、无定稿按钮）+ completed Take（0eccb50d）。
+5. **并排对比**：#1 勾选 2 个已落盘 Take → 两个独立原生 `<video muted loop controls>` 并排，src 分别指向两条 local_path，无 AnimaticPlayer 复用。
+6. **定稿**：#1 定稿 6a6ed127、#2 定稿 0eccb50d → ★ 当前定稿徽标 + 「取消当前定稿」按钮出现，另一 Take 保留「设为定稿」可换选；批量镜头列表同步显示「#1 ★ 已定稿」且默认勾选数 74→73（排除已定稿）。
+7. **落库核验**（store JSON + video_tasks 直查）：
+   - `shot#1 6d0bdf3a → finalVideoTaskId 6a6ed127`；`shot#2 a9b34783 → finalVideoTaskId 0eccb50d`；
+   - 两条任务快照 seed 与行 seed 逐一一致且互不相同（8234022103841080 / 6959500733383248）；
+   - local_path 文件均存在可读（453789 / 116673 字节）。
+8. **备忘①复验（实物 ffprobe）**：两条定稿视频实际均为 **1088x832 @ 24fps、81 帧、3.375s**，provider `normalized_size=1152x768` 再次与实物不符——输出尺寸只信 ffprobe/实物的裁决在 M2 继续成立。`normalized_seconds=3.4` 亦为 provider 口径（实测 3.375）。
+
+### 6.3 真机新发现（与 M2 代码无关，已另行立项/记录）
+
+- **前端失控轮询**：App 对 `/api/generated-scripts`、`/api/comfyui/tasks` 高频轮询，几分钟 1.4 万+ 请求触发 `net::ERR_INSUFFICIENT_RESOURCES`，页面 fetch/媒体加载被饿死（Video Lab 面板首次打开卡「正在加载」、并排视频 readyState 停 0 均由此引起；服务端对同 URL HEAD 200 正常）。已开独立修复任务。
+- **Agnes 限流 1 req/min**：批量串行提交 >1 镜必然部分失败，M2 行为正确（失败保留审计、不阻断），但 M3 可考虑批内节流/重试间隔。
+
+结论：M2 真机链路 **PASS**（浏览器视频渲染受上述既有轮询 bug 干扰，服务侧与数据侧证据完整）。
