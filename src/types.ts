@@ -12,6 +12,7 @@ export interface Shot {
   style?: string;
   videoUrl?: string;
   videoTaskId?: string;
+  finalVideoTaskId?: string;
   videoStatus?: 'submitted' | 'processing' | 'succeed' | 'failed';
   characterIds?: string[];
   characterNames?: string[];
