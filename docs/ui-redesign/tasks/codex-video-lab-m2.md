@@ -1,15 +1,15 @@
 # 任务书（Codex）：Video Lab M2 多 Take · 定稿 · 批量生成
 
 > 全文直接粘贴给 Codex。上下文自包含。
-> 方案依据：`docs/ui-redesign/video-lab-plan-2026-07-15.md` §四/§五B/§五C + M1 验收证据 §7 的两条 M2 备忘（`evidence/video-lab-m1-acceptance.md`）。
+> 方案依据：`docs/ui-redesign/video-lab-plan-2026-07-15.md` §四/§五B/§五C。M1 验收证据 §7 备忘①（provider 输出维度只信实物）本包适用；备忘②（durationSec 回填 normalized_seconds）随混播砍除顺延至 M3 交付时消化。
 > 分工：本包归你（coding+验证+提交）；CC 负责 server.ts deps 回调实现、App.tsx 接线（Animatic 混播）、review、真机回归。
 > 基线 `feature/camera-derive@f801086`。分支：`git worktree add -b feat/video-lab-m2 ../wt-video-lab-m2 f801086`（强制独立 worktree）。
 > 主工作区有用户未提交的 index.css 改动——你禁碰 index.css（本包也不需要）。
 
 ## 一、M2 范围拍板（用户定，越界即返工）
 
-**做**：按 shot 查询 Take 列表、Take 并排预览、`finalVideoTaskId` 定稿（硬规则 B）、批量生成 + 成本闸门（硬规则 C）、Animatic 混播数据面（playlist 升级 + final-videos 端点）。
-**不做（留 M3）**：视频进交付包/ZIP/manifest 视频引用、导出时二次校验、下载失败重试 UI（download_error 的 take 显示错误且不可定稿即可）、Take 删除清理。
+**做**：按 shot 查询 Take 列表、Take 并排预览、`finalVideoTaskId` 定稿（硬规则 B）、批量生成 + 成本闸门（硬规则 C）。
+**不做**：**Animatic 混播定稿视频（用户裁决砍掉：无必要；final-videos 端点与 playlist 升级一并不做，AnimaticPlayer 的 videoUrl 分支保持休眠）**；留 M3 = 视频进交付包/ZIP/manifest 视频引用、导出时二次校验、下载失败重试 UI（download_error 的 take 显示错误且不可定稿即可）、Take 删除清理。
 
 ## 二、数据契约（形状锁定）
 
@@ -42,11 +42,7 @@ type VideoLabDeps = {
    **硬规则 B 全量前置（方案 §五B，缺一即 422 + code）**：task 存在（`TAKE_NOT_FOUND`）、`task.shot_id === shotId`（`TAKE_SHOT_MISMATCH`）、`status === 'completed'`（`TAKE_NOT_COMPLETED`）、`local_path` 非空（`TAKE_NOT_DOWNLOADED`，download_error 非空时附带其内容）、`isLocalVideoReadable(local_path)` 为真（`TAKE_FILE_MISSING`）。
    全过 → mutateDb 写 `shot.finalVideoTaskId`；`taskId: null` → delete 该字段（干净删除，先例 WP-I untag）。返回更新后 shot。
    **临时远程 video_url 永远不能作为定稿依据**（Agnes URL 有时效）。
-3. `GET /api/video-lab/final-videos?projectId=` → `{ finalVideos: Record<shotId, { videoUrl, durationSec, taskId }> }`
-   遍历项目 shots 的 finalVideoTaskId：task 满足硬规则 B → 收录，`videoUrl = local_path`；
-   **durationSec 回填顺序（M1 备忘②）**：`normalized_seconds` 有值用之，否则 `num_frames / frame_rate`，禁止用请求时的 durationSec；
-   指针悬空/文件丢失 → **静默跳过该 shot 并在响应附 `degraded: [{shotId, reason}]`**（不 500——animatic 回退图片是正确行为）。
-4. `POST /api/video-lab/batch-shot-tasks` body：
+3. `POST /api/video-lab/batch-shot-tasks` body：
    `{ projectId, shotIds: string[], provider, durationSec, fps, resolution, motionStrength, negativePrompt?, aspectDecision?, confirmed: boolean }`
    - `confirmed !== true` → 422 `BATCH_NOT_CONFIRMED`，**零任务写入**（P3 generate-all 服务端闸门先例）；
    - shotIds 非空、去重、上限 100（`BATCH_TOO_LARGE`）、每个都须在项目中（404 附缺失列表）；
@@ -71,33 +67,23 @@ type VideoLabDeps = {
    确认 → `confirmed: true` 提交；409 画幅复用 M1 三选层；结果区列 submitted/failed 明细，逐条可跳转到对应镜头的 Take 列表。
 5. 无 M3 功能入口（导出/打包/重试下载）。
 
-## 六、Animatic 混播数据面
-
-1. `src/components/animaticPlaylist.ts`：`buildAnimaticPlaylist(shots, finalVideos?)` 增加可选第二参
-   `finalVideos?: Record<string, { videoUrl: string; durationSec: number; taskId: string }>`：
-   命中 shotId → item 填 `videoUrl` + `finalVideoTaskId`，**durationSec 用 finalVideos 的值覆盖 shot.durationSec**（M1 备忘②：视频实际时长优先，防兜底提前切镜）；未命中 → 行为与现状完全一致；**legacy `shot.videoUrl` 依旧拒传**。
-2. AnimaticPlayer 组件不改（混播分支 M0 已就绪）；App.tsx 接线（fetch final-videos + 传参）归 CC。
-
-## 七、测试与验收
+## 六、测试与验收
 
 - 模块测试（deps 全 stub）：
   - Take 列表：排序、项目/shot 404；
   - 定稿硬规则 B 矩阵：五个 code 逐一触发 + 成功写指针 + null 取消删字段 + mutateDb 未被调用于任何 422 路径；
-  - final-videos：normalized_seconds 优先、num_frames/frame_rate 回退、悬空指针进 degraded 不进 finalVideos、硬规则 B 复查；
-  - 批量：confirmed 闸门零调用 submitVideoTask、上限/缺 shot/缺 prompt 源整批拒绝、409 画幅、部分失败继续且返回明细、每条快照独立 seed；
-  - playlist：finalVideos 命中/未命中/durationSec 覆盖/legacy videoUrl 仍拒传。
+  - 批量：confirmed 闸门零调用 submitVideoTask、上限/缺 shot/缺 prompt 源整批拒绝、409 画幅、部分失败继续且返回明细、每条快照独立 seed。
 - `npm run lint` + `npm run build` + 全模块测试全过（46/46 + 新增）。
-- 真机（CC 执行）：真实 Agnes 批量 2 镜（含成本闸门确认）→ Take 列表 → 定稿 → Animatic 混播（定稿镜头播视频、其余播图）→ 快照与指针落库核对。
+- 真机（CC 执行）：真实 Agnes 批量 2 镜（含成本闸门确认）→ Take 列表 → 并排预览 → 定稿 → 快照与指针落库核对。
 - 证据：`docs/ui-redesign/tasks/evidence/video-lab-m2-acceptance.md`（含定稿 422 矩阵的逐 code 复现记录）。
 
-## 八、边界（违反即返工）
+## 七、边界（违反即返工）
 
-- **允许改动**：`server/modules/video-lab/**`、`src/components/VideoLabPanel.tsx`、`src/components/animaticPlaylist.ts` 及其测试、`src/types.ts` 仅追加 `finalVideoTaskId?` 一行、证据文档——此外零改动；
-- **禁碰**：server.ts、App.tsx、index.css、router.ts、main.tsx、AnimaticPlayer.tsx、其他 server/modules/（style-contract 只读 import 例外）——CC deps 回调与 App 接线等你交付后统一做；
+- **允许改动**：`server/modules/video-lab/**` 及其测试、`src/components/VideoLabPanel.tsx`、`src/types.ts` 仅追加 `finalVideoTaskId?` 一行、证据文档——此外零改动；
+- **禁碰**：server.ts、App.tsx、index.css、router.ts、main.tsx、AnimaticPlayer.tsx、animaticPlaylist.ts、其他 server/modules/（style-contract 只读 import 例外）——CC deps 回调等你交付后统一做；
 - 不建表、不改 video_tasks schema、不加 npm 依赖；正式 db/uploads 零污染、真实 provider 计费调用零发生（验收全 stub）；
-- animaticPlaylist 升级必须向后兼容（单参调用行为不变——现有 7 测试原样通过）；
 - 提交前缀 `feat(video-lab): ...`，不 push，完成通知 CC。
 
-## 九、CC 接线备忘（非 Codex 范围）
+## 八、CC 接线备忘（非 Codex 范围）
 
-server.ts：register deps 增四项实现（mutateDb 复用既有、listVideoTasksByShot=prepared 查询、getVideoTask=videoTaskRow、isLocalVideoReadable=UPLOADS_DIR 解析+存在可读校验，注意路径穿越防护对齐 export-deck getLocalPath 语义）；App.tsx：交付步 Animatic 打开前 fetch final-videos 传入 buildAnimaticPlaylist（items 仍走 useMemo 稳定化）。真机回归含：M1 单镜头路径不回归、直调 POST /api/video-tasks 不回归。
+server.ts：register deps 增四项实现（mutateDb 复用既有、listVideoTasksByShot=prepared 查询、getVideoTask=videoTaskRow、isLocalVideoReadable=UPLOADS_DIR 解析+存在可读校验，注意路径穿越防护对齐 export-deck getLocalPath 语义）。真机回归含：M1 单镜头路径不回归、直调 POST /api/video-tasks 不回归。
