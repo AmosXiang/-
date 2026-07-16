@@ -44,6 +44,8 @@ import StyleContractReadonly from "./components/StyleContractReadonly";
 import SceneReferencePanel from "./components/SceneReferencePanel";
 import DeliveryPanel from "./components/DeliveryPanel";
 import StoryboardReview from "./components/StoryboardReview";
+import AnimaticPlayer from "./components/AnimaticPlayer";
+import { buildAnimaticPlaylist } from "./components/animaticPlaylist";
 import { useHashRoute, navigateTo } from "./router";
 import { apiFetch } from "./api";
 import { DEFAULT_COMFY_NEGATIVE_PROMPT } from "../server/constants/comfyDefaults";
@@ -3753,6 +3755,21 @@ export default function App() {
   // P2b: 工具内 HTML 审阅预览(打印即 PDF)
   const [showReviewPreview, setShowReviewPreview] = useState<boolean>(false);
 
+  // WP-Animatic: 分镜动态预览播放器(定稿图/durationSec 顺播,后续 Video Lab 混播视频)。
+  // items 与回调必须引用稳定:App 存在高频重渲染源(FPS 指标/任务轮询),
+  // 内联传参会令播放器计时 effect 反复重建、interval 活不到首个 tick。
+  const [showAnimatic, setShowAnimatic] = useState<boolean>(false);
+  const animaticItems = React.useMemo(
+    () => (generatedScript ? buildAnimaticPlaylist(generatedScript.newShots) : []),
+    [generatedScript]
+  );
+  const handleAnimaticShotChange = React.useCallback((shotId: string) => {
+    if (!generatedScript) return;
+    const idx = generatedScript.newShots.findIndex((s: Shot) => String(s.id) === String(shotId));
+    if (idx >= 0) setSelectedShotIndex(idx);
+  }, [generatedScript]);
+  const handleAnimaticClose = React.useCallback(() => setShowAnimatic(false), []);
+
   // 主区顶部功能导航:分析三 tab 页内切换(tab 记入 URL);创意生成已独立成 #/studio 路由
   const onStudioPage = activeTab === "generator";
   const mainTabsBar = (
@@ -5881,6 +5898,14 @@ export default function App() {
                               >
                                 👁 审阅预览（打印即 PDF）
                               </button>
+                              {/* WP-Animatic: 定稿图按 durationSec 顺播的全片节奏预览 */}
+                              <button
+                                type="button"
+                                onClick={() => setShowAnimatic(true)}
+                                className="w-full py-2 bg-slate-850 hover:bg-slate-800 border border-slate-700/60 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
+                              >
+                                ▶ 动态预览（Animatic）
+                              </button>
                               {/* Status Metrics */}
                               <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/80 space-y-3">
                                 <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">幕后渲染进度与状态</h5>
@@ -6230,6 +6255,15 @@ export default function App() {
         <div className="fixed inset-0 z-[400] bg-slate-950 overflow-y-auto custom-scrollbar">
           <StoryboardReview script={generatedScript} onClose={() => setShowReviewPreview(false)} />
         </div>
+      )}
+
+      {/* WP-Animatic: 分镜动态预览(全屏,组件自带遮罩) */}
+      {showAnimatic && generatedScript && (
+        <AnimaticPlayer
+          items={animaticItems}
+          onShotChange={handleAnimaticShotChange}
+          onClose={handleAnimaticClose}
+        />
       )}
 
       {/* Main Footer */}

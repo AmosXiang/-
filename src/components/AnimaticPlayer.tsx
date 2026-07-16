@@ -20,7 +20,14 @@ export default function AnimaticPlayer({
   onClose,
 }: AnimaticPlayerProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [elapsedSec, setElapsedSec] = useState(0);
+  // elapsedSec 同时维护 state(驱动 UI)与 ref(计时锚点读数):
+  // 计时 effect 的锚点必须从 ref 取,才能在依赖收窄后不受宿主重渲染影响。
+  const [elapsedSec, setElapsedSecState] = useState(0);
+  const elapsedSecRef = useRef(0);
+  const setElapsedSec = useCallback((value: number) => {
+    elapsedSecRef.current = value;
+    setElapsedSecState(value);
+  }, []);
   const [isPlaying, setIsPlaying] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
   const currentItem = items[currentIndex];
@@ -81,23 +88,30 @@ export default function AnimaticPlayer({
     }
   }, [currentIndex, currentItem?.videoUrl, isPlaying]);
 
+  // advance 经 ref 转发,使计时 effect 无需依赖回调引用。
+  const advanceRef = useRef(advance);
   useEffect(() => {
-    if (!isPlaying || !currentItem) return;
-    const startedAt = performance.now() - elapsedSec * 1000;
+    advanceRef.current = advance;
+  }, [advance]);
+
+  const currentDurationSec = currentItem?.durationSec;
+  useEffect(() => {
+    if (!isPlaying || currentDurationSec === undefined) return;
+    const startedAt = performance.now() - elapsedSecRef.current * 1000;
     const intervalId = window.setInterval(() => {
       const nextElapsed = (performance.now() - startedAt) / 1000;
-      if (nextElapsed >= currentItem.durationSec) {
+      if (nextElapsed >= currentDurationSec) {
         window.clearInterval(intervalId);
-        advance();
+        advanceRef.current();
       } else {
         setElapsedSec(nextElapsed);
       }
     }, 100);
     return () => window.clearInterval(intervalId);
-    // elapsedSec is deliberately captured only when playback starts or the shot changes.
-    // Including it would recreate the interval on every tick and introduce drift.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [advance, currentIndex, currentItem, isPlaying]);
+    // 依赖必须全部是原始值:宿主(App)存在高频重渲染,若依赖对象/回调引用,
+    // effect 会随宿主每帧重建并重置计时锚点(实测 74 镜工作台下 interval 每 ~90ms
+    // 被重建一次、播放计时慢约 25%)。锚点从 elapsedSecRef 读取以保证续播连续。
+  }, [currentIndex, currentDurationSec, isPlaying, setElapsedSec]);
 
   const togglePlayback = () => {
     if (!currentItem) return;
@@ -149,7 +163,7 @@ export default function AnimaticPlayer({
             onEnded={advance}
             onTimeUpdate={event => {
               const mediaElapsed = Math.min(event.currentTarget.currentTime, currentItem.durationSec);
-              setElapsedSec(current => Math.max(current, mediaElapsed));
+              if (mediaElapsed > elapsedSecRef.current) setElapsedSec(mediaElapsed);
             }}
           />
         ) : currentItem.imageUrl ? (
