@@ -264,9 +264,14 @@ function StoryboardInspector({ shot, characters, provider, onProviderChange, onC
   const [saveError, setSaveError] = useState('');
   const [preview, setPreview] = useState<{ prompt: string; deliveryNotes: string[] } | null>(null);
   const [previewError, setPreviewError] = useState('');
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [initializeError, setInitializeError] = useState('');
 
   const maxDuration = provider === 'seedance' ? 12 : 10;
-  const isEnriched = Boolean(shot.camera && shot.framing && shot.blocking && shot.durationSec && shot.provenance);
+  // Read readiness from the same local snapshot that is rendered below. After initialization,
+  // the parent shot updates one render before the syncing effect updates localShot; mixing the
+  // two snapshots made the form dereference localShot.camera while it was still undefined.
+  const isEnriched = Boolean(localShot.camera && localShot.framing && localShot.blocking && localShot.durationSec && localShot.provenance);
 
   const saveTimeoutRef = useRef<number | null>(null);
 
@@ -276,6 +281,8 @@ function StoryboardInspector({ shot, characters, provider, onProviderChange, onC
     setIsDirty(false);
     setSaveError('');
     setIsSaving(false);
+    setInitializeError('');
+    setIsInitializing(false);
     if (saveTimeoutRef.current) {
       window.clearTimeout(saveTimeoutRef.current);
     }
@@ -346,7 +353,35 @@ function StoryboardInspector({ shot, characters, provider, onProviderChange, onC
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [localShot, provider, isEnriched]);
 
-  if (!isEnriched) return <div className="storyboard-inspector rounded-xl border border-amber-700/60 bg-amber-950/20 p-4"><h4 className="text-sm font-bold text-amber-200">结构化参数缺失</h4><p className="mt-2 text-ui-body text-amber-100/80">旧分镜不会被静默补默认值。初始化后会以“用户编辑”来源保存。</p><button type="button" onClick={() => void onInitialize()} className="mt-3 rounded-lg bg-amber-600 px-3 py-2 text-ui-body font-semibold text-white">初始化结构化参数</button></div>;
+  const handleInitialize = async () => {
+    if (isInitializing) return;
+    setIsInitializing(true);
+    setInitializeError('');
+    try {
+      await onInitialize();
+    } catch (error: any) {
+      setInitializeError(error?.message || '初始化失败，请稍后重试。');
+    } finally {
+      setIsInitializing(false);
+    }
+  };
+
+  if (!isEnriched) return (
+    <div className="storyboard-inspector rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
+      <h4 className="text-sm font-bold text-amber-200">结构化参数缺失</h4>
+      <p className="mt-2 text-ui-body text-amber-100/80">旧分镜不会被静默补默认值。初始化后会以“用户编辑”来源保存。</p>
+      {initializeError && <p className="mt-2 text-ui-meta text-rose-300" role="alert">{initializeError}</p>}
+      <button
+        type="button"
+        onClick={() => void handleInitialize()}
+        disabled={isInitializing}
+        className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-600 px-3 py-2 text-ui-body font-semibold text-white disabled:cursor-wait disabled:opacity-60"
+      >
+        {isInitializing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {isInitializing ? '正在初始化...' : '初始化结构化参数'}
+      </button>
+    </div>
+  );
 
   const matched = characters.filter(character => localShot.matchedCharacterIds?.includes(String(character.id)));
 
