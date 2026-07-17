@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { GoogleGenAI } from '@google/genai';
-import { exec } from 'child_process';
+import { exec, execFileSync } from 'child_process';
 import util from 'util';
 import crypto from 'crypto';
 import Database from 'better-sqlite3';
@@ -7809,7 +7809,45 @@ registerCameraDeriveModule(app, dbSqlite, {
 });
 registerShotReviewModule(app, dbSqlite, { mutateDb, uploadsDir: UPLOADS_DIR });
 
-registerExportDeckModule(app, dbSqlite, { uploadsDir: UPLOADS_DIR });
+// Video Lab M3: ffprobe lives next to the configured ffmpeg binary (or on PATH).
+// Manifest "actual" values must come from the file itself — provider-reported
+// normalized_size/normalized_seconds have twice disagreed with ffprobe on real runs.
+const FFPROBE_COMMAND = process.env.FFPROBE_PATH?.trim()
+  || (configuredFfmpegPath
+    ? path.join(path.dirname(configuredFfmpegPath), path.basename(configuredFfmpegPath).replace(/ffmpeg/i, 'ffprobe'))
+    : 'ffprobe');
+
+function probeVideoFile(absPath: string): { width: number; height: number; fps: number; durationSec: number } | null {
+  try {
+    const output = execFileSync(FFPROBE_COMMAND, [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height,r_frame_rate,duration',
+      '-of', 'json',
+      absPath,
+    ], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
+    const stream = JSON.parse(output)?.streams?.[0];
+    if (!stream) return null;
+    const width = Number(stream.width);
+    const height = Number(stream.height);
+    const [num, den] = String(stream.r_frame_rate || '').split('/').map(Number);
+    const fps = Number.isFinite(num) && Number.isFinite(den) && den > 0 ? num / den : NaN;
+    const durationSec = Number(stream.duration);
+    if (![width, height, fps, durationSec].every(Number.isFinite)) return null;
+    return { width, height, fps, durationSec };
+  } catch (error: any) {
+    console.error('[ffprobe] probe failed:', error?.code || error?.status || error?.message || error);
+    return null;
+  }
+}
+
+registerExportDeckModule(app, dbSqlite, {
+  uploadsDir: UPLOADS_DIR,
+  videoDelivery: {
+    getVideoTask: (taskId: string) => videoTaskRow(taskId) as any,
+    probeVideo: probeVideoFile,
+  },
+});
 registerStoryVersionModule(app, dbSqlite, { mutateDb });
 registerStyleContractModule(app, { readDb, mutateDb });
 registerSceneReferenceModule(app, { readDb, mutateDb, uploadsDir: UPLOADS_DIR });
@@ -7846,6 +7884,29 @@ registerVideoLabModule(app, {
   isLocalVideoReadable: (localPath: string) => {
     const absolutePath = getLocalPath(localPath, UPLOADS_DIR);
     return absolutePath ? isReadableFile(absolutePath) : false;
+  },
+  redownloadVideo: async (taskId: string) => {
+    const row = videoTaskRow(taskId);
+    const videoUrl = String(row?.video_url || '').trim();
+    if (!videoUrl) return { ok: false, error: 'Video task has no remote URL.' };
+    try {
+      await downloadCompletedVideo(taskId, videoUrl);
+      return { ok: true };
+    } catch (error: any) {
+      const message = String(error?.message || 'Video download failed.');
+      dbSqlite.prepare('UPDATE video_tasks SET download_error = ?, updated_at = ? WHERE id = ?')
+        .run(message, new Date().toISOString(), taskId);
+      return { ok: false, error: message };
+    }
+  },
+  deleteVideoTaskRow: (taskId: string) => {
+    const row = videoTaskRow(taskId);
+    const localPath = String(row?.local_path || '').trim();
+    if (localPath) {
+      const absolutePath = getLocalPath(localPath, UPLOADS_DIR);
+      if (absolutePath && fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
+    }
+    dbSqlite.prepare('DELETE FROM video_tasks WHERE id = ?').run(taskId);
   },
 });
 

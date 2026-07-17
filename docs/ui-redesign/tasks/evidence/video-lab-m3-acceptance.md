@@ -52,3 +52,36 @@
 - `server.ts` 为 video-lab 接入复用下载内核的 `redownloadVideo` 与带安全路径校验/文件 unlink 的 `deleteVideoTaskRow`。
 - 用真实定稿数据验证不打包/打包两种导出、ZIP 解压播放、过期 Agnes URL 的诚实失败、非定稿文件删除与定稿拒删。
 - M1 单镜、M2 定稿/批量真实回归。
+
+---
+
+## 5. CC 接线与真机验证增补（2026-07-16，CC 执行）
+
+### 5.1 接线（server.ts）
+
+- export-deck 注册追加 `videoDelivery`：`getVideoTask=videoTaskRow`；`probeVideo` = `execFileSync` ffprobe（`-show_entries stream=width,height,r_frame_rate,duration -of json`，10s 超时，`windowsHide:true`，失败记日志返回 null）。ffprobe 路径解析：`FFPROBE_PATH` env 优先 → `FFMPEG_PATH` 同目录 sibling → PATH。
+- video-lab 注册追加：`redownloadVideo`（复用 `downloadCompletedVideo` 内核：临时文件+rename、成功回填 local_path 清 download_error；失败把真实错误写回 download_error）、`deleteVideoTaskRow`（getLocalPath 解析后 unlink 本地文件 + DELETE 行）。
+- 环境修正：preview 工具拉起的子进程 PATH 不含 WinGet ffmpeg 目录（首轮 actual 全 null，日志 `[ffprobe] probe failed: ENOENT`）→ `.env` 增配 `FFMPEG_PATH` 绝对路径（正斜杠写法避开转义），代码同时支持 `FFPROBE_PATH` 直接覆盖。
+- lint PASS；全模块 60/60 PASS。
+
+### 5.2 真机结果（真实定稿数据，项目 1783192733645）
+
+| 项 | 结果 |
+| --- | --- |
+| delivery-check | `finalVideos {count:2, totalBytes:570462}`（= 两文件字节和精确相等） |
+| 导出（不打包） | `finalVideo.file=null`、`sourcePath` 引用、`actual={1088,832,24,3.375}`（ffprobe 实测） |
+| 导出（打包） | `videos/shot-01.mp4`、`shot-02.mp4` 落盘；ZIP 内含 `videos/*`；README §3.6 逐镜实测值；打包副本 ffprobe 复验 1088x832 |
+| 备忘①② | manifest `requested=1152x768/3s`（快照口径）与 `actual=1088x832/3.375s`（实测）并存分离，`normalized_*` 未进 actual |
+| retry-download 守卫 | 已下载→409 `ALREADY_DOWNLOADED`；failed 任务→422 `TASK_NOT_COMPLETED` |
+| retry-download 真路径 | 对标记 download_error 的真实 take 重试 → 真实重下 426854 字节、download_error 清空（Agnes URL 当时仍有效；过期失败路径由 502 透传逻辑+单测覆盖） |
+| DELETE 守卫 | 定稿 take→422 `TAKE_IS_FINAL`；in_progress 合成行→422 `TAKE_IN_PROGRESS` |
+| DELETE 成功 | 合成 completed 行删除后：DB 行消失 + 本地文件消失；测试数据零残留 |
+| UI | DeliveryPanel 复选框默认关、显示"预计增加 0.5 MB"；VideoLabPanel M3 头；定稿 Take 无删除按钮、非定稿有删除+确认层；capability `minSubmitIntervalMs:61000` 下发 |
+| M1/M2 回归 | providers 端点正常（新字段向后兼容）；takes 列表 2×completed；批量默认选择正确排除已定稿（74→72） |
+
+### 5.3 真机备注
+
+- 首次导出出现一次 handler 挂起（README 写出后 10 分钟无 PPTX，进程持续烧 CPU），重启服务后同代码同数据 1.85s 完成，另一无视频项目对照导出 2m38s 完成——判定为一次性环境异常（旧进程状态污染），非 M3 代码缺陷；后续多轮导出均秒级。
+- 无视频项目（`videoDelivery` 生效但项目无 `finalVideoTaskId`）导出输出不含任何视频字段，与 M2 行为一致。
+
+结论：M3 真机链路 **PASS**。
