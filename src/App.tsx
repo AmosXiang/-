@@ -511,12 +511,23 @@ export default function App() {
   const [importingPreset, setImportingPreset] = useState(false);
   const [regenerateMode, setRegenerateMode] = useState('missing');
   const [isQueueingBatch, setIsQueueingBatch] = useState(false);
+  const [isAgnesBatchRunning, setIsAgnesBatchRunning] = useState(false);
+  const [isAgnesBatchStopRequested, setIsAgnesBatchStopRequested] = useState(false);
+  const [agnesBatchProgress, setAgnesBatchProgress] = useState<{
+    total: number;
+    completed: number;
+    failed: number;
+    skipped: number;
+    failures: Array<{ shotIndex: number; error: string }>;
+  } | null>(null);
   const [isExportingBatchReport, setIsExportingBatchReport] = useState(false);
   const [batchReportPaths, setBatchReportPaths] = useState<string[]>([]);
   const [shotCharacterModal, setShotCharacterModal] = useState<{ shotIndex: number; selectedIds: string[] } | null>(null);
   const [shotCharacterFeedback, setShotCharacterFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const activeComfyImportsRef = useRef<Set<string>>(new Set());
   const importedTaskAwaitingRefreshRef = useRef<string | null>(null);
+  const agnesBatchStopRequestedRef = useRef(false);
+  const agnesBatchRunIdRef = useRef(0);
 
   // ComfyUI Runtime state and handlers
   interface ComfyUiRuntime {
@@ -557,6 +568,19 @@ export default function App() {
   const hasPendingBatchTasks = React.useMemo(() => batchTasks.some((t: any) => t.status === 'pending'), [batchTasks]);
   const isComfyConnected = comfyRuntime.state === 'running' || comfyRuntime.state === 'external';
   const hasShots = !!(generatedScript?.newShots && generatedScript.newShots.length > 0);
+  const isOfflineAgnesBatchMode = !isComfyConnected && regenerateMode === 'missing';
+  const isBatchGenerateDisabled = isAgnesBatchRunning
+    ? isAgnesBatchStopRequested
+    : !hasShots || isQueueingBatch || hasActiveBatch || (!isComfyConnected && !isOfflineAgnesBatchMode);
+  const isSecondaryBatchGenerateDisabled = !isComfyConnected && isBatchGenerateDisabled;
+  const batchGenerateTitle = !isComfyConnected && regenerateMode !== 'missing'
+    ? '该模式需本地 ComfyUI；缺失镜可离线经 Agnes 批量生成'
+    : isOfflineAgnesBatchMode
+      ? '离线经 Agnes 串行生成无人物的缺失分镜'
+      : '批量生成分镜';
+  const agnesBatchButtonTitle = isAgnesBatchRunning
+    ? `${isAgnesBatchStopRequested ? '正在等待当前镜完成后停止' : '点击后将在当前镜完成时停止'}${agnesBatchProgress ? `；已完成 ${agnesBatchProgress.completed}/${agnesBatchProgress.total}，失败 ${agnesBatchProgress.failed}` : ''}`
+    : batchGenerateTitle;
 
   useEffect(() => {
     let active = true;
@@ -1092,6 +1116,13 @@ export default function App() {
     return () => clearInterval(interval);
   }, [generatedScript, imagePlatform, pollComfyTasks]);
 
+  useEffect(() => {
+    return () => {
+      agnesBatchStopRequestedRef.current = true;
+      agnesBatchRunIdRef.current += 1;
+    };
+  }, [generatedScript?.id]);
+
   const prevComfyTasksRef = useRef<any[]>([]);
 
   useEffect(() => {
@@ -1193,6 +1224,135 @@ export default function App() {
   };
 
 
+  const handleStopAgnesBatch = () => {
+    if (!isAgnesBatchRunning || isAgnesBatchStopRequested) return;
+    agnesBatchStopRequestedRef.current = true;
+    setIsAgnesBatchStopRequested(true);
+    setShotCharacterFeedback({ kind: 'success', message: '已请求停止 Agnes 批量；当前镜完成后停止。' });
+  };
+
+  const handleAgnesBatchGenerate = async () => {
+    if (!generatedScript || isComfyConnected || regenerateMode !== 'missing') return;
+    if (!hasShots || isQueueingBatch || hasActiveBatch) return;
+
+    const batchScript = generatedScript;
+    const lifecycleRunId = agnesBatchRunIdRef.current;
+    setIsQueueingBatch(true);
+    try {
+      const preflightRes = await fetch('/api/comfyui/shots/generate-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: batchScript.id, regenerateMode })
+      });
+      const preview = await preflightRes.json().catch(() => ({}));
+      if (agnesBatchRunIdRef.current !== lifecycleRunId) return;
+      if (!preflightRes.ok) throw new Error(preview.error || '批量预检失败');
+      if (!preview.preflight) {
+        if (preview.message) alert(preview.message);
+        return;
+      }
+
+      const p = preview.preflight;
+      if (p.styleContract && !p.styleContract.ready) {
+        const missing = Array.isArray(p.styleContract.missing) && p.styleContract.missing.length > 0
+          ? `；缺少：${p.styleContract.missing.join('、')}`
+          : '';
+        alert(`请先完成并锁定项目风格契约${missing}`);
+        setCreativeStep(1);
+        return;
+      }
+
+      const preflightItems = Array.isArray(p.items) ? p.items : [];
+      const agnesTargets = preflightItems.filter((item: any) => Array.isArray(item.matchedCharacters) && item.matchedCharacters.length === 0);
+      const skippedItems = preflightItems.filter((item: any) => !Array.isArray(item.matchedCharacters) || item.matchedCharacters.length > 0);
+      const estimatedSeconds = agnesTargets.length * 45;
+      if (!window.confirm(`离线 Agnes 批量预检\n可经 Agnes 云端生成：${agnesTargets.length} 镜\n跳过（需本地 ComfyUI）：${skippedItems.length} 镜\n预计耗时：约 ${agnesTargets.length} × 45 秒（${estimatedSeconds} 秒，串行，浏览器页面需保持打开）\n\n确认开始？`)) return;
+      if (agnesBatchRunIdRef.current !== lifecycleRunId) return;
+
+      const runId = lifecycleRunId + 1;
+      agnesBatchRunIdRef.current = runId;
+      agnesBatchStopRequestedRef.current = false;
+      setIsAgnesBatchRunning(true);
+      setIsAgnesBatchStopRequested(false);
+      setAgnesBatchProgress({ total: agnesTargets.length, completed: 0, failed: 0, skipped: skippedItems.length, failures: [] });
+      setShotCharacterFeedback({ kind: 'success', message: `Agnes 批量：0/${agnesTargets.length} 完成，0 失败` });
+
+      let activeScript = batchScript;
+      let completed = 0;
+      const failures: Array<{ shotIndex: number; error: string }> = [];
+
+      for (const item of agnesTargets) {
+        if (agnesBatchStopRequestedRef.current || agnesBatchRunIdRef.current !== runId) break;
+
+        const shotIndex = Number(item.shotIndex);
+        const shot = activeScript.newShots?.[shotIndex] as Shot | undefined;
+        setGeneratingShotIndex(shotIndex);
+        try {
+          if (!shot || !Number.isInteger(shotIndex)) {
+            throw new Error('预检返回了无效的分镜索引');
+          }
+
+          // Each request is intentionally awaited before the next one starts. The server owns rate limiting and the per-shot lock.
+          const response = await fetch('/api/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildShotImageRequestBody(activeScript, shot, shotIndex)),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (agnesBatchRunIdRef.current !== runId) return;
+          if (!response.ok) {
+            const detail = result.error || result.message || response.statusText || '请求失败';
+            throw new Error(`HTTP ${response.status}：${detail}`);
+          }
+          if (result.provider !== 'agnes' || !result.imageUrl) {
+            throw new Error('接口未返回 Agnes 图片');
+          }
+
+          activeScript = applyAgnesShotImage(activeScript, shot, shotIndex, result);
+          completed += 1;
+        } catch (error: any) {
+          failures.push({ shotIndex, error: error?.message || '未知错误' });
+        } finally {
+          setGeneratingShotIndex(null);
+        }
+
+        setAgnesBatchProgress({
+          total: agnesTargets.length,
+          completed,
+          failed: failures.length,
+          skipped: skippedItems.length,
+          failures: [...failures],
+        });
+        setShotCharacterFeedback({
+          kind: failures.length > 0 ? 'error' : 'success',
+          message: `Agnes 批量：${completed}/${agnesTargets.length} 完成，${failures.length} 失败`,
+        });
+      }
+
+      if (agnesBatchRunIdRef.current !== runId) return;
+      const stopped = agnesBatchStopRequestedRef.current;
+      const summary = `Agnes 批量${stopped ? '已中止' : '已结束'}：完成 ${completed} / 失败 ${failures.length} / 跳过 ${skippedItems.length}（需本地 ComfyUI）`;
+      const failureDetails = failures.length > 0
+        ? `；失败明细：${failures.map(failure => `shotIndex ${failure.shotIndex}（第 ${failure.shotIndex + 1} 镜）：${failure.error}`).join('；')}`
+        : '';
+      setAgnesBatchProgress({
+        total: agnesTargets.length,
+        completed,
+        failed: failures.length,
+        skipped: skippedItems.length,
+        failures: [...failures],
+      });
+      setShotCharacterFeedback({ kind: failures.length > 0 ? 'error' : 'success', message: `${summary}${failureDetails}` });
+    } catch (error: any) {
+      alert(error?.message || 'Agnes 批量生成失败');
+    } finally {
+      setGeneratingShotIndex(null);
+      setIsAgnesBatchRunning(false);
+      setIsAgnesBatchStopRequested(false);
+      setIsQueueingBatch(false);
+    }
+  };
+
   const handleBatchGenerate = async () => {
     if (!generatedScript) return;
     if (!isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch) return;
@@ -1246,6 +1406,18 @@ export default function App() {
     } finally {
       setIsQueueingBatch(false);
     }
+  };
+
+  const handleBatchGenerateAction = () => {
+    if (isAgnesBatchRunning) {
+      handleStopAgnesBatch();
+      return;
+    }
+    if (isOfflineAgnesBatchMode) {
+      void handleAgnesBatchGenerate();
+      return;
+    }
+    void handleBatchGenerate();
   };
 
   const handleStopBatchGeneration = async () => {
@@ -2345,6 +2517,25 @@ export default function App() {
 
   // Agnes 路由是同步契约:服务端已把 imageUrl 与审计字段写入 store,
   // 前端只需把本地状态对齐,不再走 PUT 回写或 ComfyUI 任务轮询。
+  const buildShotImageRequestBody = (script: any, shot: Shot, idx: number) => {
+    const matchedCharacters = (script.newCharacters || []).filter((character: Character) => (shot.matchedCharacterIds || []).includes(String(character.id || '')));
+    const hasCharacterReference = matchedCharacters.length > 0 && matchedCharacters.every((character: Character) => !!(character.avatarImageUrl || character.avatarUrl));
+    return {
+      presetId: hasCharacterReference ? comfyProjectPreferences.identityPresetId : comfyProjectPreferences.shotPresetId,
+      prompt: shot.description,
+      negativePrompt: 'low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark',
+      isCharacter: false,
+      style: getStyleEnglish(shot.style || '写实'),
+      platform: imagePlatform,
+      model: comfyParams.model || undefined,
+      projectId: script.id,
+      targetType: 'shot',
+      targetId: shot.id,
+      viewType: 'main',
+      shotIndex: idx,
+    };
+  };
+
   const applyAgnesShotImage = (script: any, shot: Shot, idx: number, result: { imageUrl: string; requestId?: string }) => {
     const updatedShots = [...script.newShots];
     updatedShots[idx] = {
@@ -2358,6 +2549,7 @@ export default function App() {
     setGeneratedScript(updatedScript);
     setShotImages(prev => ({ ...prev, [shot.timestamp]: result.imageUrl }));
     setGeneratedScripts(prev => prev.map((item: any) => item.id === script.id ? updatedScript : item));
+    return updatedScript;
   };
 
   const handleGenerateShotImage = async (shot: Shot, idx: number, scriptOverride?: any) => {
@@ -2366,8 +2558,6 @@ export default function App() {
 
     const imagePrompt = shot.description;
     const negativePrompt = "low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark";
-    const matchedCharacters = (activeScript.newCharacters || []).filter((character: Character) => (shot.matchedCharacterIds || []).includes(String(character.id || '')));
-    const hasCharacterReference = matchedCharacters.length > 0 && matchedCharacters.every((character: Character) => !!(character.avatarImageUrl || character.avatarUrl));
 
     setGeneratingShotIndex(idx);
     setShotCharacterFeedback(null);
@@ -2380,20 +2570,7 @@ export default function App() {
           headers: {
             "Content-Type": "application/json",
           },
-           body: JSON.stringify({
-             presetId: hasCharacterReference ? comfyProjectPreferences.identityPresetId : comfyProjectPreferences.shotPresetId,
-             prompt: imagePrompt,
-            negativePrompt,
-            isCharacter: false,
-            style: getStyleEnglish(shot.style || "写实"),
-            platform: imagePlatform,
-            model: comfyParams.model || undefined,
-            projectId: activeScript.id,
-            targetType: 'shot',
-            targetId: shot.id,
-            viewType: 'main',
-            shotIndex: idx,
-          }),
+          body: JSON.stringify(buildShotImageRequestBody(activeScript, shot, idx)),
         });
         if (!res.ok) {
           const err = await res.json();
@@ -5456,16 +5633,18 @@ export default function App() {
                                 </select>
                                 <button
                                   type="button"
-                                  onClick={() => handleBatchGenerate()}
-                                  disabled={!isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch}
-                                  title={!isComfyConnected ? '请先启动 ComfyUI' : '批量生成分镜'}
+                                  onClick={handleBatchGenerateAction}
+                                  disabled={isBatchGenerateDisabled}
+                                  title={agnesBatchButtonTitle}
                                   className={`px-3 py-1 rounded text-[11px] font-semibold transition-all ${
-                                    !isComfyConnected || !hasShots || isQueueingBatch || hasActiveBatch
+                                    isBatchGenerateDisabled
                                       ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
                                       : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-900/25 border border-blue-500/20 cursor-pointer'
                                   }`}
                                 >
-                                  {isQueueingBatch ? '正在入队...' : '一键生成所有分镜'}
+                                  {isAgnesBatchRunning
+                                    ? isAgnesBatchStopRequested ? '正在停止 Agnes 批量...' : '停止 Agnes 批量'
+                                    : isQueueingBatch ? '正在入队...' : '一键生成所有分镜'}
                                 </button>
                                 {hasPendingBatchTasks && (
                                   <button
@@ -6012,10 +6191,18 @@ export default function App() {
                                   </p>
                                   <button
                                     type="button"
-                                    onClick={() => handleBatchGenerate()}
-                                    className="w-full py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer"
+                                    onClick={handleBatchGenerateAction}
+                                    disabled={isSecondaryBatchGenerateDisabled}
+                                    title={agnesBatchButtonTitle}
+                                    className={`w-full py-2 rounded-xl text-xs font-bold shadow-md transition-all ${
+                                      isSecondaryBatchGenerateDisabled
+                                        ? 'cursor-not-allowed bg-slate-800 text-slate-500'
+                                        : 'cursor-pointer bg-rose-600 text-white hover:bg-rose-500'
+                                    }`}
                                   >
-                                    一键生成缺失分镜
+                                    {isAgnesBatchRunning
+                                      ? isAgnesBatchStopRequested ? '正在停止 Agnes 批量...' : '停止 Agnes 批量'
+                                      : !isComfyConnected && isQueueingBatch ? '正在预检...' : '一键生成缺失分镜'}
                                   </button>
                                 </div>
                               )}
