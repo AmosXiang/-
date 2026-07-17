@@ -119,3 +119,27 @@ CC should focus real-machine regression on:
 - browser/project switching during a long request, confirming no subsequent shot starts and the old project does not overwrite the newly selected UI.
 
 Real Agnes and a live ComfyUI run remain intentionally outside this zero-billing Codex package.
+
+---
+
+## CC 复核与真机回归增补（2026-07-17，CC 执行）
+
+逐行 review PASS（范围审计：diff 仅 App.tsx + 本文档；`buildShotImageRequestBody` 提取后单镜/批量共用零漂移逐字段核对；runId+stop ref 生命周期、`applyAgnesShotImage` 返回更新引用穿线避免陈旧状态、按钮态矩阵均符合任务书）。合并后 lint PASS。
+
+真机（ComfyUI 全程离线、真实 Agnes、项目 1783192733645）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 契约未锁 + 离线 missing | 既有 alert 分支真机命中（原生弹窗如期阻断，矩阵最后一行 PASS） |
+| 离线 failed / all 模式 | 按钮置灰 + 新 tooltip「该模式需本地 ComfyUI；缺失镜可离线经 Agnes 批量生成」 |
+| 预检确认层 | 三数字分开：可经 Agnes 生成 9 镜 / 跳过 39 镜（需本地 ComfyUI）/ 预计 9×45s=405s 串行 |
+| 串行真跑 + 进度 | 第 1 镜（#27）真实 Agnes 同步落图落卡，进度反馈「Agnes 批量：1/9 完成，0 失败」 |
+| **真实失败不中断（非 stub）** | 第 2 镜（#37，描述含"血迹"）被 Agnes 内容审核真实拒绝（HTTP 502 "Unable to generate this content"）→ 记入失败明细、审计 provider_error 持久化、循环继续 |
+| 停止 | 进行中点「停止 Agnes 批量」→ 当前镜完成后停，汇总「已中止：完成 1 / 失败 1 / 跳过 39」+ 逐镜失败明细，按钮复位可再次发起 |
+| 落库核验 | shot#27 imageUrl+gen_provider=agnes 写入；#37 无图但 provider_error 审计在案；uploads/images/agnes/ 共 3 文件与预期一致 |
+
+验证脚手架与数据卫生：项目契约本为未初始化，验证前快照 styleContract/comfyuiPreferences/artDirection 三字段 → 用系统建议初稿临时初始化+锁定 → 验证完成后停服对 store JSON 手术还原（契约回到 initialized:false/version 0，write-through 副作用字段复原），**批量产出的 #27 分镜图保留**（缺失分镜的正向补全，非污染）。
+
+真机新知：Agnes 图片有内容审核，含血腥词汇的分镜描述会被拒（悬疑/惊悚题材批量时失败率不可忽视）——失败明细+审计已能承接，暂无行动项。
+
+结论：批量适配包真机 **PASS**。在线 ComfyUI 回归项（本机 ComfyUI 未运行）留待下次 ComfyUI 可用时顺带抽查，风险低（在线路径 diff 仅按钮分派一层，generate-all 主体未动）。
