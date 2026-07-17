@@ -123,3 +123,19 @@ The in-app browser used an isolated Vite/Express pair on ports `4200/4201`, a te
 `UNVERIFIED / 留 CC 真机`: starting a real ComfyUI after an offline wait and observing `[Worker] resumed` plus successful execution. A truthful local mock cannot prove this machine-specific path because the full preflight also validates process ownership, database lock state, and real input/output/user directory writability.
 
 CC should run: real ComfyUI offline enqueue -> start the actual instance -> confirm one `resumed` log and task execution; then hot-toggle the real routing config and regress the parameter dialog/batch paths.
+
+---
+
+## CC 复核与真机回归增补（2026-07-17，CC 执行）
+
+逐行 review PASS：server.ts 改动确认仅落在两处授权热区（worker 侧走了任务书推荐的 preflight 显式分支而非错误字符串匹配；退避检查位于任务认领之前；进出等待态日志按 pre-claim stateDetail 去重正确）；router 热加载首次加载坏配置仍 fail-fast、运行中坏配置保留旧值；App.tsx 恰两处授权改动。合并 `4a612ed` → `b1a92f6`（与 `0ea531b` 文档同步提交常规合并），lint PASS、模块 70/70、imageGen 11/11。
+
+真机（正式环境，dev server 重启后）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 离线 UI 强制本地入队 | 按钮可点 + 「任务将入队等待」琥珀文案 → 点击 → 任务 `eb2e4442` = `pending / waiting_for_comfyui`，`[Worker] waiting_for_comfyui` 每任务恰一条（无逐轮刷屏） |
+| 路由配置热切换（不重启） | 翻 `autoRoute=false` → 下一请求空镜即改走旧管线（`provider:"comfyui"` + `comfyOnline:false`，且无 503——同时复证热区 A）→ 探针任务已 cancel、配置已还原 |
+| **上线自动恢复（本包唯一 UNVERIFIED，现已闭环）** | `POST /api/comfyui/runtime/start` 拉起真实 ComfyUI → 2 分 12 秒后 `[Worker] resumed`（含完整 preflight PASS：online/端口进程/目录可写/db lock）→ 任务自动 `processing/running` → pulid 身份工作流真实生成 → **`succeeded`**，图片落盘 `/uploads/projects/1783192733645/shots/73/comfyui-fb4603d0….png` |
+
+结论：离线入队 server 包真机 **PASS**，含此前唯一 UNVERIFIED 项。参数对话框阻断回归由 review 确认未触碰（§五.2 零 diff）。
