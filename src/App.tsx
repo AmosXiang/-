@@ -120,6 +120,25 @@ type WorkflowPresetSummary = {
   reason: string | null;
 };
 
+type ShotProviderMode = 'auto' | 'agnes' | 'comfyui_local';
+type ForcedShotProvider = Exclude<ShotProviderMode, 'auto'>;
+
+type ShotGenerationProgress = {
+  shotIndex: number;
+  providerMode: ShotProviderMode;
+  startedAt: number;
+  elapsedSeconds: number;
+};
+
+const getImageGenerationErrorMessage = (payload: any, fallback: string, status?: number): string => {
+  const rawMessage = String(payload?.error || payload?.message || fallback);
+  const providerCode = `${payload?.code || ''} ${rawMessage}`;
+  if (payload?.provider === 'agnes' && /content_policy_violation|unable to generate this content|modify your prompt/i.test(providerCode)) {
+    return 'Agnes 内容安全策略拒绝了当前提示词。请修改分镜描述，弱化可能触发审核的敏感表达后重试。';
+  }
+  return status ? `HTTP ${status}：${rawMessage}` : rawMessage;
+};
+
 const characterTerms = (character: Character): string[] => {
   const aliases = Array.isArray(character.aliases)
     ? character.aliases
@@ -479,6 +498,8 @@ export default function App() {
   // Custom script details/drawers states
   const [activeDrawerChar, setActiveDrawerChar] = useState<Character | null>(null);
   const [generatingShotIndex, setGeneratingShotIndex] = useState<number | null>(null);
+  const [shotProviderMode, setShotProviderMode] = useState<ShotProviderMode>('auto');
+  const [shotGenerationProgress, setShotGenerationProgress] = useState<ShotGenerationProgress | null>(null);
   const [isGeneratingCharImage, setIsGeneratingCharImage] = useState<boolean>(false);
   const [isGeneratingThreeViews, setIsGeneratingThreeViews] = useState<boolean>(false);
   const [generatingViews, setGeneratingViews] = useState<Record<string, boolean>>({ front: false, side: false, back: false });
@@ -528,6 +549,7 @@ export default function App() {
   const importedTaskAwaitingRefreshRef = useRef<string | null>(null);
   const agnesBatchStopRequestedRef = useRef(false);
   const agnesBatchRunIdRef = useRef(0);
+  const shotGenerationRunIdRef = useRef(0);
 
   // ComfyUI Runtime state and handlers
   interface ComfyUiRuntime {
@@ -581,6 +603,26 @@ export default function App() {
   const agnesBatchButtonTitle = isAgnesBatchRunning
     ? `${isAgnesBatchStopRequested ? '正在等待当前镜完成后停止' : '点击后将在当前镜完成时停止'}${agnesBatchProgress ? `；已完成 ${agnesBatchProgress.completed}/${agnesBatchProgress.total}，失败 ${agnesBatchProgress.failed}` : ''}`
     : batchGenerateTitle;
+  const agnesBatchProcessed = agnesBatchProgress ? agnesBatchProgress.completed + agnesBatchProgress.failed : 0;
+  const agnesBatchPercent = agnesBatchProgress?.total
+    ? Math.min(100, Math.round((agnesBatchProcessed / agnesBatchProgress.total) * 100))
+    : 0;
+
+  useEffect(() => {
+    setShotProviderMode('auto');
+  }, [generatedScript?.id, imagePlatform, selectedShotIndex]);
+
+  const shotGenerationStartedAt = shotGenerationProgress?.startedAt;
+  useEffect(() => {
+    if (!shotGenerationStartedAt) return;
+    const interval = window.setInterval(() => {
+      setShotGenerationProgress(current => {
+        if (!current || current.startedAt !== shotGenerationStartedAt) return current;
+        return { ...current, elapsedSeconds: Math.floor((Date.now() - shotGenerationStartedAt) / 1000) };
+      });
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [shotGenerationStartedAt]);
 
   useEffect(() => {
     let active = true;
@@ -1301,8 +1343,7 @@ export default function App() {
           const result = await response.json().catch(() => ({}));
           if (agnesBatchRunIdRef.current !== runId) return;
           if (!response.ok) {
-            const detail = result.error || result.message || response.statusText || '请求失败';
-            throw new Error(`HTTP ${response.status}：${detail}`);
+            throw new Error(getImageGenerationErrorMessage(result, response.statusText || '请求失败', response.status));
           }
           if (result.provider !== 'agnes' || !result.imageUrl) {
             throw new Error('接口未返回 Agnes 图片');
@@ -2517,7 +2558,7 @@ export default function App() {
 
   // Agnes 路由是同步契约:服务端已把 imageUrl 与审计字段写入 store,
   // 前端只需把本地状态对齐,不再走 PUT 回写或 ComfyUI 任务轮询。
-  const buildShotImageRequestBody = (script: any, shot: Shot, idx: number) => {
+  const buildShotImageRequestBody = (script: any, shot: Shot, idx: number, forceProvider?: ForcedShotProvider) => {
     const matchedCharacters = (script.newCharacters || []).filter((character: Character) => (shot.matchedCharacterIds || []).includes(String(character.id || '')));
     const hasCharacterReference = matchedCharacters.length > 0 && matchedCharacters.every((character: Character) => !!(character.avatarImageUrl || character.avatarUrl));
     return {
@@ -2533,6 +2574,7 @@ export default function App() {
       targetId: shot.id,
       viewType: 'main',
       shotIndex: idx,
+      ...(forceProvider ? { forceProvider } : {}),
     };
   };
 
@@ -2552,14 +2594,22 @@ export default function App() {
     return updatedScript;
   };
 
-  const handleGenerateShotImage = async (shot: Shot, idx: number, scriptOverride?: any) => {
+  const handleGenerateShotImage = async (shot: Shot, idx: number, scriptOverride?: any, forceProvider?: ForcedShotProvider) => {
     const activeScript = scriptOverride || generatedScript;
     if (!activeScript) return;
 
     const imagePrompt = shot.description;
     const negativePrompt = "low quality, blurry, deformed, extra limbs, bad anatomy, text, watermark";
 
+    const progressRunId = shotGenerationRunIdRef.current + 1;
+    shotGenerationRunIdRef.current = progressRunId;
     setGeneratingShotIndex(idx);
+    setShotGenerationProgress({
+      shotIndex: idx,
+      providerMode: forceProvider || 'auto',
+      startedAt: Date.now(),
+      elapsedSeconds: 0,
+    });
     setShotCharacterFeedback(null);
     if (imagePlatform === 'comfyui') {
       // Agnes 路由的分镜是同步返回,等待期间用与其他平台一致的加载态并禁用重复提交。
@@ -2570,10 +2620,10 @@ export default function App() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(buildShotImageRequestBody(activeScript, shot, idx)),
+          body: JSON.stringify(buildShotImageRequestBody(activeScript, shot, idx, forceProvider)),
         });
         if (!res.ok) {
-          const err = await res.json();
+          const err = await res.json().catch(() => ({}));
           if (res.status === 409 && err.provider === 'agnes') {
             setShotCharacterFeedback({ kind: 'error', message: '该分镜已有 Agnes 生成进行中，请稍候再试。' });
             return;
@@ -2581,13 +2631,13 @@ export default function App() {
           if (res.status === 409 && err.existingTaskId) {
             const shouldReplace = window.confirm(`已有任务进行中（${err.existingTaskId}）。是否取消当前任务后重新生成？`);
             if (shouldReplace && await handleCancelComfyTask(err.existingTaskId)) {
-              await handleGenerateShotImage(shot, idx, activeScript);
+              await handleGenerateShotImage(shot, idx, activeScript, forceProvider);
             } else if (!shouldReplace) {
               setShotCharacterFeedback({ kind: 'error', message: `已有任务进行中：${err.existingTaskId}` });
             }
             return;
           }
-          throw new Error(err.error || "生成图片任务提交失败");
+          throw new Error(getImageGenerationErrorMessage(err, '生成图片任务提交失败'));
         }
         const taskResult = await res.json();
         if (taskResult.provider === 'agnes' && taskResult.imageUrl) {
@@ -2614,6 +2664,7 @@ export default function App() {
         setShotCharacterFeedback({ kind: 'error', message: err.message || '提交任务失败' });
       } finally {
         setGeneratingShotIndex(null);
+        if (shotGenerationRunIdRef.current === progressRunId) setShotGenerationProgress(null);
       }
       return;
     }
@@ -2637,8 +2688,8 @@ export default function App() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "生成图片失败");
+        const err = await res.json().catch(() => ({}));
+        throw new Error(getImageGenerationErrorMessage(err, '生成图片失败'));
       }
 
       const imageResult = await res.json();
@@ -2713,6 +2764,7 @@ export default function App() {
       alert(err.message || "生成图片时出错");
     } finally {
       setGeneratingShotIndex(null);
+      if (shotGenerationRunIdRef.current === progressRunId) setShotGenerationProgress(null);
     }
   };
 
@@ -5646,6 +5698,30 @@ export default function App() {
                                     ? isAgnesBatchStopRequested ? '正在停止 Agnes 批量...' : '停止 Agnes 批量'
                                     : isQueueingBatch ? '正在入队...' : '一键生成所有分镜'}
                                 </button>
+                                {isAgnesBatchRunning && agnesBatchProgress && (
+                                  <div className="w-52 rounded-lg border border-blue-800/60 bg-slate-950/70 px-2.5 py-1.5" aria-live="polite">
+                                    <div className="mb-1 flex items-center justify-between text-[9px] text-slate-400">
+                                      <span>Agnes 已处理 {agnesBatchProcessed}/{agnesBatchProgress.total}</span>
+                                      <span>{agnesBatchPercent}%</span>
+                                    </div>
+                                    <div
+                                      role="progressbar"
+                                      aria-label="Agnes 批量生成进度"
+                                      aria-valuemin={0}
+                                      aria-valuemax={agnesBatchProgress.total}
+                                      aria-valuenow={agnesBatchProcessed}
+                                      className="h-1.5 overflow-hidden rounded-full bg-slate-800"
+                                    >
+                                      <div
+                                        className="h-full rounded-full bg-gradient-to-r from-blue-500 to-violet-500 transition-[width] duration-300"
+                                        style={{ width: `${agnesBatchPercent}%` }}
+                                      />
+                                    </div>
+                                    <div className="mt-1 text-[9px] text-slate-500">
+                                      成功 {agnesBatchProgress.completed} · 失败 {agnesBatchProgress.failed}
+                                    </div>
+                                  </div>
+                                )}
                                 {hasPendingBatchTasks && (
                                   <button
                                     type="button"
@@ -5787,6 +5863,24 @@ export default function App() {
                                 const isGenerating = generatingShotIndex === selectedShotIndex;
                                 const shotTask = getShotTask(shot.id || '');
                                 const taskStatus = shotTask?.status;
+                                const activeShotProgress = shotGenerationProgress?.shotIndex === selectedShotIndex
+                                  ? shotGenerationProgress
+                                  : null;
+                                const forcedProvider = shotProviderMode === 'auto' ? undefined : shotProviderMode;
+                                const forcedLocalUnavailable = imagePlatform === 'comfyui'
+                                  && shotProviderMode === 'comfyui_local'
+                                  && !isComfyConnected;
+                                const progressLabel = activeShotProgress
+                                  ? activeShotProgress.providerMode === 'agnes'
+                                    ? 'Agnes 云端生成中...'
+                                    : activeShotProgress.providerMode === 'comfyui_local'
+                                      ? '正在提交到本地 ComfyUI...'
+                                      : imagePlatform === 'comfyui'
+                                        ? '服务端正在选择 Provider 并生成...'
+                                        : '图片生成请求处理中...'
+                                  : isAgnesBatchRunning
+                                    ? 'Agnes 批量生成中...'
+                                    : '正在生成静态画面...';
 
                                 if (workspaceTab === 'script') {
                                   return (
@@ -5863,7 +5957,25 @@ export default function App() {
                                         {isGenerating && (
                                           <div className="absolute inset-0 bg-slate-955/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-10">
                                             <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
-                                            <span className="text-xs text-slate-350">正在生成静态画面...</span>
+                                            <span className="text-xs text-slate-350">{progressLabel}</span>
+                                            {activeShotProgress && (
+                                              <>
+                                                <div
+                                                  role="progressbar"
+                                                  aria-label="单镜图片生成中"
+                                                  className="relative h-1.5 w-52 overflow-hidden rounded-full bg-slate-800"
+                                                >
+                                                  <motion.div
+                                                    className="absolute inset-y-0 w-1/3 rounded-full bg-gradient-to-r from-blue-500 to-violet-500"
+                                                    initial={{ x: '-100%' }}
+                                                    animate={{ x: '300%' }}
+                                                    transition={{ duration: 1.2, ease: 'linear', repeat: Infinity }}
+                                                  />
+                                                </div>
+                                                <span className="text-[10px] text-slate-400">已等待 {activeShotProgress.elapsedSeconds} 秒</span>
+                                                <span className="max-w-xs text-center text-[9px] text-slate-500">生成接口不返回百分比；进度条表示请求仍在进行。</span>
+                                              </>
+                                            )}
                                           </div>
                                         )}
 
@@ -5875,17 +5987,54 @@ export default function App() {
                                         ) : null}
                                       </div>
 
-                                      <div className="flex gap-3">
+                                      <div className="w-full max-w-xl space-y-3">
+                                        {imagePlatform === 'comfyui' && (
+                                          <div className="rounded-xl border border-slate-800 bg-slate-900/45 p-3">
+                                            <div className="flex flex-wrap items-center gap-3">
+                                              <label htmlFor="shot-image-provider" className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                                生图 Provider
+                                              </label>
+                                              <select
+                                                id="shot-image-provider"
+                                                value={shotProviderMode}
+                                                onChange={event => setShotProviderMode(event.target.value as ShotProviderMode)}
+                                                disabled={generatingShotIndex !== null || taskStatus === 'pending' || taskStatus === 'processing'}
+                                                className="min-w-44 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                              >
+                                                <option value="auto">自动路由（推荐）</option>
+                                                <option value="agnes">Agnes 云端（可能计费）</option>
+                                                <option value="comfyui_local">本地 ComfyUI</option>
+                                              </select>
+                                            </div>
+                                            <p className={`mt-2 text-[10px] leading-relaxed ${forcedLocalUnavailable ? 'text-amber-400' : 'text-slate-500'}`}>
+                                              {shotProviderMode === 'auto'
+                                                ? '服务端按主帧与人物绑定情况自动选择；无人物普通镜默认可走 Agnes。'
+                                                : shotProviderMode === 'agnes'
+                                                  ? '将主动调用 Agnes 云端；含人物分镜可能无法保持角色一致性。'
+                                                  : forcedLocalUnavailable
+                                                    ? '本地 ComfyUI 当前未连接，请启动后再生成。'
+                                                    : '将强制提交到本地 ComfyUI 队列。'}
+                                            </p>
+                                          </div>
+                                        )}
+                                        <div className="flex justify-center gap-3">
                                         <button
                                           type="button"
-                                          onClick={() => handleGenerateShotImage(shot, selectedShotIndex)}
-                                          disabled={generatingShotIndex !== null || taskStatus === 'pending' || taskStatus === 'processing'}
+                                          onClick={() => handleGenerateShotImage(shot, selectedShotIndex, undefined, forcedProvider)}
+                                          disabled={generatingShotIndex !== null || taskStatus === 'pending' || taskStatus === 'processing' || forcedLocalUnavailable}
+                                          title={forcedLocalUnavailable ? '本地 ComfyUI 当前未连接' : undefined}
                                           className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-850 disabled:text-slate-650 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-lg shadow-blue-900/25 transition-all cursor-pointer"
                                         >
                                           <Sparkles className="w-4 h-4 text-blue-200" />
-                                          <span>{shotImg ? '重新生成静态画面' : '生成静态画面'}</span>
+                                          <span>
+                                            {shotProviderMode === 'agnes'
+                                              ? `使用 Agnes ${shotImg ? '重新生成' : '生成'}`
+                                              : shotProviderMode === 'comfyui_local'
+                                                ? `使用 ComfyUI ${shotImg ? '重新生成' : '生成'}`
+                                                : shotImg ? '重新生成静态画面' : '生成静态画面'}
+                                          </span>
                                         </button>
-
+                                        </div>
                                       </div>
                                     </div>
                                   );
