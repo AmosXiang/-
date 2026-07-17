@@ -11,8 +11,7 @@ import type { ImageGenProvider, ImageGenRequest, ImageGenResult } from './types.
 
 const migrationSqlPath = path.resolve('migrations/001_add_image_provider_audit.sql');
 
-function writeConfig(autoRoute: boolean): string {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'imageGenRouting-')), 'imageGenRouting.json');
+function overwriteConfig(file: string, autoRoute: boolean): void {
   fs.writeFileSync(file, JSON.stringify({
     autoRoute,
     rules: [
@@ -21,7 +20,17 @@ function writeConfig(autoRoute: boolean): string {
       { name: 'default_agnes', if: {}, provider: 'agnes' },
     ],
   }));
+}
+
+function writeConfig(autoRoute: boolean): string {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'imageGenRouting-')), 'imageGenRouting.json');
+  overwriteConfig(file, autoRoute);
   return file;
+}
+
+function advanceMtime(file: string, offsetSeconds: number): void {
+  const next = new Date(Date.now() + offsetSeconds * 1000);
+  fs.utimesSync(file, next, next);
 }
 
 function makeDb(): Database.Database {
@@ -60,12 +69,13 @@ async function startApp(options: { autoRoute: boolean; stub?: StubAgnesProvider;
   const stub = options.stub ?? new StubAgnesProvider();
   const legacyCalls: any[] = [];
   const app = express();
+  const configPath = writeConfig(options.autoRoute);
   app.use(express.json());
   registerImageGenRouting({
     app,
     db,
     uploadsDir: os.tmpdir(),
-    configPath: writeConfig(options.autoRoute),
+    configPath,
     optimizePrompt: async prompt => prompt,
     createAgnesProvider: () => stub,
   });
@@ -84,7 +94,7 @@ async function startApp(options: { autoRoute: boolean; stub?: StubAgnesProvider;
     });
     return { status: response.status, body: await response.json() };
   };
-  return { db, stub, legacyCalls, post, close: () => new Promise(resolve => server.close(resolve)) };
+  return { db, stub, legacyCalls, configPath, post, close: () => new Promise(resolve => server.close(resolve)) };
 }
 
 // 真实 App.tsx 请求体:普通空镜生成(handleGenerateShotImage 形状)。
@@ -109,6 +119,30 @@ test('autoRoute off: normal empty-shot generation passes through to the legacy h
     assert.equal(ctx.stub.calls.length, 0);
     assert.equal(ctx.legacyCalls.length, 1);
     assert.equal(ctx.legacyCalls[0].platform, 'comfyui');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('routing config hot reloads on mtime change and keeps the last valid config after invalid JSON', async () => {
+  const ctx = await startApp({ autoRoute: false });
+  try {
+    const before = await ctx.post(normalEmptyShotBody);
+    assert.equal(before.body.taskId, 'legacy-task-1');
+    assert.equal(ctx.stub.calls.length, 0);
+
+    overwriteConfig(ctx.configPath, true);
+    advanceMtime(ctx.configPath, 2);
+    const after = await ctx.post(normalEmptyShotBody);
+    assert.equal(after.body.provider, 'agnes');
+    assert.equal(ctx.stub.calls.length, 1);
+
+    fs.writeFileSync(ctx.configPath, '{ invalid JSON');
+    advanceMtime(ctx.configPath, 4);
+    const afterInvalidConfig = await ctx.post(normalEmptyShotBody);
+    assert.equal(afterInvalidConfig.status, 200);
+    assert.equal(afterInvalidConfig.body.provider, 'agnes');
+    assert.equal(ctx.stub.calls.length, 2);
   } finally {
     await ctx.close();
   }

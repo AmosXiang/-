@@ -6076,7 +6076,7 @@ export default function App() {
                                                 : shotProviderMode === 'agnes'
                                                   ? '将主动调用 Agnes 云端；含人物分镜可能无法保持角色一致性。'
                                                   : forcedLocalUnavailable
-                                                    ? '本地 ComfyUI 当前未连接，请启动后再生成。'
+                                                    ? '本地 ComfyUI 未连接：任务将入队等待，启动后自动执行。'
                                                     : '将强制提交到本地 ComfyUI 队列。'}
                                             </p>
                                           </div>
@@ -6085,8 +6085,8 @@ export default function App() {
                                         <button
                                           type="button"
                                           onClick={() => handleGenerateShotImage(shot, selectedShotIndex, undefined, forcedProvider)}
-                                          disabled={generatingShotIndex !== null || taskStatus === 'pending' || taskStatus === 'processing' || forcedLocalUnavailable}
-                                          title={forcedLocalUnavailable ? '本地 ComfyUI 当前未连接' : undefined}
+                                          disabled={generatingShotIndex !== null || taskStatus === 'pending' || taskStatus === 'processing'}
+                                          title={forcedLocalUnavailable ? '本地 ComfyUI 未连接：任务将入队等待' : undefined}
                                           className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-850 disabled:text-slate-650 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-lg shadow-blue-900/25 transition-all cursor-pointer"
                                         >
                                           <Sparkles className="w-4 h-4 text-blue-200" />

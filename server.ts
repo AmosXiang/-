@@ -4142,6 +4142,25 @@ async function submitComfyTask(task: any) {
       ? await comfyLightweightPreflight({ taskId: task.id, viewType: task.viewType, workflowBatchId: batchId, mode: 'lightweight' })
       : await comfyPermissionPreflight({ taskId: task.id, viewType: task.viewType, workflowBatchId: batchId || null, mode: 'full' });
     console.log('[ComfyPreflight:Result]', JSON.stringify({ taskId: task.id, shotId: task.targetId, presetId: task.workflowPresetId || null, ...preflight }));
+    if (!preflight.online) {
+      lastComfyOfflineProbeAt = Date.now();
+      comfyOffline = true;
+      const now = new Date().toISOString();
+      dbSqlite.prepare(`
+        UPDATE comfyui_tasks
+        SET status = 'pending', stateDetail = 'waiting_for_comfyui', error = NULL, submittedAt = NULL, updatedAt = ?
+        WHERE id = ?
+      `).run(now, task.id);
+      if (task.stateDetail !== 'waiting_for_comfyui') {
+        console.log('[Worker] waiting_for_comfyui', JSON.stringify({ taskId: task.id, shotId: task.targetId, detectedAt: now }));
+      }
+      return;
+    }
+    lastComfyOfflineProbeAt = 0;
+    comfyOffline = false;
+    if (task.stateDetail === 'waiting_for_comfyui') {
+      console.log('[Worker] resumed', JSON.stringify({ taskId: task.id, shotId: task.targetId, resumedAt: new Date().toISOString() }));
+    }
     assertComfyPreflight(preflight);
     if (preflight.busy) console.log('[ComfyProcessDetect:Decision]', JSON.stringify({ timestamp: new Date().toISOString(), taskId: task.id, viewType: task.viewType, decision: 'ComfyUI 正在生成，等待当前任务完成。' }));
     else if ((preflight as any).processDetection?.commandLineUnavailable && (preflight as any).processDetection.portOwnerPids.length === 1) console.log('[ComfyProcessDetect:Decision]', JSON.stringify({ timestamp: new Date().toISOString(), taskId: task.id, viewType: task.viewType, decision: '无法读取部分进程命令行，但 8001 端口存在单一 owner，继续。' }));
@@ -4680,6 +4699,9 @@ async function pollActiveTasks() {
 
 let workerInterval: NodeJS.Timeout | null = null;
 let isProcessingQueue = false;
+const COMFY_OFFLINE_PROBE_BACKOFF_MS = 30_000;
+let lastComfyOfflineProbeAt = 0;
+let comfyOffline = false;
 
 function startComfyWorker() {
   if (workerInterval) return;
@@ -4706,6 +4728,7 @@ function startComfyWorker() {
         `).get() as any;
 
         if (nextTask) {
+          if (comfyOffline && Date.now() - lastComfyOfflineProbeAt < COMFY_OFFLINE_PROBE_BACKOFF_MS) return;
           const updateResult = dbSqlite.prepare(`
             UPDATE comfyui_tasks
             SET status = 'processing', stateDetail = 'submitting', submittedAt = ?, updatedAt = ?
@@ -7514,13 +7537,21 @@ app.post('/api/generate-image', async (req, res) => {
         return res.status(409).json({ error: '已有任务进行中', existingTaskId: existingActiveTask.id, task: existingActiveTask, action: 'cancel_then_retry' });
       }
 
+      let comfyOnline = false;
+      let comfyProbeError: string | null = null;
       try {
         await comfyFetch('/system_stats', {}, 3_000);
+        comfyOnline = true;
+        lastComfyOfflineProbeAt = 0;
+        comfyOffline = false;
       } catch (error: any) {
-        const message = `ComfyUI 未连接：${error.message || 'connection failed'}`;
-        console.error('[TaskState:Failed]', JSON.stringify({ taskId: null, shotId: targetId, presetId: req.body.presetId || null, prompt_id: null, status: 'failed', error: message }));
-        return res.status(503).json({ error: message, code: 'COMFYUI_UNAVAILABLE' });
+        lastComfyOfflineProbeAt = Date.now();
+        comfyOffline = true;
+        comfyProbeError = error?.message || 'connection failed';
       }
+      const comfyProbeLog = JSON.stringify({ targetId, viewType, comfyOnline, error: comfyProbeError });
+      if (comfyOnline) console.log('[Generate Image:ComfyProbe]', comfyProbeLog);
+      else console.warn('[Generate Image:ComfyProbe]', comfyProbeLog);
 
       const projectPreferences = projectComfyPreferences(String(projectId || ''));
       const hasExplicitPreset = Object.prototype.hasOwnProperty.call(req.body, 'presetId')
@@ -7703,8 +7734,8 @@ app.post('/api/generate-image', async (req, res) => {
               prompt, negativePrompt, seed, model, width, height, status, retryCount,
               apiWorkflowJson, uiWorkflowJson, createdAt, updatedAt,
               workflowPresetId, workflowFamily, workflowBatchId, sourceImageUrl, sourceTaskId, outputNodeId, presetParametersJson,
-              characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, generationSnapshotJson
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              characterReferenceImageUrl, characterReferenceTaskId, lockCharacterIdentity, generationSnapshotJson, stateDetail
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             taskId,
             prepared.taskData.projectId,
@@ -7735,7 +7766,8 @@ app.post('/api/generate-image', async (req, res) => {
             prepared.taskData.characterReferenceImageUrl,
             prepared.taskData.characterReferenceTaskId,
             prepared.taskData.lockCharacterIdentity,
-            shotSnapshot?.json ?? null
+            shotSnapshot?.json ?? null,
+            comfyOnline ? null : 'waiting_for_comfyui'
           );
         });
         tx();
@@ -7744,12 +7776,16 @@ app.post('/api/generate-image', async (req, res) => {
         }
 
         console.log(`[Queue] Enqueued preset/custom task ${taskId} for ${prepared.taskData.targetId}:${prepared.taskData.viewType}`);
+        if (!comfyOnline) {
+          console.log('[Worker] waiting_for_comfyui', JSON.stringify({ taskId, shotId: prepared.taskData.targetId, detectedAt: new Date().toISOString() }));
+        }
         if (prepared.taskData.targetType === 'shot') {
           console.log('[RegenerateWithReference:Start]', JSON.stringify({ taskId, shotId: prepared.taskData.targetId, projectId: prepared.taskData.projectId, matchedCharacterIds: shotCharacters(prepared.taskData.projectId, prepared.taskData.shotIndex, prepared.taskData.prompt).map((character: any) => character.id), presetId: prepared.taskData.workflowPresetId, prompt_id: null, status: 'pending', characterReferenceImageUrl: prepared.taskData.characterReferenceImageUrl || null, error: null }));
         }
         return res.json({
           success: true,
           taskId,
+          comfyOnline,
           status: 'pending',
           provider: 'comfyui',
           workflowPresetId: prepared.taskData.workflowPresetId,
