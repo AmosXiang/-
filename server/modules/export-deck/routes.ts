@@ -9,7 +9,50 @@ type DatabaseInstance = Database.Database;
 
 export interface ExportDeckConfig {
   uploadsDir: string;
+  videoDelivery?: {
+    getVideoTask: (taskId: string) => VideoTaskRow | undefined;
+    probeVideo: (absPath: string) => VideoProbe | null;
+  };
 }
+
+type VideoTaskRow = {
+  id: string;
+  shot_id?: string | null;
+  provider?: string | null;
+  seed?: number | null;
+  status?: string | null;
+  local_path?: string | null;
+  generation_snapshot_json?: string | null;
+  [key: string]: unknown;
+};
+
+type VideoProbe = {
+  width: number;
+  height: number;
+  fps: number;
+  durationSec: number;
+};
+
+type FinalVideoReason =
+  | 'TAKE_NOT_FOUND'
+  | 'TAKE_SHOT_MISMATCH'
+  | 'TAKE_NOT_COMPLETED'
+  | 'TAKE_NOT_DOWNLOADED'
+  | 'TAKE_FILE_MISSING';
+
+type FinalVideoDelivery = {
+  taskId: string;
+  provider: string | null;
+  seed: number | null;
+  status: 'ok' | 'missing';
+  reason: FinalVideoReason | null;
+  sourcePath: string | null;
+  sourceLocalPath: string | null;
+  file: string | null;
+  fileBytes: number;
+  requested: { durationSec: number; fps: number; resolution: string } | null;
+  actual: VideoProbe | null;
+};
 
 function readScripts(db: DatabaseInstance): any[] {
   const row = db.prepare("SELECT value FROM store WHERE key = 'generated_scripts'").get() as { value: string } | undefined;
@@ -28,6 +71,68 @@ export function registerExportDeckModule(
   config: ExportDeckConfig
 ): void {
   const uploadsDir = config.uploadsDir;
+  const videoDelivery = config.videoDelivery;
+
+  function requestedVideoParameters(row: VideoTaskRow | undefined): FinalVideoDelivery['requested'] {
+    if (!row || typeof row.generation_snapshot_json !== 'string') return null;
+    try {
+      const parameters = JSON.parse(row.generation_snapshot_json)?.parameters;
+      if (!parameters || typeof parameters !== 'object') return null;
+      const durationSec = Number(parameters.durationSec);
+      const fps = Number(parameters.fps);
+      const resolution = typeof parameters.resolution === 'string' ? parameters.resolution : '';
+      if (!Number.isFinite(durationSec) || !Number.isFinite(fps) || !resolution) return null;
+      return { durationSec, fps, resolution };
+    } catch {
+      return null;
+    }
+  }
+
+  function inspectFinalVideo(shot: any): FinalVideoDelivery | undefined {
+    if (!videoDelivery || !shot?.finalVideoTaskId) return undefined;
+    const taskId = String(shot.finalVideoTaskId);
+    const row = videoDelivery.getVideoTask(taskId);
+    const base = {
+      taskId,
+      provider: typeof row?.provider === 'string' ? row.provider : null,
+      seed: typeof row?.seed === 'number' ? row.seed : null,
+      sourcePath: typeof row?.local_path === 'string' && row.local_path.trim() ? row.local_path.trim() : null,
+      sourceLocalPath: null,
+      file: null,
+      fileBytes: 0,
+      requested: requestedVideoParameters(row),
+      actual: null,
+    } satisfies Omit<FinalVideoDelivery, 'status' | 'reason'>;
+    const missing = (reason: FinalVideoReason): FinalVideoDelivery => ({ ...base, status: 'missing', reason });
+
+    if (!row) return missing('TAKE_NOT_FOUND');
+    if (String(row.shot_id || '') !== String(shot.id)) return missing('TAKE_SHOT_MISMATCH');
+    if (row.status !== 'completed') return missing('TAKE_NOT_COMPLETED');
+    if (!base.sourcePath) return missing('TAKE_NOT_DOWNLOADED');
+    const sourceLocalPath = getLocalPath(base.sourcePath, uploadsDir);
+    if (!sourceLocalPath || !isReadableFile(sourceLocalPath)) return missing('TAKE_FILE_MISSING');
+
+    try {
+      const fileBytes = fs.statSync(sourceLocalPath).size;
+      let actual: VideoProbe | null = null;
+      try {
+        actual = videoDelivery.probeVideo(sourceLocalPath);
+      } catch {
+        actual = null;
+      }
+      return {
+        ...base,
+        status: 'ok',
+        reason: null,
+        sourceLocalPath,
+        fileBytes,
+        actual,
+        file: null,
+      };
+    } catch {
+      return missing('TAKE_FILE_MISSING');
+    }
+  }
 
   // Check function reused by both endpoints
   function performDeliveryCheck(projectId: string, script: any) {
@@ -39,6 +144,8 @@ export function registerExportDeckModule(
     let failedCount = 0;
     let missingParamsCount = 0;
     let staleCount = 0;
+    let finalVideoCount = 0;
+    let finalVideoBytes = 0;
 
     const shotsData = shots.map((shot: any, idx: number) => {
       const index = idx + 1; // 1-based index
@@ -172,6 +279,12 @@ export function registerExportDeckModule(
         resolvedExt = path.extname(resolvedLocalPath) || '.png';
       }
 
+      const finalVideo = inspectFinalVideo(shot);
+      if (finalVideo?.status === 'ok') {
+        finalVideoCount++;
+        finalVideoBytes += finalVideo.fileBytes;
+      }
+
       return {
         id: String(shot.id),
         index,
@@ -198,6 +311,7 @@ export function registerExportDeckModule(
         localImagePath: resolvedLocalPath,
         imageExt: resolvedExt,
         sceneId: shot.sceneId || null,
+        ...(finalVideo ? { finalVideo } : {}),
       };
     });
 
@@ -210,6 +324,7 @@ export function registerExportDeckModule(
       missingParams: missingParamsCount,
       stale: staleCount,
       details,
+      ...(videoDelivery ? { finalVideos: { count: finalVideoCount, totalBytes: finalVideoBytes } } : {}),
     };
 
     return { summary, shotsData };
@@ -233,6 +348,7 @@ export function registerExportDeckModule(
   app.post('/api/generated-scripts/:id/export-deck', async (req: Request, res: Response) => {
     const projectId = String(req.params.id);
     const mode = req.body?.mode;
+    const includeFinalVideos = req.body?.includeFinalVideos === true;
 
     if (mode !== 'final' && mode !== 'review') {
       return res.status(400).json({ error: "mode field is required and must be either 'final' or 'review'" });
@@ -246,6 +362,7 @@ export function registerExportDeckModule(
     }
 
     const { summary, shotsData } = performDeliveryCheck(projectId, script);
+    let exportSummary: Record<string, unknown> = summary;
 
     // If final mode, require all shots to be finalized
     if (mode === 'final' && summary.notFinalized > 0) {
@@ -280,6 +397,46 @@ export function registerExportDeckModule(
           // Explicitly clear localImagePath so PPTX doesn't crash trying to read missing file
           shot.localImagePath = null;
         }
+      }
+
+      if (videoDelivery) {
+        const videosDir = path.join(exportDir, 'videos');
+        if (includeFinalVideos) fs.mkdirSync(videosDir, { recursive: true });
+
+        for (const shot of shotsData) {
+          if (!shot.finalVideo) continue;
+          const refreshed = inspectFinalVideo(
+            (script.newShots || []).find((item: any) => String(item?.id) === shot.id),
+          );
+          shot.finalVideo = refreshed;
+          if (!refreshed || refreshed.status !== 'ok' || !includeFinalVideos || !refreshed.sourceLocalPath) continue;
+
+          const file = `videos/shot-${String(shot.index).padStart(2, '0')}.mp4`;
+          const destPath = path.join(exportDir, file);
+          try {
+            fs.copyFileSync(refreshed.sourceLocalPath, destPath);
+            refreshed.file = file;
+          } catch {
+            fs.rmSync(destPath, { force: true });
+            refreshed.status = 'missing';
+            refreshed.reason = 'TAKE_FILE_MISSING';
+            refreshed.file = null;
+            refreshed.fileBytes = 0;
+            refreshed.actual = null;
+          }
+        }
+
+        const finalVideos = shotsData
+          .map(shot => shot.finalVideo)
+          .filter((video): video is FinalVideoDelivery => Boolean(video));
+        exportSummary = {
+          ...summary,
+          finalVideos: {
+            present: finalVideos.filter(video => video.status === 'ok').length,
+            missing: finalVideos.filter(video => video.status === 'missing').length,
+            totalBytes: finalVideos.reduce((total, video) => total + (video.status === 'ok' ? video.fileBytes : 0), 0),
+          },
+        };
       }
 
       // Process characters directory and copy views (Objective 1)
@@ -392,6 +549,26 @@ export function registerExportDeckModule(
 
       const generationTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
+      const finalVideos = shotsData
+        .map(shot => ({ index: shot.index, finalVideo: shot.finalVideo as FinalVideoDelivery | undefined }))
+        .filter((item): item is { index: number; finalVideo: FinalVideoDelivery } => Boolean(item.finalVideo));
+      const videosDirReadmeDesc = includeFinalVideos && finalVideos.some(item => item.finalVideo.file)
+        ? '   - videos/:\n     存放已通过导出时落盘复核的定稿视频，文件命名格式为 shot-xx.mp4。\n'
+        : '';
+      let finalVideosReadmeSection = '';
+      if (finalVideos.length > 0) {
+        finalVideosReadmeSection = '\n3.6 定稿视频清单\n';
+        for (const { index, finalVideo } of finalVideos) {
+          const actual = finalVideo.actual
+            ? `${finalVideo.actual.width}x${finalVideo.actual.height} @ ${finalVideo.actual.fps} FPS, ${finalVideo.actual.durationSec}s`
+            : 'ffprobe 实测不可用';
+          finalVideosReadmeSection += `- 镜头 #${String(index).padStart(2, '0')} (Task: ${finalVideo.taskId})\n`;
+          finalVideosReadmeSection += `  * 状态: ${finalVideo.status}${finalVideo.reason ? ` (${finalVideo.reason})` : ''}\n`;
+          finalVideosReadmeSection += `  * 实测: ${actual}\n`;
+          finalVideosReadmeSection += `  * 文件: ${finalVideo.file || finalVideo.sourcePath || '无'}\n`;
+        }
+      }
+
       const readmeContent = `项目交付包说明文档 (README.txt)
 ================================
 
@@ -409,10 +586,10 @@ export function registerExportDeckModule(
      存放导出的所有分镜对应的高清大图或降级图，文件命名格式为 shot-xx.png。
    - characters/:
      存放该剧本中所包含的角色的三视图（avatar、front、side、back），用于保持角色的一致性（Role Identity）。
-${scenesDirReadmeDesc}
+${scenesDirReadmeDesc}${videosDirReadmeDesc}
 3. 角色文件清单及缺失视图说明
 ${characterViewsLog}
-${scenesReadmeSection}
+${scenesReadmeSection}${finalVideosReadmeSection}
 4. 正式交付包与审阅稿的区别
    - 审阅稿 (Review Mode):
      允许包含未完全定稿的分镜（标注有红色 DRAFT 警示角标），用于前中期对剧本、角色与画面布局的快速迭代与意见反馈。
@@ -457,7 +634,7 @@ ${scenesReadmeSection}
           manifestUrl: `/uploads/${exportRelDir}/${manifestFileName}`,
           zipUrl: `/uploads/${exportRelDir}/${zipFileName}`,
         },
-        summary,
+        summary: exportSummary,
       };
 
       return res.json(responseData);

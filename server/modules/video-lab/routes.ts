@@ -52,11 +52,16 @@ type VideoLabM2Deps = {
   isLocalVideoReadable: (localPath: string) => boolean;
 };
 
-export type VideoLabDeps = VideoLabM1Deps & VideoLabM2Deps;
+type VideoLabM3Deps = {
+  redownloadVideo: (taskId: string) => Promise<{ ok: boolean; error?: string }>;
+  deleteVideoTaskRow: (taskId: string) => void;
+};
+
+export type VideoLabDeps = VideoLabM1Deps & VideoLabM2Deps & VideoLabM3Deps;
 
 // The registration shape stays transitional until the server.ts follow-up
-// lands; M2 routes reject unwired dependencies explicitly with a 503.
-type VideoLabRegistrationDeps = VideoLabM1Deps & Partial<VideoLabM2Deps>;
+// lands; M2/M3 routes reject unwired dependencies explicitly with a 503.
+type VideoLabRegistrationDeps = VideoLabM1Deps & Partial<VideoLabM2Deps & VideoLabM3Deps>;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -116,9 +121,9 @@ function capabilityById(capabilities: VideoProviderCapability[], providerId: str
   return capability;
 }
 
-function requireDependency<T>(value: T | undefined, name: string): T {
+function requireDependency<T>(value: T | undefined, name: string, milestone: 2 | 3 = 2): T {
   if (value === undefined) {
-    throw new VideoLabError(503, `Video Lab M2 dependency '${name}' is not wired.`, 'VIDEO_LAB_M2_NOT_CONFIGURED', {
+    throw new VideoLabError(503, `Video Lab M${milestone} dependency '${name}' is not wired.`, `VIDEO_LAB_M${milestone}_NOT_CONFIGURED`, {
       dependency: name,
     });
   }
@@ -229,6 +234,74 @@ export function registerVideoLabModule(
         updatedShot = result.shot;
       }));
       return res.json({ shot: updatedShot });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  app.post('/api/video-lab/tasks/:taskId/retry-download', async (req: Request, res: Response) => {
+    try {
+      const projectId = queryText(req, 'projectId');
+      const taskId = String(req.params.taskId || '');
+      const getVideoTask = requireDependency(deps.getVideoTask, 'getVideoTask');
+      const row = getVideoTask(taskId);
+      if (!row) {
+        throw new VideoLabError(404, `Video task '${taskId}' was not found.`, 'TASK_NOT_FOUND', { taskId });
+      }
+      findProjectAndShot(deps.readDb, projectId, String(row.shot_id || ''));
+      if (row.status !== 'completed') {
+        throw new VideoLabError(422, `Video task '${taskId}' is not completed.`, 'TASK_NOT_COMPLETED', {
+          taskId,
+          status: row.status,
+        });
+      }
+      const localPath = typeof row.local_path === 'string' ? row.local_path.trim() : '';
+      const downloadError = typeof row.download_error === 'string' ? row.download_error.trim() : '';
+      if (localPath && !downloadError) {
+        throw new VideoLabError(409, `Video task '${taskId}' is already downloaded.`, 'ALREADY_DOWNLOADED', { taskId });
+      }
+      const videoUrl = typeof row.video_url === 'string' ? row.video_url.trim() : '';
+      if (!videoUrl) {
+        throw new VideoLabError(422, `Video task '${taskId}' has no remote URL.`, 'NO_REMOTE_URL', { taskId });
+      }
+
+      const redownloadVideo = requireDependency(deps.redownloadVideo, 'redownloadVideo', 3);
+      const result = await redownloadVideo(taskId);
+      const task = getVideoTask(taskId) || row;
+      if (!result.ok) {
+        return res.status(502).json({
+          error: result.error || 'Video download failed.',
+          code: 'VIDEO_DOWNLOAD_FAILED',
+          task,
+        });
+      }
+      return res.json({ task });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  app.delete('/api/video-lab/tasks/:taskId', (req: Request, res: Response) => {
+    try {
+      const projectId = queryText(req, 'projectId');
+      const taskId = String(req.params.taskId || '');
+      const getVideoTask = requireDependency(deps.getVideoTask, 'getVideoTask');
+      const row = getVideoTask(taskId);
+      if (!row) {
+        throw new VideoLabError(404, `Video task '${taskId}' was not found.`, 'TASK_NOT_FOUND', { taskId });
+      }
+      const { project } = findProjectAndShot(deps.readDb, projectId, String(row.shot_id || ''));
+      if (row.status === 'in_progress') {
+        throw new VideoLabError(422, `Video take '${taskId}' is still in progress.`, 'TAKE_IN_PROGRESS', { taskId });
+      }
+      const projectShots = Array.isArray(project.newShots) ? project.newShots : [];
+      if (projectShots.some((shot: any) => String(shot?.finalVideoTaskId || '') === taskId)) {
+        throw new VideoLabError(422, `Video take '${taskId}' is a final take.`, 'TAKE_IS_FINAL', { taskId });
+      }
+
+      const deleteVideoTaskRow = requireDependency(deps.deleteVideoTaskRow, 'deleteVideoTaskRow', 3);
+      deleteVideoTaskRow(taskId);
+      return res.json({ deleted: taskId });
     } catch (error) {
       return sendError(res, error);
     }
