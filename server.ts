@@ -7496,6 +7496,25 @@ registerImageGenRouting({
   uploadsDir: UPLOADS_DIR,
   configPath: path.join(__dirname, 'config', 'imageGenRouting.json'),
   optimizePrompt,
+  resolveStyleContext: (projectId, shotId) => {
+    try {
+      const contract = resolveEffectiveStyleContract(readDb, projectId);
+      const project = readDb().generated_scripts.find((item: any) => String(item.id) === String(projectId));
+      const scene = project ? sceneForShot(project, shotId) : null;
+      return {
+        contractVersion: contract.version,
+        styleOverlay: String(contract.styleOverlay || ''),
+        sceneId: scene?.id ?? null,
+        sceneOverlay: String(scene?.overlay || ''),
+        width: contract.width,
+        height: contract.height,
+        presetId: String(contract.storyboardPresetId || '').trim() || null,
+        loraStrength: Number.isFinite(contract.loraStrength) ? contract.loraStrength : null,
+      };
+    } catch {
+      return null;
+    }
+  },
 });
 
 // 11. POST /api/generate-image - Generate image using Pollinations AI, Kling AI, or local ComfyUI
