@@ -8,7 +8,7 @@
 > ③**Agnes 无视契约尺寸**：`width/height = req.body?.width || 1024`（routes.ts L148-149），前端不传宽高 → 恒为 1024×1024，契约画幅在该路径失效；
 > ④Agnes 无生成快照、无契约版本记录：saveAudit 只写 gen_provider/request_id/route_reason（routes.ts L51-79），契约改版后 Agnes 图无法判断是否过期（ComfyUI 侧有 comfyui_tasks.generationSnapshotJson + isStale 体系）；
 > ⑤风格契约有整数 `version` 字段（0=未锁草稿，≥1=已锁），`resolveEffectiveStyleContract` 返回 version/styleOverlay/storyboardPresetId/宽高/LoRA；场景经 `sceneForShot(project, shotId)` 取 `overlay` 与 `id`。
-> 分工：本包归你（coding+验证+提交）；CC 负责 server.ts 一处 deps 接线、逐行 review、真机双管线回归。
+> **分工（本包 Codex 主导，用户拍板）**：coding+deps 形状设计+server.ts 接线+验证+提交全部归你，一次交付完整可用；CC 只做逐行 review + 真机双管线回归。server.ts 按离线入队包先例开放热区（§二列明区域），越界即整包返工。
 > 基线 `feature/camera-derive@f996ef3`。分支：`git worktree add -b feat/style-bundle-p0 ../wt-style-bundle f996ef3`（强制独立 worktree）。
 
 ## 一、范围拍板（越界即返工）
@@ -16,10 +16,11 @@
 **做**：①StyleBundle 类型与组装（imageGen 模块内）；②Agnes 路径消费 bundle：项目/场景 overlay 注入（与 ComfyUI 逐字同框架语+同去重语义）、契约尺寸继承；③Agnes 生成快照 + `gen_style_contract_version` 版本追踪；④测试全覆盖。
 **不做**：风格锚图/referenceImages 接入（P1，需先 A/B 验证语义）、ComfyUI 管线任何改动（server.ts 禁碰——其注入逻辑是本包的"对齐基准"而非改造对象）、定稿门/离群检查（P2）、前端改动（宽高由服务端 bundle 决定，不经前端）。
 
-## 二、deps 扩展（注册形状，CC 接线）
+## 二、deps 扩展与接线（形状你定，接线你做；server.ts 热区）
+
+- `registerImageGenRouting(options)` 追加一个风格上下文回调（下面的形状是**参考基线，最终由你定**，满足 §三/§四 消费需求即可）；缺席/失败时 Agnes 路径行为与现状完全一致（仅打一条 warn），不 503：
 
 ```ts
-// registerImageGenRouting(options) 追加可选项；缺席时 Agnes 路径行为与现状完全一致（仅打一条 warn），不 503
 resolveStyleContext?: (projectId: string, shotId: string) => {
   contractVersion: number;          // resolveEffectiveStyleContract().version（0=草稿）
   styleOverlay: string;             // 可空串
@@ -32,11 +33,12 @@ resolveStyleContext?: (projectId: string, shotId: string) => {
 } | null;                           // 项目不存在等异常返回 null
 ```
 
-模块自身不 import style-contract/scene-reference（模块边界归 CC 在 server.ts 用现成导出组装）。
+- **server.ts 热区（仅此一处）**：`registerImageGenRouting({...})` 调用点——由你接线该回调，用 server.ts **既有 import** 的 `resolveEffectiveStyleContract` + `sceneForShot` 组装，整体 try/catch 返 null。不新增 import、不碰调用点之外的任何 server.ts 代码。
+- imageGen 模块自身仍不得 import style-contract/scene-reference（模块边界经 deps 回调解耦）。
 
 ## 三、StyleBundle 组装与 Agnes 消费（`server/providers/imageGen/**`）
 
-1. 新文件 `styleBundle.ts`：纯函数 `composeAgnesPrompt(basePrompt, bundle)` 与 `buildStyleBundle(context)`——把注入规则收敛成可单测的纯逻辑。
+1. 组织方式你定（参考：新文件 `styleBundle.ts`，纯函数 `composeAgnesPrompt` / `buildStyleBundle`）——硬要求只有一条：注入规则必须收敛成可单测的纯逻辑，不散落在路由 handler 里。
 2. **注入规则（与 ComfyUI 逐字对齐，这是"同一配方"的含义）**：
    - 项目 overlay 非空且 `!prompt.includes(overlay)` → 追加段落 `Project art direction style overlay (style only; preserve shot content and composition): ${overlay}`；
    - 场景 overlay 非空且未含 → 追加 `Scene reference (environment only; preserve shot content, composition and characters): ${sceneOverlay}`；
@@ -70,10 +72,11 @@ resolveStyleContext?: (projectId: string, shotId: string) => {
 
 ## 六、边界（违反即返工）
 
-- **允许改动**：`server/providers/imageGen/**` 及其测试、证据文档——此外零改动。
-- **禁碰**：server.ts（deps 接线归 CC）、server/modules/**（style-contract/scene-reference 只经 CC 接线间接消费）、src/**、config/**。
+- **允许改动**：`server/providers/imageGen/**` 及其测试、server.ts **仅限 §二列明的 registerImageGenRouting 调用点**、证据文档——此外零改动。
+- **禁碰**：server.ts 其余全部（含 ComfyUI 管线的 overlay 注入区——它是对齐基准）、server/modules/**（style-contract/scene-reference 只经 deps 回调间接消费，不得直接 import 进 imageGen 模块）、src/**、config/**。
 - 不建表、不改 schema、不加依赖。提交前缀 `feat(style-bundle): ...`，不 push，完成通知 CC。
+- **接线自验**：因接线归你，验收须含一次隔离起服（SQLITE_DB_PATH 临时库先例）证明 deps 真实生效：真实契约数据下 Agnes 请求（stub provider）拿到注入后 prompt + 契约尺寸 + 版本字段——不得只靠单测 stub 宣称接线完成。
 
 ## 七、CC 后续（非 Codex 范围）
 
-server.ts 接线 `resolveStyleContext`（resolveEffectiveStyleContract + sceneForShot 组装，try/catch 返 null）。真机：空镜 Agnes 生成 → 检查 prompt 注入日志、契约尺寸生效（实测响应图尺寸 vs 1024 旧值）、shot JSON 版本字段、契约改版后新旧图版本可区分；ComfyUI 侧零回归抽查。**P1 前置调研另行**：Agnes referenceImages 语义 A/B（锚图是否复制主体/构图）、ComfyUI 预设的 IPAdapter 节点映射能力。
+逐行 review（重点：server.ts 热区越界审计、框架语逐字比对）+ 真机：真实 Agnes 空镜生成 → 注入日志、实测响应图尺寸（vs 1024 旧值）、shot JSON 版本字段、契约改版后新旧图版本可区分；ComfyUI 侧零回归抽查。**P1 前置调研另行**：Agnes referenceImages 语义 A/B（锚图是否复制主体/构图）、ComfyUI 预设的 IPAdapter 节点映射能力。
