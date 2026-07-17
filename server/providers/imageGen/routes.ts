@@ -4,6 +4,15 @@ import type Database from 'better-sqlite3';
 import { AgnesClient } from '../agnesClient.ts';
 import { AgnesImageProvider } from './agnesImageProvider.ts';
 import { ImageGenRouter } from './router.ts';
+import {
+  appendStyleBundleSummary,
+  buildStyleBundle,
+  composeAgnesPrompt,
+  summarizeStyleBundle,
+  type ImageStyleContext,
+  type StyleBundle,
+  type StyleBundleSummary,
+} from './styleBundle.ts';
 import { ImageGenValidationError, type ImageGenProvider, type ImageGenProviderName } from './types.ts';
 
 type OptimizePrompt = (prompt: string, isCharacter: boolean, style?: string) => Promise<string>;
@@ -19,7 +28,16 @@ function isExistingImageOperation(body: any): boolean {
 
 function rawMeta8k(value: unknown): string {
   const json = JSON.stringify(value ?? null);
-  return Buffer.from(json).subarray(0, 8192).toString('utf8');
+  const bytes = Buffer.byteLength(json);
+  if (bytes <= 8192) return json;
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return JSON.stringify({
+    ...(record.styleBundle === undefined ? {} : { styleBundle: record.styleBundle }),
+    providerRawMetaTruncated: true,
+    originalBytes: bytes,
+  });
 }
 
 function errorText(value: unknown): string {
@@ -50,7 +68,14 @@ function saveAudit(
   targetId: string,
   provider: ImageGenProviderName,
   reason: string,
-  options: { requestId?: string | null; error?: string | null; rawMeta?: unknown; remoteUrl?: string | null; imagePath?: string },
+  options: {
+    requestId?: string | null;
+    error?: string | null;
+    rawMeta?: unknown;
+    remoteUrl?: string | null;
+    imagePath?: string;
+    styleContractVersion?: number | null;
+  },
 ) {
   const located = findShot(db, projectId, targetId, undefined);
   if (located) {
@@ -59,6 +84,11 @@ function saveAudit(
     located.shot.provider_route_reason = reason;
     located.shot.provider_error = options.error || null;
     if (options.imagePath) located.shot.imageUrl = options.imagePath;
+    if (options.styleContractVersion === null) {
+      delete located.shot.gen_style_contract_version;
+    } else if (options.styleContractVersion !== undefined) {
+      located.shot.gen_style_contract_version = options.styleContractVersion;
+    }
     db.prepare("INSERT OR REPLACE INTO store (key, value) VALUES ('generated_scripts', ?)").run(JSON.stringify(located.scripts));
   }
   const now = new Date().toISOString();
@@ -84,6 +114,7 @@ export function registerImageGenRouting(options: {
   uploadsDir: string;
   configPath: string;
   optimizePrompt: OptimizePrompt;
+  resolveStyleContext?: (projectId: string, shotId: string) => ImageStyleContext | null;
   createAgnesProvider?: () => ImageGenProvider;
 }) {
   const router = new ImageGenRouter(options.configPath);
@@ -137,25 +168,83 @@ export function registerImageGenRouting(options: {
       return res.status(409).json({ error: 'An Agnes image generation for this shot is already in progress.', provider: 'agnes' });
     }
     inFlightAgnes.add(inFlightKey);
+    let styleBundle: StyleBundle | null = null;
+    let styleBundleSummary: StyleBundleSummary | null = null;
     try {
-      const prompt = req.body?.skipTranslation
+      try {
+        if (!options.resolveStyleContext) {
+          console.warn('[ImageGenRouter]', JSON.stringify({
+            timestamp: new Date().toISOString(),
+            event: 'style_context_unavailable',
+            project_id: projectId,
+            shot_id: targetId,
+            reason: 'resolver_missing',
+          }));
+        } else {
+          const context = options.resolveStyleContext(projectId, targetId);
+          if (context) {
+            styleBundle = buildStyleBundle(context);
+          } else {
+            console.warn('[ImageGenRouter]', JSON.stringify({
+              timestamp: new Date().toISOString(),
+              event: 'style_context_unavailable',
+              project_id: projectId,
+              shot_id: targetId,
+              reason: 'resolver_returned_null',
+            }));
+          }
+        }
+      } catch (error: any) {
+        console.warn('[ImageGenRouter]', JSON.stringify({
+          timestamp: new Date().toISOString(),
+          event: 'style_context_unavailable',
+          project_id: projectId,
+          shot_id: targetId,
+          reason: 'resolver_failed',
+          error: String(error?.message || error),
+        }));
+      }
+
+      const optimizedPrompt = req.body?.skipTranslation
         ? String(req.body?.prompt || '')
         : await options.optimizePrompt(String(req.body?.prompt || ''), false, req.body?.style);
+      const composed = composeAgnesPrompt(optimizedPrompt, styleBundle);
+      const width = req.body?.width === undefined ? Number(styleBundle?.width ?? 1024) : Number(req.body.width);
+      const height = req.body?.height === undefined ? Number(styleBundle?.height ?? 1024) : Number(req.body.height);
+      styleBundleSummary = styleBundle
+        ? summarizeStyleBundle(styleBundle, composed.injected, width, height)
+        : null;
       const provider = createAgnesProvider();
       const result = await provider.generate({
         shotId: located.index,
-        prompt,
-        width: Number(req.body?.width || 1024),
-        height: Number(req.body?.height || 1024),
+        prompt: composed.prompt,
+        width,
+        height,
         seed: req.body?.seed === undefined ? undefined : Number(req.body.seed),
         referenceImages: Array.isArray(req.body?.referenceImages) ? req.body.referenceImages.map(String) : undefined,
       });
       const meta = result.rawMeta as Record<string, any>;
-      saveAudit(options.db, projectId, targetId, result.provider, decision.reason, { requestId: result.requestId, rawMeta: result.rawMeta, remoteUrl: meta?.remote_url, imagePath: result.imagePath });
-      return res.json({ success: true, provider: result.provider, requestId: result.requestId, imageUrl: result.imagePath, seed: result.seedUsed });
+      saveAudit(options.db, projectId, targetId, result.provider, decision.reason, {
+        requestId: result.requestId,
+        rawMeta: appendStyleBundleSummary(result.rawMeta, styleBundleSummary),
+        remoteUrl: meta?.remote_url,
+        imagePath: result.imagePath,
+        styleContractVersion: styleBundle?.contractVersion ?? null,
+      });
+      return res.json({
+        success: true,
+        provider: result.provider,
+        requestId: result.requestId,
+        imageUrl: result.imagePath,
+        seed: result.seedUsed,
+        styleContractVersion: styleBundle?.contractVersion,
+      });
     } catch (error: any) {
       const message = String(error?.message || error);
-      saveAudit(options.db, projectId, targetId, 'agnes', decision.reason, { error: message, rawMeta: error?.raw });
+      saveAudit(options.db, projectId, targetId, 'agnes', decision.reason, {
+        error: message,
+        rawMeta: appendStyleBundleSummary(error?.raw, styleBundleSummary),
+      });
       console.error('[ImageGenRouter]', JSON.stringify({ timestamp: new Date().toISOString(), event: 'provider_failed', project_id: projectId, shot_id: targetId, provider: 'agnes', reason: decision.reason, error: message }));
       return res.status(error instanceof ImageGenValidationError ? 400 : 502).json({ error: message, provider: 'agnes' });
     } finally {
