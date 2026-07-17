@@ -7,8 +7,31 @@ import { isReadableFile, getLocalPath, sanitizeFilename, sceneExportFile } from 
 
 type DatabaseInstance = Database.Database;
 
+export type ExportDeckPhase =
+  | 'started'
+  | 'directory-ready'
+  | 'assets-ready'
+  | 'pptx-started'
+  | 'pptx-written'
+  | 'manifest-started'
+  | 'manifest-written'
+  | 'zip-started'
+  | 'zip-written'
+  | 'completed'
+  | 'failed';
+
+export type ExportDeckPhaseEvent = {
+  phase: ExportDeckPhase;
+  projectId: string;
+  exportRelDir: string | null;
+  elapsedMs: number;
+  failedPhase?: Exclude<ExportDeckPhase, 'failed'>;
+  errorCode?: string;
+};
+
 export interface ExportDeckConfig {
   uploadsDir: string;
+  onExportPhase?: (event: ExportDeckPhaseEvent) => void;
   videoDelivery?: {
     getVideoTask: (taskId: string) => VideoTaskRow | undefined;
     probeVideo: (absPath: string) => VideoProbe | null;
@@ -53,6 +76,24 @@ type FinalVideoDelivery = {
   requested: { durationSec: number; fps: number; resolution: string } | null;
   actual: VideoProbe | null;
 };
+
+function createExportDirectory(uploadsDir: string, projectId: string): { exportRelDir: string; exportDir: string } {
+  const projectRelDir = `exports/${projectId}`;
+  fs.mkdirSync(path.join(uploadsDir, projectRelDir), { recursive: true });
+  const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
+  for (let suffix = 0; suffix < 1_000; suffix += 1) {
+    const directoryName = suffix === 0 ? timestamp : `${timestamp}-${suffix}`;
+    const exportRelDir = `${projectRelDir}/${directoryName}`;
+    const exportDir = path.join(uploadsDir, exportRelDir);
+    try {
+      fs.mkdirSync(exportDir);
+      return { exportRelDir, exportDir };
+    } catch (error: any) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+  }
+  throw new Error('Unable to reserve a unique export directory.');
+}
 
 function readScripts(db: DatabaseInstance): any[] {
   const row = db.prepare("SELECT value FROM store WHERE key = 'generated_scripts'").get() as { value: string } | undefined;
@@ -373,17 +414,39 @@ export function registerExportDeckModule(
       });
     }
 
+    const startedAt = Date.now();
+    let exportRelDir: string | null = null;
+    let activePhase: Exclude<ExportDeckPhase, 'failed'> = 'started';
+    const emitPhase = (
+      phase: ExportDeckPhase,
+      failure?: { failedPhase: Exclude<ExportDeckPhase, 'failed'>; errorCode: string },
+    ) => {
+      if (phase !== 'failed') activePhase = phase;
+      const event: ExportDeckPhaseEvent = {
+        phase,
+        projectId,
+        exportRelDir,
+        elapsedMs: Date.now() - startedAt,
+        ...failure,
+      };
+      try {
+        config.onExportPhase?.(event);
+      } catch (diagnosticsError: any) {
+        console.error('[Export Deck Diagnostics Error]', diagnosticsError?.message || diagnosticsError);
+      }
+    };
+    emitPhase('started');
+
     try {
-      // Setup filesystem safe timestamp directory name
-      // replacing all : and . with -
-      const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
-      const exportRelDir = `exports/${projectId}/${timestamp}`;
-      const exportDir = path.join(uploadsDir, exportRelDir);
+      // Atomically reserve a filesystem-safe directory so same-millisecond exports never overwrite each other.
+      const reservedExport = createExportDirectory(uploadsDir, projectId);
+      exportRelDir = reservedExport.exportRelDir;
+      const exportDir = reservedExport.exportDir;
       const finalsDir = path.join(exportDir, 'finals');
 
       // Create directories
-      fs.mkdirSync(exportDir, { recursive: true });
       fs.mkdirSync(finalsDir, { recursive: true });
+      emitPhase('directory-ready');
 
       // Process and copy images for each shot checking strictly for readability
       for (const shot of shotsData) {
@@ -607,22 +670,29 @@ ${scenesReadmeSection}${finalVideosReadmeSection}
 `;
 
       fs.writeFileSync(readmePath, readmeContent, 'utf8');
+      emitPhase('assets-ready');
 
       // Generate PPTX slide deck
       const pptxFileName = 'storyboard-deck.pptx';
       const pptxPath = path.join(exportDir, pptxFileName);
+      emitPhase('pptx-started');
       await generatePptx(script, mode, shotsData, pptxPath, uploadsDir);
+      emitPhase('pptx-written');
 
       // Generate Manifest JSON
       const manifestFileName = 'storyboard-manifest.json';
       const manifestPath = path.join(exportDir, manifestFileName);
+      emitPhase('manifest-started');
       const manifestContent = generateManifest(script, mode, shotsData, exportRelDir, uploadsDir);
       fs.writeFileSync(manifestPath, manifestContent);
+      emitPhase('manifest-written');
 
       // Create the ZIP package recursively scanning the exportDir (excluding the zip file itself)
       const zipFileName = 'storyboard-delivery.zip';
       const zipPath = path.join(exportDir, zipFileName);
+      emitPhase('zip-started');
       await createExportZip(exportDir, zipPath);
+      emitPhase('zip-written');
 
       // Format response returning browser accessible URL paths
       const responseData = {
@@ -637,8 +707,13 @@ ${scenesReadmeSection}${finalVideosReadmeSection}
         summary: exportSummary,
       };
 
+      emitPhase('completed');
       return res.json(responseData);
     } catch (err: any) {
+      emitPhase('failed', {
+        failedPhase: activePhase,
+        errorCode: String(err?.code || err?.name || 'Error'),
+      });
       console.error('[Export Deck Error]', err);
       return res.status(500).json({ error: `Failed to export deck: ${err.message}` });
     }

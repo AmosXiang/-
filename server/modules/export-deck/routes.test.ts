@@ -54,6 +54,12 @@ function createVideoExportFixture(
   }
   const tasks = new Map(videoTasks.map(row => [row.id, row]));
   const probeCalls: string[] = [];
+  const exportEvents: Array<{
+    phase: string;
+    projectId: string;
+    exportRelDir: string | null;
+    elapsedMs: number;
+  }> = [];
   const routes: Record<string, Function> = {};
   const mockApp: any = {
     get: (url: string, handler: Function) => { routes[`GET:${url}`] = handler; },
@@ -61,6 +67,7 @@ function createVideoExportFixture(
   };
   registerExportDeckModule(mockApp, db, {
     uploadsDir: tempUploadsDir,
+    onExportPhase: event => exportEvents.push(event),
     videoDelivery: {
       getVideoTask: taskId => tasks.get(taskId),
       probeVideo: absPath => {
@@ -74,6 +81,7 @@ function createVideoExportFixture(
     db,
     routes,
     probeCalls,
+    exportEvents,
     cleanup: () => {
       db.close();
       fs.rmSync(tempUploadsDir, { recursive: true, force: true });
@@ -923,4 +931,103 @@ test('final-video delivery uses probe output, defaults to references, and packag
   const zip = await JSZipConstructor.loadAsync(fs.readFileSync(path.join(packaged.body.exportDir, 'storyboard-delivery.zip')));
   assert.ok(zip.file('videos/shot-01.mp4'));
   assert.equal(fixture.probeCalls.length, 5, 'delivery-check plus two export preflight/copy rechecks use only probeVideo');
+});
+
+test('three sequential exports finish every phase and leave complete deliverables', async (t) => {
+  const script = {
+    id: 'repeated-export-project',
+    newTitle: 'Repeated export diagnostics',
+    newNarrative: {},
+    newCharacters: [],
+    newShots: [{
+      id: 'repeated-shot-1',
+      timestamp: '00:00',
+      durationSec: 3,
+      description: 'Static diagnostic shot',
+      optimizedPrompt: 'Static diagnostic shot',
+      camera: { move: 'static', speed: 'slow', note: '' },
+      framing: { shotSize: 'wide', angle: 'eye-level' },
+      isMaster: true,
+      isStale: false,
+    }],
+  };
+  const fixture = createVideoExportFixture(script, []);
+  t.after(fixture.cleanup);
+
+  const exportDirs: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const res = makeMockRes();
+    await fixture.routes['POST:/api/generated-scripts/:id/export-deck'](
+      { params: { id: script.id }, body: { mode: 'review' } },
+      res,
+    );
+    assert.equal(res.statusCode, 200);
+    exportDirs.push(res.body.exportDir);
+    for (const fileName of ['storyboard-deck.pptx', 'storyboard-manifest.json', 'storyboard-delivery.zip']) {
+      assert.ok(fs.statSync(path.join(res.body.exportDir, fileName)).size > 0, `${fileName} is non-empty`);
+    }
+  }
+
+  assert.equal(new Set(exportDirs).size, 3, 'each export uses a distinct directory');
+  const expectedPhases = [
+    'started',
+    'directory-ready',
+    'assets-ready',
+    'pptx-started',
+    'pptx-written',
+    'manifest-started',
+    'manifest-written',
+    'zip-started',
+    'zip-written',
+    'completed',
+  ];
+  assert.deepEqual(
+    fixture.exportEvents.map(event => event.phase),
+    [...expectedPhases, ...expectedPhases, ...expectedPhases],
+  );
+  assert.ok(fixture.exportEvents.every(event => (
+    event.projectId === script.id
+    && Number.isInteger(event.elapsedMs)
+    && event.elapsedMs >= 0
+    && (event.exportRelDir === null || !path.isAbsolute(event.exportRelDir))
+  )));
+});
+
+test('export failure diagnostics identify the active phase without exposing an absolute export path', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-deck-failure-test-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const blockedUploadsPath = path.join(tempDir, 'not-a-directory');
+  fs.writeFileSync(blockedUploadsPath, 'blocked');
+
+  const db = new Database(':memory:');
+  t.after(() => db.close());
+  db.exec('CREATE TABLE store (key TEXT PRIMARY KEY, value TEXT)');
+  db.prepare("INSERT INTO store (key, value) VALUES ('generated_scripts', ?)").run(JSON.stringify([{
+    id: 'failed-export-project',
+    newTitle: 'Failure diagnostics',
+    newNarrative: {},
+    newCharacters: [],
+    newShots: [],
+  }]));
+
+  const routes: Record<string, Function> = {};
+  const events: any[] = [];
+  registerExportDeckModule({
+    get: (url: string, handler: Function) => { routes[`GET:${url}`] = handler; },
+    post: (url: string, handler: Function) => { routes[`POST:${url}`] = handler; },
+  } as any, db, {
+    uploadsDir: blockedUploadsPath,
+    onExportPhase: event => events.push(event),
+  });
+
+  const res = makeMockRes();
+  await routes['POST:/api/generated-scripts/:id/export-deck'](
+    { params: { id: 'failed-export-project' }, body: { mode: 'review' } },
+    res,
+  );
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(events.map(event => event.phase), ['started', 'failed']);
+  assert.equal(events[1].failedPhase, 'started');
+  assert.equal(events[1].errorCode, 'ENOTDIR');
+  assert.equal(events[1].exportRelDir, null);
 });

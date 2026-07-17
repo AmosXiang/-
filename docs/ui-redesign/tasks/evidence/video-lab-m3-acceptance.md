@@ -61,7 +61,7 @@
 
 - export-deck 注册追加 `videoDelivery`：`getVideoTask=videoTaskRow`；`probeVideo` = `execFileSync` ffprobe（`-show_entries stream=width,height,r_frame_rate,duration -of json`，10s 超时，`windowsHide:true`，失败记日志返回 null）。ffprobe 路径解析：`FFPROBE_PATH` env 优先 → `FFMPEG_PATH` 同目录 sibling → PATH。
 - video-lab 注册追加：`redownloadVideo`（复用 `downloadCompletedVideo` 内核：临时文件+rename、成功回填 local_path 清 download_error；失败把真实错误写回 download_error）、`deleteVideoTaskRow`（getLocalPath 解析后 unlink 本地文件 + DELETE 行）。
-- 环境修正：preview 工具拉起的子进程 PATH 不含 WinGet ffmpeg 目录（首轮 actual 全 null，日志 `[ffprobe] probe failed: ENOENT`）→ `.env` 增配 `FFMPEG_PATH` 绝对路径（正斜杠写法避开转义），代码同时支持 `FFPROBE_PATH` 直接覆盖。
+- 环境修正（原记录，后经独立审计降级）：preview 工具拉起的子进程 PATH 不含 ffprobe（首轮 actual 全 null，日志 `[ffprobe] probe failed: ENOENT`）。`.env` 虽增配了 `FFMPEG_PATH`，但该值指向 `ffmpeg-win-x86_64-v7.1.exe`，同目录不存在派生出的 `ffprobe-win-x86_64-v7.1.exe`，当前 PATH 也找不到 ffprobe。因此只能证明当次运行曾有可用 ffprobe，不能证明冷启动或两种启动方式已稳定。
 - lint PASS；全模块 60/60 PASS。
 
 ### 5.2 真机结果（真实定稿数据，项目 1783192733645）
@@ -73,15 +73,41 @@
 | 导出（打包） | `videos/shot-01.mp4`、`shot-02.mp4` 落盘；ZIP 内含 `videos/*`；README §3.6 逐镜实测值；打包副本 ffprobe 复验 1088x832 |
 | 备忘①② | manifest `requested=1152x768/3s`（快照口径）与 `actual=1088x832/3.375s`（实测）并存分离，`normalized_*` 未进 actual |
 | retry-download 守卫 | 已下载→409 `ALREADY_DOWNLOADED`；failed 任务→422 `TASK_NOT_COMPLETED` |
-| retry-download 真路径 | 对标记 download_error 的真实 take 重试 → 真实重下 426854 字节、download_error 清空（Agnes URL 当时仍有效；过期失败路径由 502 透传逻辑+单测覆盖） |
+| retry-download 真路径 | 对标记 download_error 的真实 take 重试 → 真实重下 426854 字节、download_error 清空；Agnes URL 当时仍有效，因此“过期 URL”仅有 502 透传逻辑与单测覆盖，真机项仍 **UNVERIFIED** |
 | DELETE 守卫 | 定稿 take→422 `TAKE_IS_FINAL`；in_progress 合成行→422 `TAKE_IN_PROGRESS` |
 | DELETE 成功 | 合成 completed 行删除后：DB 行消失 + 本地文件消失；测试数据零残留 |
-| UI | DeliveryPanel 复选框默认关、显示"预计增加 0.5 MB"；VideoLabPanel M3 头；定稿 Take 无删除按钮、非定稿有删除+确认层；capability `minSubmitIntervalMs:61000` 下发 |
-| M1/M2 回归 | providers 端点正常（新字段向后兼容）；takes 列表 2×completed；批量默认选择正确排除已定稿（74→72） |
+| UI | 人工走查记录：DeliveryPanel 复选框默认关、显示“预计增加 0.5 MB”；VideoLabPanel M3 头；定稿 Take 无删除按钮、非定稿有删除+确认层；capability `minSubmitIntervalMs:61000` 下发。未保存截图、浏览器 trace 或点击录屏，证据强度为 **人工记录** |
+| M1/M2 回归 | 仅 smoke：providers 端点正常（新字段向后兼容）；takes 列表 2×completed；批量默认选择正确排除已定稿（74→72）。未重跑 M1 真实单镜生成与 M2 真实批量/定稿全流程 |
 
 ### 5.3 真机备注
 
-- 首次导出出现一次 handler 挂起（README 写出后 10 分钟无 PPTX，进程持续烧 CPU），重启服务后同代码同数据 1.85s 完成，另一无视频项目对照导出 2m38s 完成——判定为一次性环境异常（旧进程状态污染），非 M3 代码缺陷；后续多轮导出均秒级。
+- 首次导出出现一次 handler 挂起（README 写出后 10 分钟无 PPTX，进程持续烧 CPU），重启服务后同代码同数据 1.85s 完成；另一无视频项目对照导出耗时 2m38s。因没有当次堆栈、profile、阶段日志，且两个项目规模不同，根因标记为 **UNRESOLVED FLAKE**；现有证据不足以排除代码、数据或进程状态因素。
 - 无视频项目（`videoDelivery` 生效但项目无 `finalVideoTaskId`）导出输出不含任何视频字段，与 M2 行为一致。
 
-结论：M3 真机链路 **PASS**。
+### 5.4 独立复核结论（2026-07-16，Codex）
+
+- 独立重跑原 M3 自动化：export-deck 8/8、video-lab 21/21，均 PASS。
+- 对两次真实导出产物复核：源视频与 ZIP 副本字节数、SHA-256 分别一致；四个 MP4 均通过 ffmpeg 完整 decode；ZIP 路径、manifest 的 requested/actual 隔离与绝对路径剥离均符合设计。
+- retry 任务当前数据库行与 426854 字节本地文件支持“有效 URL 真实重下成功”，不支持“过期 URL 真机失败已验”。
+- 结论调整为：M3 核心交付能力 **CONDITIONAL PASS**；ffprobe 冷启动可复现性、导出挂起诊断、过期 URL 真机失败与完整 M1/M2 回归不得写作已闭环。
+
+## 6. 独立 hardening（2026-07-16，Codex）
+
+分支：`codex/video-lab-m3-hardening`；固定基线：`9846be1`。
+
+- ffprobe 命令解析改为可单测模块：`FFPROBE_PATH` 优先；仅在 sibling **真实存在**时从 `FFMPEG_PATH` 使用；否则回退 PATH，不再凭文件名虚构可执行文件。
+- `.env.example` 明示 `FFPROBE_PATH`；当 `FFMPEG_PATH` 使用 imageio 等自定义单文件 ffmpeg 时，要求配置真实 ffprobe 路径。
+- 服务启动时执行一次 `ffprobe -version` 自检，明确记录来源与可用性；不可用时禁用 actual 探测并给出 `FFPROBE_PATH` 修复提示，避免每个视频重复 ENOENT。
+- ffprobe JSON 解析独立校验正数尺寸、帧率与非负时长，非法/畸形输出返回 null。
+- export-deck 增加 started、assets、PPTX、manifest、ZIP、completed/failed 的结构化阶段事件与累计耗时；失败事件记录当时阶段与错误码，不写绝对导出路径。
+- 导出目录改为原子保留；同一毫秒触发的导出以数字后缀分离，不再复用目录覆盖文件。
+- 新增连续三次导出回归：每次 PPTX/manifest/ZIP 均非空、目录互异、十个阶段完整结束；另有失败夹具验证 `failedPhase` 与错误码。
+
+| hardening 验证 | 结果 |
+| --- | --- |
+| `tsx --test server/modules/export-deck/ffprobe.test.ts server/modules/export-deck/routes.test.ts` | PASS，18/18，0 fail |
+| 全部 `server/modules/**/*.test.ts` | PASS，70/70，0 fail |
+| `npm run lint` | PASS，退出码 0 |
+| `npm run build` | PASS，2091 modules transformed，退出码 0；仅有既有 chunk-size warning |
+
+说明：hardening 提升可诊断性和环境诚实度，但不伪称已复现并定位历史挂起，也未调用真实 Agnes 制造过期 URL。

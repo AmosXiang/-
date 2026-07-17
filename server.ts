@@ -17,6 +17,11 @@ import { registerCameraDeriveModule, cameraDeriveTaskNodeMappings, CAMERA_DERIVE
 import { registerShotReviewModule } from './server/modules/shot-review/index.ts';
 import { detectComfyProcesses, getPort8001OwnerPids as port8001OwnerPids } from './comfyui-health.ts';
 import { registerExportDeckModule } from './server/modules/export-deck/index.ts';
+import {
+  checkFfprobeAvailability,
+  parseFfprobeOutput,
+  resolveFfprobeCommand,
+} from './server/modules/export-deck/ffprobe.ts';
 import { getLocalPath, isReadableFile } from './server/modules/export-deck/naming.ts';
 import { registerStoryVersionModule } from './server/modules/story-version/index.ts';
 import {
@@ -7894,15 +7899,29 @@ registerCameraDeriveModule(app, dbSqlite, {
 });
 registerShotReviewModule(app, dbSqlite, { mutateDb, uploadsDir: UPLOADS_DIR });
 
-// Video Lab M3: ffprobe lives next to the configured ffmpeg binary (or on PATH).
+// Video Lab M3: use a verified ffprobe sibling when it exists, otherwise PATH.
 // Manifest "actual" values must come from the file itself — provider-reported
 // normalized_size/normalized_seconds have twice disagreed with ffprobe on real runs.
-const FFPROBE_COMMAND = process.env.FFPROBE_PATH?.trim()
-  || (configuredFfmpegPath
-    ? path.join(path.dirname(configuredFfmpegPath), path.basename(configuredFfmpegPath).replace(/ffmpeg/i, 'ffprobe'))
-    : 'ffprobe');
+const ffprobeResolution = resolveFfprobeCommand({
+  ffprobePath: process.env.FFPROBE_PATH,
+  ffmpegPath: configuredFfmpegPath,
+});
+const FFPROBE_COMMAND = ffprobeResolution.command;
+if (ffprobeResolution.warning) console.warn(`[ffprobe] ${ffprobeResolution.warning}`);
+
+const ffprobeAvailability = checkFfprobeAvailability(FFPROBE_COMMAND);
+const ffprobeAvailable = ffprobeAvailability.available;
+if (ffprobeAvailable) {
+  console.info(`[ffprobe] ready (source=${ffprobeResolution.source})`);
+} else {
+  console.warn(
+    `[ffprobe] unavailable (source=${ffprobeResolution.source}, error=${ffprobeAvailability.errorCode}); `
+    + 'final-video actual metadata is disabled. Set FFPROBE_PATH to a verified executable.',
+  );
+}
 
 function probeVideoFile(absPath: string): { width: number; height: number; fps: number; durationSec: number } | null {
+  if (!ffprobeAvailable) return null;
   try {
     const output = execFileSync(FFPROBE_COMMAND, [
       '-v', 'error',
@@ -7911,15 +7930,7 @@ function probeVideoFile(absPath: string): { width: number; height: number; fps: 
       '-of', 'json',
       absPath,
     ], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
-    const stream = JSON.parse(output)?.streams?.[0];
-    if (!stream) return null;
-    const width = Number(stream.width);
-    const height = Number(stream.height);
-    const [num, den] = String(stream.r_frame_rate || '').split('/').map(Number);
-    const fps = Number.isFinite(num) && Number.isFinite(den) && den > 0 ? num / den : NaN;
-    const durationSec = Number(stream.duration);
-    if (![width, height, fps, durationSec].every(Number.isFinite)) return null;
-    return { width, height, fps, durationSec };
+    return parseFfprobeOutput(output);
   } catch (error: any) {
     console.error('[ffprobe] probe failed:', error?.code || error?.status || error?.message || error);
     return null;
@@ -7928,6 +7939,7 @@ function probeVideoFile(absPath: string): { width: number; height: number; fps: 
 
 registerExportDeckModule(app, dbSqlite, {
   uploadsDir: UPLOADS_DIR,
+  onExportPhase: event => console.info('[export-deck]', JSON.stringify(event)),
   videoDelivery: {
     getVideoTask: (taskId: string) => videoTaskRow(taskId) as any,
     probeVideo: probeVideoFile,
