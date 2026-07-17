@@ -106,3 +106,21 @@ CC should focus the line review and real-machine regression on:
 - confirming the route explanation remains accurate when `autoRoute=false` is exercised;
 - confirming the two explicit local operations still block while ComfyUI is offline;
 - confirming batch generation remains ComfyUI-only and unchanged.
+
+---
+
+## CC 复核与真机回归增补（2026-07-16/17，CC 执行）
+
+逐行 review PASS（范围审计：基线 e2ee9e1 起 diff 仅 App.tsx + 本文档；守卫下移、agnes 分支、taskId 后置 runtime 查询、重复 setGeneratingShotIndex 去重、选择器文案均符合任务书 §二/§三）。合并入 feature/camera-derive，lint PASS。
+
+真机（ComfyUI 全程离线、真实 Agnes）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 空镜 #74 新 UI 点击生成 | 请求发出 → 真实 Agnes 同步 → 卡片落图（shot-73-02b482d3…png）→ 反馈「图片已生成（Agnes 云端）。」→ 审计字段 gen_provider=agnes/request_id 写入 |
+| 含人物镜头 #16 点击生成 | 路由到 comfyui_local → 服务端 503 `COMFYUI_UNAVAILABLE` → 前端如实显示「ComfyUI 未连接：fetch failed」，零任务创建零污染（**Codex 指出的契约差异确认属实**：真实后端离线不入队而 503；"离线入队+警示"UI 分支现阶段仅 stub 可达，改服务端入队语义留待独立 server 包评估） |
+| 路由说明文案 | comfyui 选项下正确渲染 |
+| autoRoute=false 回退 | 改配置+**重启后**同样的空镜直调 → 503 走旧管线，零副作用；**配置在启动时读取，热改无效，切换必须重启**（真机实测确认）。验证后配置已还原 autoRoute=true |
+| 副作用核点 | uploads/images/agnes/ 最终仅 2 文件（#72、#74 各一），无游离生成；config 还原后 git 干净 |
+
+结论：适配包真机 **PASS**。遗留（不阻断）：①服务端"ComfyUI 离线入队"语义 → 独立 server 包待评估；②批量入口适配 → 后续包；③路由配置需重启生效 → 可在 server 包一并考虑热加载。
