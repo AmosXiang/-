@@ -3,24 +3,24 @@
 > 全文直接粘贴给 Codex。上下文自包含。
 > **热区特批**：本包按用户拍板破例开放 server.ts 两处列明区域（§二/§三），此外 server.ts 零改动；CC 逐行严审。这是 server.ts 首次对外包开放热区，越界即整包返工。
 > 背景（真机实证，见 `evidence/agnes-image-ui-adapt-acceptance.md` CC 增补节）：
-> ①`POST /api/generate-image` 的 ComfyUI 路径在建任务**前**做 `/system_stats` 预检，离线直接 `503 COMFYUI_UNAVAILABLE`（server.ts ~L7599 附近，`comfyFetch('/system_stats', {}, 3_000)`）——任务不入队；
-> ②队列 worker `submitComfyTask` 内 `assertComfyPreflight` 把 `!preflight.online` 当错误 throw，catch 后任务**直接标 failed**（server.ts ~L4360）——即使任务已入队，离线期间也会被 worker 打死；
+> ①`POST /api/generate-image` 的 ComfyUI 路径在建任务**前**做 `/system_stats` 预检，离线直接 `503 COMFYUI_UNAVAILABLE`（server.ts ~L7518，`comfyFetch('/system_stats', {}, 3_000)`）——任务不入队；
+> ②队列 worker `submitComfyTask` 内 `assertComfyPreflight` 把 `!preflight.online` 当错误 throw，catch 后任务**直接标 failed**（server.ts ~L4134-4220）——即使任务已入队，离线期间也会被 worker 打死；
 > ③前端 `handleGenerateShotImage` 的 taskId 分支已备好「任务已入队（id），但 ComfyUI 未连接，启动后才会开始执行」警示（cd8ae61 交付），当前仅 stub 可达——本包让它真实可达；
 > ④路由配置 `config/imageGenRouting.json` 在 `registerImageGenRouting` 启动时读取一次，热改无效（真机实证，切 autoRoute 需重启）。
 > 分工：本包归你（coding+验证+提交）；CC 逐行严审 + 真机回归。
-> 基线 `feature/camera-derive@7d09c0f`。分支：`git worktree add -b feat/comfy-offline-queue ../wt-offline-queue 7d09c0f`（强制独立 worktree）。
+> 基线 `feature/camera-derive@86b36d8`。分支：`git worktree add -b feat/comfy-offline-queue ../wt-offline-queue 86b36d8`（强制独立 worktree）。
 
 ## 一、目标语义（拍板）
 
 ComfyUI 离线时，路由/强制到本地的分镜生图任务**照常入队**（pending + 等待态），ComfyUI 上线后 worker 自动开始执行；离线不再产生 503 拒绝，也不再被 worker 误标 failed。Agnes/Pollinations/Kling 路径行为零变化。
 
-## 二、server.ts 热区 A：`/api/generate-image` 预检（约 L7595-7605）
+## 二、server.ts 热区 A：`/api/generate-image` 预检（约 L7514-7525）
 
 - 删除「离线即 503」返回；改为探测结果仅记录：`comfyOnline: boolean` 进日志与响应体（`{ taskId, comfyOnline }`，字段可选消费，前端现有 runtime 查询逻辑不依赖它）。
 - 探测失败时任务照常创建（pending，`stateDetail` 初值改为 `'waiting_for_comfyui'`；在线则维持现状初值）。
 - 409 duplicate 检查、风格契约无关逻辑、Agnes 路由拦截（在本 handler 之前）一概不动。
 
-## 三、server.ts 热区 B：worker 提交的等待语义（`submitComfyTask` catch 区约 L4340-4365 + `startComfyWorker` 约 L4665-4715）
+## 三、server.ts 热区 B：worker 提交的等待语义（`submitComfyTask` 约 L4134-4220 + `startComfyWorker` 约 L4684-4735）
 
 - `assertComfyPreflight` 本体不改。在 `submitComfyTask` 的 catch 中**区分错误类别**：错误信息匹配「ComfyUI 未连接」（即 `!preflight.online` 抛出的那条）→ **不判 failed**：任务回退 `status='pending'`、`stateDetail='waiting_for_comfyui'`、error 置 NULL、清 submittedAt；其余错误（多进程/dbLocked/权限/OOM/提交失败）维持现有 failed 逻辑逐字不变。
   - 实现允许改为在 catch 前显式捕获：对 preflight 结果先行 `if (!preflight.online)` 分支处理再 `assertComfyPreflight`，避免靠错误字符串匹配（推荐，语义清晰）。

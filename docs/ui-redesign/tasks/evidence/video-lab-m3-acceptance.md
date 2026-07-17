@@ -89,7 +89,7 @@
 - 独立重跑原 M3 自动化：export-deck 8/8、video-lab 21/21，均 PASS。
 - 对两次真实导出产物复核：源视频与 ZIP 副本字节数、SHA-256 分别一致；四个 MP4 均通过 ffmpeg 完整 decode；ZIP 路径、manifest 的 requested/actual 隔离与绝对路径剥离均符合设计。
 - retry 任务当前数据库行与 426854 字节本地文件支持“有效 URL 真实重下成功”，不支持“过期 URL 真机失败已验”。
-- 结论调整为：M3 核心交付能力 **CONDITIONAL PASS**；ffprobe 冷启动可复现性、导出挂起诊断、过期 URL 真机失败与完整 M1/M2 回归不得写作已闭环。
+- 独立复核当时的结论调整为：M3 核心交付能力 **CONDITIONAL PASS**；ffprobe 冷启动可复现性、导出挂起诊断、过期 URL 真机失败与完整 M1/M2 回归不得写作已闭环。其后 ffprobe 冷启动项已在 §6.1 真机闭环，其余边界不变。
 
 ## 6. 独立 hardening（2026-07-16，Codex）
 
@@ -109,5 +109,12 @@
 | 全部 `server/modules/**/*.test.ts` | PASS，70/70，0 fail |
 | `npm run lint` | PASS，退出码 0 |
 | `npm run build` | PASS，2091 modules transformed，退出码 0；仅有既有 chunk-size warning |
+
+### 6.1 合入后 ffprobe 冷启动真机闭环（2026-07-17）
+
+- hardening 以 `86b36d8` cherry-pick 到 `feature/camera-derive`（父提交 `35686b2`）并推送。
+- 重启 dev server 后，启动日志命中 `[ffprobe] ready (source=FFMPEG_PATH_SIBLING)`：解析器找到了 `FFMPEG_PATH` 旁真实存在的 ffprobe，并通过启动期 `ffprobe -version` 可执行性自检。
+- 此结果闭环“当前机器冷启动能否稳定发现并执行 ffprobe”缺口；不外推为历史 10 分钟 PPTX 挂起已定位，也不把过期 Agnes URL 真机失败或完整 M1/M2 回归写作已验证。
+- 当前诚实边界：历史导出挂起仍为 **UNRESOLVED FLAKE**；过期 Agnes URL 真机重下失败仍为 **UNVERIFIED**。因此 M3 核心能力维持 **CONDITIONAL PASS**，但 ffprobe 冷启动不再是未验项。
 
 说明：hardening 提升可诊断性和环境诚实度，但不伪称已复现并定位历史挂起，也未调用真实 Agnes 制造过期 URL。
