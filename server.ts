@@ -28,6 +28,8 @@ import {
 import { registerSceneReferenceModule, sceneForShot } from './server/modules/scene-reference/index.ts';
 import { registerVideoLabModule, type SubmitVideoTaskInput } from './server/modules/video-lab/index.ts';
 import { DEFAULT_COMFY_NEGATIVE_PROMPT } from './server/constants/comfyDefaults.ts';
+import { migrateImageProviderAudit } from './server/providers/imageGen/migrate.ts';
+import { registerImageGenRouting } from './server/providers/imageGen/routes.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -58,7 +60,7 @@ export type VideoTaskRequest = {
 };
 
 export type VideoTaskState =
-  | { status: 'pending'; progress?: number }
+  | { status: 'pending'; progress?: number; transientError?: string }
   | { status: 'completed'; videoUrl: string }
   | { status: 'failed'; error: string };
 
@@ -154,7 +156,16 @@ export class AgnesVideoProvider implements VideoProvider {
       response: raw,
     });
 
-    if (response.status === 503 || response.status >= 500) return { status: 'pending', progress: this.progress(payload.progress) };
+    // 503 是平台明确定义的"处理中",无限期视为 pending(仍受总轮询次数上限约束);
+    // 其余 5xx 视为瞬态错误:继续轮询但带上真实错误,由调用方做连续次数限制。
+    if (response.status === 503) return { status: 'pending', progress: this.progress(payload.progress) };
+    if (response.status >= 500) {
+      return {
+        status: 'pending',
+        progress: this.progress(payload.progress),
+        transientError: `Agnes poll returned HTTP ${response.status}: ${this.errorMessage(raw, response.status)}`,
+      };
+    }
     if (!response.ok) return { status: 'failed', error: this.errorMessage(raw, response.status) };
 
     const status = String(payload.status || '').toLowerCase();
@@ -311,6 +322,7 @@ dbSqlite.exec(`
 `);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_tasks_status_created ON video_tasks (status, created_at)`);
 dbSqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_tasks_shot_created ON video_tasks (shot_id, created_at)`);
+migrateImageProviderAudit(dbSqlite, path.join(__dirname, 'migrations', '001_add_image_provider_audit.sql'));
 
 // Video Lab M1: 参数快照列（PRAGMA 守卫迁移，先例 comfyui_tasks.origin）。
 const videoTaskColumns = new Set(
@@ -329,6 +341,10 @@ if (!comfyTaskColumns.has('origin')) {
 }
 if (!comfyTaskColumns.has('importedFromTaskId')) {
   dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN importedFromTaskId TEXT');
+}
+if (!comfyTaskColumns.has('importSha256')) {
+  // idx_comfy_manual_import_unique 引用该列;缺少此迁移时全新数据库无法启动。
+  dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN importSha256 TEXT');
 }
 if (!comfyTaskColumns.has('workflowPresetId')) {
   dbSqlite.exec('ALTER TABLE comfyui_tasks ADD COLUMN workflowPresetId TEXT');
@@ -472,6 +488,8 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 
 const AGNES_POLL_INTERVAL_MS = 5_000;
 const AGNES_MAX_POLL_ATTEMPTS = 120;
+// 网络错误与非 503 的 5xx 统一按瞬态处理:连续超过该次数(12 次 ≈ 1 分钟)则以最后一次真实错误终止任务。
+const AGNES_MAX_CONSECUTIVE_TRANSIENT_FAILURES = 12;
 const VIDEO_DURATION_FRAMES: Record<number, number> = { 3: 81, 5: 121, 10: 241, 18: 441 };
 const activeVideoPolls = new Set<string>();
 const videoTaskQueue = new PQueue({ concurrency: 1 });
@@ -545,13 +563,45 @@ async function executeVideoPoll(localTaskId: string): Promise<void> {
     const apiKey = String(process.env.AGNES_API_KEY || '').trim();
     if (!apiKey) throw new Error('AGNES_API_KEY environment variable is not configured.');
     const provider = new AgnesVideoProvider(apiKey);
+    let consecutiveTransientFailures = 0;
+    let lastTransientError = '';
+    const failWithTransientError = () => {
+      const now = new Date().toISOString();
+      dbSqlite.prepare(`UPDATE video_tasks SET status = 'failed', error = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
+        .run(lastTransientError, now, now, localTaskId);
+      console.error('[VideoProvider]', JSON.stringify({ timestamp: now, provider: 'agnes', event: 'poll_transient_limit', local_task_id: localTaskId, consecutive_failures: consecutiveTransientFailures, error: lastTransientError }));
+    };
     for (let attempt = 1; attempt <= AGNES_MAX_POLL_ATTEMPTS; attempt += 1) {
       const row = videoTaskRow(localTaskId);
       if (!row || !['pending', 'in_progress'].includes(row.status)) return;
       if (attempt > 1) await new Promise(resolve => setTimeout(resolve, AGNES_POLL_INTERVAL_MS));
-      const state = await provider.pollTask(String(row.provider_video_id || row.provider_task_id));
+      let state: VideoTaskState;
+      try {
+        state = await provider.pollTask(String(row.provider_video_id || row.provider_task_id));
+      } catch (error: any) {
+        // 单次网络错误不终止任务:与 5xx 同等做有限次重试,保留最后一次真实错误。
+        consecutiveTransientFailures += 1;
+        lastTransientError = String(error?.message || error);
+        agnesLog('poll_transient_error', { local_task_id: localTaskId, consecutive_failures: consecutiveTransientFailures, error: lastTransientError });
+        if (consecutiveTransientFailures >= AGNES_MAX_CONSECUTIVE_TRANSIENT_FAILURES) {
+          failWithTransientError();
+          return;
+        }
+        continue;
+      }
       const now = new Date().toISOString();
       if (state.status === 'pending') {
+        if (state.transientError) {
+          consecutiveTransientFailures += 1;
+          lastTransientError = state.transientError;
+          agnesLog('poll_transient_error', { local_task_id: localTaskId, consecutive_failures: consecutiveTransientFailures, error: lastTransientError });
+          if (consecutiveTransientFailures >= AGNES_MAX_CONSECUTIVE_TRANSIENT_FAILURES) {
+            failWithTransientError();
+            return;
+          }
+        } else {
+          consecutiveTransientFailures = 0;
+        }
         dbSqlite.prepare(`UPDATE video_tasks SET status = 'in_progress', progress = ?, updated_at = ? WHERE id = ?`)
           .run(state.progress ?? row.progress ?? null, now, localTaskId);
         continue;
@@ -662,6 +712,33 @@ app.get('/api/video-tasks/:id', (req, res) => {
   const row = videoTaskRow(req.params.id);
   if (!row) return res.status(404).json({ error: 'Video task not found.' });
   res.json(row);
+});
+
+// 运维重下端点:completed 任务下载失败(download_error)或本地 MP4 丢失时,
+// 用保存的远程 URL 重新尝试下载。远程 URL 的保留时长无保证,失败时如实记录。
+const activeVideoDownloads = new Set<string>();
+app.post('/api/video-tasks/:id/retry-download', async (req, res) => {
+  const row = videoTaskRow(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Video task not found.' });
+  if (row.status !== 'completed' || !row.video_url) {
+    return res.status(409).json({ error: 'Only completed tasks with a saved remote video URL can retry download.', task: row });
+  }
+  if (activeVideoDownloads.has(row.id)) {
+    return res.status(409).json({ error: 'A download for this task is already in progress.' });
+  }
+  activeVideoDownloads.add(row.id);
+  try {
+    await downloadCompletedVideo(row.id, String(row.video_url));
+    return res.json(videoTaskRow(row.id));
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    dbSqlite.prepare(`UPDATE video_tasks SET download_error = ?, updated_at = ? WHERE id = ?`)
+      .run(message, new Date().toISOString(), row.id);
+    console.error('[VideoProvider]', JSON.stringify({ timestamp: new Date().toISOString(), provider: 'agnes', event: 'retry_download_failed', local_task_id: row.id, video_url: row.video_url, error: message }));
+    return res.status(502).json(videoTaskRow(row.id));
+  } finally {
+    activeVideoDownloads.delete(row.id);
+  }
 });
 
 for (const row of dbSqlite.prepare(`SELECT id FROM video_tasks WHERE status IN ('pending', 'in_progress') ORDER BY created_at`).all() as Array<{ id: string }>) {
@@ -7384,6 +7461,14 @@ async function prepareComfyTaskData(reqBody: any) {
       : undefined
   };
 }
+
+registerImageGenRouting({
+  app,
+  db: dbSqlite,
+  uploadsDir: UPLOADS_DIR,
+  configPath: path.join(__dirname, 'config', 'imageGenRouting.json'),
+  optimizePrompt,
+});
 
 // 11. POST /api/generate-image - Generate image using Pollinations AI, Kling AI, or local ComfyUI
 app.post('/api/generate-image', async (req, res) => {

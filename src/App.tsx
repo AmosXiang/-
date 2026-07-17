@@ -1055,7 +1055,9 @@ export default function App() {
           platform: "comfyui",
           skipTranslation: true,
           presetId: comfyParams.presetId || undefined,
-          sourceImageUrl: comfyParams.sourceImageUrl || undefined
+          sourceImageUrl: comfyParams.sourceImageUrl || undefined,
+          // ComfyUI 参数对话框是显式本地操作,不参与 provider 路由。
+          forceProvider: 'comfyui_local'
         })
       });
       if (res.ok) {
@@ -1451,6 +1453,8 @@ export default function App() {
           shotIndex,
           platform: 'comfyui',
           skipTranslation: true,
+          // 高级调整必须产出可在 ComfyUI GUI 中继续编辑的任务,不参与 provider 路由。
+          forceProvider: 'comfyui_local',
         }),
       });
       const submitted = await response.json().catch(() => ({}));
@@ -2339,6 +2343,23 @@ export default function App() {
     }
   };
 
+  // Agnes 路由是同步契约:服务端已把 imageUrl 与审计字段写入 store,
+  // 前端只需把本地状态对齐,不再走 PUT 回写或 ComfyUI 任务轮询。
+  const applyAgnesShotImage = (script: any, shot: Shot, idx: number, result: { imageUrl: string; requestId?: string }) => {
+    const updatedShots = [...script.newShots];
+    updatedShots[idx] = {
+      ...updatedShots[idx],
+      imageUrl: result.imageUrl,
+      generatedImageUrl: result.imageUrl,
+      gen_provider: 'agnes',
+      provider_request_id: result.requestId || null,
+    };
+    const updatedScript = { ...script, newShots: updatedShots };
+    setGeneratedScript(updatedScript);
+    setShotImages(prev => ({ ...prev, [shot.timestamp]: result.imageUrl }));
+    setGeneratedScripts(prev => prev.map((item: any) => item.id === script.id ? updatedScript : item));
+  };
+
   const handleGenerateShotImage = async (shot: Shot, idx: number, scriptOverride?: any) => {
     const activeScript = scriptOverride || generatedScript;
     if (!activeScript) return;
@@ -2351,6 +2372,8 @@ export default function App() {
     setGeneratingShotIndex(idx);
     setShotCharacterFeedback(null);
     if (imagePlatform === 'comfyui') {
+      // Agnes 路由的分镜是同步返回,等待期间用与其他平台一致的加载态并禁用重复提交。
+      setGeneratingShotIndex(idx);
       try {
         const runtimeResponse = await apiFetch('/api/comfyui/runtime');
         const runtime = await runtimeResponse.json().catch(() => ({}));
@@ -2380,6 +2403,10 @@ export default function App() {
         });
         if (!res.ok) {
           const err = await res.json();
+          if (res.status === 409 && err.provider === 'agnes') {
+            setShotCharacterFeedback({ kind: 'error', message: '该分镜已有 Agnes 生成进行中，请稍候再试。' });
+            return;
+          }
           if (res.status === 409 && err.existingTaskId) {
             const shouldReplace = window.confirm(`已有任务进行中（${err.existingTaskId}）。是否取消当前任务后重新生成？`);
             if (shouldReplace && await handleCancelComfyTask(err.existingTaskId)) {
@@ -2392,6 +2419,11 @@ export default function App() {
           throw new Error(err.error || "生成图片任务提交失败");
         }
         const taskResult = await res.json();
+        if (taskResult.provider === 'agnes' && taskResult.imageUrl) {
+          applyAgnesShotImage(activeScript, shot, idx, taskResult);
+          setShotCharacterFeedback({ kind: 'success', message: '图片已生成（Agnes 云端）。' });
+          return;
+        }
         console.log('[RegenerateWithReference:Created]', { projectId: activeScript.id, shotId: shot.id, matchedCharacterIds: shot.matchedCharacterIds || [], taskId: taskResult.taskId, workflowPresetId: taskResult.workflowPresetId, characterReferenceImageUrl: taskResult.characterReferenceImageUrl });
         setShotCharacterFeedback({ kind: 'success', message: `任务已创建：${taskResult.taskId}` });
         await pollComfyTasks();
@@ -2427,6 +2459,17 @@ export default function App() {
       }
 
       const imageResult = await res.json();
+      if (imageResult.provider === 'agnes' && imageResult.imageUrl) {
+        // Agnes 同步契约:服务端已持久化,直接对齐本地状态即可。
+        applyAgnesShotImage(generatedScript, shot, idx, imageResult);
+        return;
+      }
+      if (imageResult.taskId) {
+        // 含人物的分镜被路由规则强制转入本地 ComfyUI 异步队列。
+        setShotCharacterFeedback({ kind: 'success', message: `已按路由规则转入本地 ComfyUI 任务队列：${imageResult.taskId}` });
+        await pollComfyTasks();
+        return;
+      }
       const { url, generation } = imageResult;
 
       // Write back to DB
