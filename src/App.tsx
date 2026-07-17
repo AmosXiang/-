@@ -122,6 +122,7 @@ type WorkflowPresetSummary = {
 
 type ShotProviderMode = 'auto' | 'agnes' | 'comfyui_local';
 type ForcedShotProvider = Exclude<ShotProviderMode, 'auto'>;
+type ImageProviderSelection = 'pollinations' | 'kling' | ShotProviderMode;
 
 type ShotGenerationProgress = {
   shotIndex: number;
@@ -607,10 +608,18 @@ export default function App() {
   const agnesBatchPercent = agnesBatchProgress?.total
     ? Math.min(100, Math.round((agnesBatchProcessed / agnesBatchProgress.total) * 100))
     : 0;
-
-  useEffect(() => {
-    setShotProviderMode('auto');
-  }, [generatedScript?.id, imagePlatform, selectedShotIndex]);
+  const imageProviderSelection: ImageProviderSelection = imagePlatform === 'comfyui'
+    ? shotProviderMode
+    : imagePlatform;
+  const handleImageProviderSelection = (value: ImageProviderSelection) => {
+    if (value === 'pollinations' || value === 'kling') {
+      setImagePlatform(value);
+      setShotProviderMode('auto');
+      return;
+    }
+    setImagePlatform('comfyui');
+    setShotProviderMode(value);
+  };
 
   const shotGenerationStartedAt = shotGenerationProgress?.startedAt;
   useEffect(() => {
@@ -4292,15 +4301,25 @@ export default function App() {
               className="comfy-pill"
               title="生图平台与 ComfyUI 服务状态"
             >
-              {imagePlatform === 'comfyui' ? (
+              {imageProviderSelection === 'comfyui_local' ? (
                 <>
                   <span className={`w-1.5 h-1.5 rounded-full ${comfyDotClass}`} />
                   <span>ComfyUI · {comfyStateLabel}</span>
                 </>
+              ) : imageProviderSelection === 'agnes' ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400" />
+                  <span>Agnes · 云端</span>
+                </>
+              ) : imageProviderSelection === 'auto' ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                  <span>生图路由 · 自动</span>
+                </>
               ) : (
                 <>
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span>{imagePlatform === 'pollinations' ? 'Pollinations' : 'Kling AI'} · 云端</span>
+                  <span>{imageProviderSelection === 'pollinations' ? 'Pollinations' : 'Kling AI'} · 云端</span>
                 </>
               )}
               <ChevronRight className={`w-3 h-3 transition-transform ${showComfyPop ? 'rotate-90' : ''}`} />
@@ -4350,11 +4369,13 @@ export default function App() {
                   <label className="block space-y-1">
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">默认生图平台</span>
                     <select
-                      value={imagePlatform}
-                      onChange={(event) => setImagePlatform(event.target.value as 'pollinations' | 'kling' | 'comfyui')}
+                      value={imageProviderSelection}
+                      onChange={(event) => handleImageProviderSelection(event.target.value as ImageProviderSelection)}
                       className="w-full bg-slate-950 border border-slate-750 text-slate-200 text-[11px] rounded px-2 py-1.5 outline-none cursor-pointer"
                     >
-                      <option value="comfyui">ComfyUI（本地）</option>
+                      <option value="auto">自动路由（Agnes / ComfyUI）</option>
+                      <option value="agnes">Agnes 云端（可能计费）</option>
+                      <option value="comfyui_local">ComfyUI（本地）</option>
                       <option value="pollinations">Pollinations</option>
                       <option value="kling">Kling AI</option>
                     </select>
@@ -5431,18 +5452,26 @@ export default function App() {
                           <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700/80 rounded-lg px-2.5 py-1.5 focus-within:border-blue-500/50">
                             <span className="text-[10px] text-slate-400 font-medium select-none">生图平台:</span>
                             <select
-                              value={imagePlatform}
-                              onChange={(e) => setImagePlatform(e.target.value as 'pollinations' | 'kling' | 'comfyui')}
+                              value={imageProviderSelection}
+                              onChange={(event) => handleImageProviderSelection(event.target.value as ImageProviderSelection)}
                               className="bg-transparent border-none text-slate-200 text-xs outline-none cursor-pointer font-medium p-0 focus:ring-0 focus:outline-none"
                             >
+                              <option value="auto" className="bg-slate-900 text-slate-200">自动路由 (Agnes / ComfyUI)</option>
+                              <option value="agnes" className="bg-slate-900 text-slate-200">Agnes 云端 (可能计费)</option>
+                              <option value="comfyui_local" className="bg-slate-900 text-slate-200">ComfyUI (本地)</option>
                               <option value="pollinations" className="bg-slate-900 text-slate-200">Pollinations</option>
                               <option value="kling" className="bg-slate-900 text-slate-200">Kling AI (可灵)</option>
-                              <option value="comfyui" className="bg-slate-900 text-slate-200">ComfyUI (本地)</option>
                             </select>
                           </div>
-                          {imagePlatform === 'comfyui' && (
+                          {(imageProviderSelection === 'auto' || imageProviderSelection === 'agnes' || imageProviderSelection === 'comfyui_local') && (
                             <p className="max-w-sm text-right text-[10px] leading-relaxed text-slate-500">
-                              已启用配置路由：空镜 → Agnes 云端（同步），主帧/含人物 → 本地 ComfyUI（规则以服务端配置为准）
+                              {imageProviderSelection === 'auto'
+                                ? '自动路由：空镜可走 Agnes，主帧/含人物走本地 ComfyUI（以服务端配置为准）'
+                                : imageProviderSelection === 'agnes'
+                                  ? '单镜将主动调用 Agnes 云端；可能产生费用，含人物镜不保证角色一致性。'
+                                  : isComfyConnected
+                                    ? '单镜将强制提交到本地 ComfyUI。'
+                                    : '本地 ComfyUI 未连接；强制本地生成暂不可用。'}
                             </p>
                           )}
                         </div>
