@@ -26,6 +26,61 @@ function makeMockRes() {
   return res;
 }
 
+function createVideoExportFixture(
+  script: any,
+  videoTasks: any[],
+  files: Record<string, string> = {},
+) {
+  const tempUploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-deck-video-test-'));
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE store (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE comfyui_tasks (
+      id TEXT PRIMARY KEY,
+      projectId TEXT NOT NULL,
+      targetId TEXT NOT NULL,
+      targetType TEXT NOT NULL,
+      viewType TEXT NOT NULL,
+      status TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      imageUrl TEXT
+    );
+  `);
+  db.prepare("INSERT INTO store (key, value) VALUES ('generated_scripts', ?)").run(JSON.stringify([script]));
+  for (const [relativePath, content] of Object.entries(files)) {
+    const absPath = path.join(tempUploadsDir, relativePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    fs.writeFileSync(absPath, content);
+  }
+  const tasks = new Map(videoTasks.map(row => [row.id, row]));
+  const probeCalls: string[] = [];
+  const routes: Record<string, Function> = {};
+  const mockApp: any = {
+    get: (url: string, handler: Function) => { routes[`GET:${url}`] = handler; },
+    post: (url: string, handler: Function) => { routes[`POST:${url}`] = handler; },
+  };
+  registerExportDeckModule(mockApp, db, {
+    uploadsDir: tempUploadsDir,
+    videoDelivery: {
+      getVideoTask: taskId => tasks.get(taskId),
+      probeVideo: absPath => {
+        probeCalls.push(absPath);
+        return { width: 1088, height: 832, fps: 24, durationSec: 3.375 };
+      },
+    },
+  });
+  return {
+    tempUploadsDir,
+    db,
+    routes,
+    probeCalls,
+    cleanup: () => {
+      db.close();
+      fs.rmSync(tempUploadsDir, { recursive: true, force: true });
+    },
+  };
+}
+
 test('Export Deck Module API and Generator Tests', async (t) => {
   // 1. Setup isolated resources
   const tempUploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-deck-test-uploads-'));
@@ -91,6 +146,7 @@ test('Export Deck Module API and Generator Tests', async (t) => {
         isMaster: true,
         finalTaskId: 'task-1',
         finalizedImageUrl: '/uploads/shot-1-final.png',
+        finalVideoTaskId: 'ignored-without-video-deps',
         isStale: false,
       },
       // Shot 2: Not finalized, but has local fallback image, stale input
@@ -198,6 +254,7 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     assert.equal(summary.failed, 1, 'Shot 3 task status is failed');
     assert.equal(summary.missingParams, 1, 'Only Shot 3 has missing parameters');
     assert.equal(summary.stale, 1, 'Shot 2 is stale');
+    assert.equal(Object.hasOwn(summary, 'finalVideos'), false, 'M2 response shape is unchanged without video deps');
 
     // Details check
     const details = summary.details;
@@ -311,6 +368,7 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     assert.equal(manifest.shots.length, 3);
     assert.equal(manifest.shots[0].imageFile, 'finals/shot-01.png');
     assert.equal(manifest.shots[0].finalized, true);
+    assert.equal(Object.hasOwn(manifest.shots[0], 'finalVideo'), false, 'M2 manifest shape is unchanged without video deps');
     assert.equal(manifest.shots[1].imageFile, 'finals/shot-02.png');
     assert.equal(manifest.shots[1].finalized, false);
     assert.equal(manifest.shots[2].imageFile, null, 'Shot 3 has no image');
@@ -718,4 +776,151 @@ test('Export Deck Module API and Generator Tests', async (t) => {
 
   // 3. Clean up temp files
   fs.rmSync(tempUploadsDir, { recursive: true, force: true });
+});
+
+test('final-video export revalidation maps all five missing states and copies nothing', async (t) => {
+  const shot = (index: number, finalVideoTaskId: string) => ({
+    id: `video-shot-${index}`,
+    timestamp: `00:0${index}`,
+    durationSec: 3,
+    description: `Video shot ${index}`,
+    optimizedPrompt: `Prompt ${index}`,
+    camera: { move: 'static', speed: 'slow', note: '' },
+    framing: { shotSize: 'wide', angle: 'eye-level' },
+    isMaster: index === 1,
+    isStale: false,
+    finalVideoTaskId,
+  });
+  const script = {
+    id: 'video-missing-project',
+    newTitle: 'Missing videos',
+    newNarrative: {},
+    newCharacters: [],
+    newShots: [
+      shot(1, 'missing-task'),
+      shot(2, 'wrong-shot'),
+      shot(3, 'not-completed'),
+      shot(4, 'not-downloaded'),
+      shot(5, 'missing-file'),
+    ],
+  };
+  const snapshot = JSON.stringify({ parameters: { durationSec: 3, fps: 24, resolution: '1152x768' } });
+  const fixture = createVideoExportFixture(script, [
+    { id: 'wrong-shot', shot_id: 'some-other-shot', status: 'completed', local_path: '/uploads/videos/wrong.mp4', generation_snapshot_json: snapshot },
+    { id: 'not-completed', shot_id: 'video-shot-3', status: 'failed', local_path: '/uploads/videos/failed.mp4', generation_snapshot_json: snapshot },
+    { id: 'not-downloaded', shot_id: 'video-shot-4', status: 'completed', local_path: null, generation_snapshot_json: snapshot },
+    { id: 'missing-file', shot_id: 'video-shot-5', status: 'completed', local_path: '/uploads/videos/missing.mp4', generation_snapshot_json: snapshot },
+  ]);
+  t.after(fixture.cleanup);
+
+  const checkRes = makeMockRes();
+  fixture.routes['GET:/api/generated-scripts/:id/delivery-check'](
+    { params: { id: script.id } },
+    checkRes,
+  );
+  assert.deepEqual(checkRes.body.finalVideos, { count: 0, totalBytes: 0 });
+
+  const res = makeMockRes();
+  await fixture.routes['POST:/api/generated-scripts/:id/export-deck'](
+    { params: { id: script.id }, body: { mode: 'review' } },
+    res,
+  );
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.summary.finalVideos, { present: 0, missing: 5, totalBytes: 0 });
+  assert.equal(fs.existsSync(path.join(res.body.exportDir, 'videos')), false, 'default false must not create videos/');
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(res.body.exportDir, 'storyboard-manifest.json'), 'utf8'));
+  assert.deepEqual(manifest.shots.map((item: any) => item.finalVideo.reason), [
+    'TAKE_NOT_FOUND',
+    'TAKE_SHOT_MISMATCH',
+    'TAKE_NOT_COMPLETED',
+    'TAKE_NOT_DOWNLOADED',
+    'TAKE_FILE_MISSING',
+  ]);
+  assert.ok(manifest.shots.every((item: any) => item.finalVideo.status === 'missing' && item.finalVideo.file === null));
+  assert.equal(fixture.probeCalls.length, 0);
+
+  const zip = await JSZipConstructor.loadAsync(fs.readFileSync(path.join(res.body.exportDir, 'storyboard-delivery.zip')));
+  assert.equal(Object.keys(zip.files).some(name => name.startsWith('videos/') && name.endsWith('.mp4')), false);
+});
+
+test('final-video delivery uses probe output, defaults to references, and packages only when requested', async (t) => {
+  const videoContent = 'fixture-mp4-content';
+  const script = {
+    id: 'video-ok-project',
+    newTitle: 'Video delivery',
+    newNarrative: {},
+    newCharacters: [],
+    newShots: [{
+      id: 'video-shot-ok',
+      timestamp: '00:00',
+      durationSec: 3,
+      description: 'Video shot',
+      optimizedPrompt: 'Prompt',
+      camera: { move: 'static', speed: 'slow', note: '' },
+      framing: { shotSize: 'wide', angle: 'eye-level' },
+      isMaster: true,
+      isStale: false,
+      finalVideoTaskId: 'take-ok',
+    }],
+  };
+  const fixture = createVideoExportFixture(script, [{
+    id: 'take-ok',
+    shot_id: 'video-shot-ok',
+    provider: 'agnes',
+    seed: 8234022103841080,
+    status: 'completed',
+    local_path: '/uploads/videos/take-ok.mp4',
+    normalized_size: '1152x768',
+    normalized_seconds: 3.4,
+    generation_snapshot_json: JSON.stringify({
+      parameters: { durationSec: 3, fps: 24, resolution: '1152x768' },
+    }),
+  }], { 'videos/take-ok.mp4': videoContent });
+  t.after(fixture.cleanup);
+
+  const checkRes = makeMockRes();
+  fixture.routes['GET:/api/generated-scripts/:id/delivery-check']({ params: { id: script.id } }, checkRes);
+  assert.deepEqual(checkRes.body.finalVideos, { count: 1, totalBytes: Buffer.byteLength(videoContent) });
+
+  const referenceOnly = makeMockRes();
+  await fixture.routes['POST:/api/generated-scripts/:id/export-deck'](
+    { params: { id: script.id }, body: { mode: 'review' } },
+    referenceOnly,
+  );
+  const referenceManifest = JSON.parse(fs.readFileSync(path.join(referenceOnly.body.exportDir, 'storyboard-manifest.json'), 'utf8'));
+  assert.deepEqual(referenceManifest.shots[0].finalVideo, {
+    taskId: 'take-ok',
+    provider: 'agnes',
+    seed: 8234022103841080,
+    status: 'ok',
+    reason: null,
+    sourcePath: '/uploads/videos/take-ok.mp4',
+    file: null,
+    fileBytes: Buffer.byteLength(videoContent),
+    requested: { durationSec: 3, fps: 24, resolution: '1152x768' },
+    actual: { width: 1088, height: 832, fps: 24, durationSec: 3.375 },
+  });
+  assert.equal(fs.existsSync(path.join(referenceOnly.body.exportDir, 'videos')), false);
+  assert.deepEqual(referenceOnly.body.summary.finalVideos, {
+    present: 1,
+    missing: 0,
+    totalBytes: Buffer.byteLength(videoContent),
+  });
+
+  const packaged = makeMockRes();
+  await fixture.routes['POST:/api/generated-scripts/:id/export-deck'](
+    { params: { id: script.id }, body: { mode: 'review', includeFinalVideos: true } },
+    packaged,
+  );
+  const copiedVideo = path.join(packaged.body.exportDir, 'videos', 'shot-01.mp4');
+  assert.equal(fs.readFileSync(copiedVideo, 'utf8'), videoContent);
+  const packagedManifest = JSON.parse(fs.readFileSync(path.join(packaged.body.exportDir, 'storyboard-manifest.json'), 'utf8'));
+  assert.equal(packagedManifest.shots[0].finalVideo.file, 'videos/shot-01.mp4');
+  const readme = fs.readFileSync(path.join(packaged.body.exportDir, 'README.txt'), 'utf8');
+  assert.ok(readme.includes('videos/'));
+  assert.ok(readme.includes('1088x832 @ 24 FPS, 3.375s'));
+  const zip = await JSZipConstructor.loadAsync(fs.readFileSync(path.join(packaged.body.exportDir, 'storyboard-delivery.zip')));
+  assert.ok(zip.file('videos/shot-01.mp4'));
+  assert.equal(fixture.probeCalls.length, 5, 'delivery-check plus two export preflight/copy rechecks use only probeVideo');
 });

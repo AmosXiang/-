@@ -17,6 +17,7 @@ type ProviderCapability = {
   fpsOptions: number[];
   supportsAudio: boolean;
   supportsNativeCameraControl: boolean;
+  minSubmitIntervalMs?: number;
   configured: boolean;
 };
 
@@ -94,6 +95,11 @@ const FINAL_VIDEO_ERROR_MESSAGES: Record<string, string> = {
   TAKE_NOT_COMPLETED: '该 Take 尚未生成完成，不能定稿。',
   TAKE_NOT_DOWNLOADED: '该 Take 尚未完成本地落盘，不能定稿。',
   TAKE_FILE_MISSING: '该 Take 的本地文件缺失或不可读，不能定稿。',
+};
+
+const TAKE_DELETE_ERROR_MESSAGES: Record<string, string> = {
+  TAKE_IS_FINAL: '该 Take 正被项目中的镜头定稿引用，请先取消或更换定稿。',
+  TAKE_IN_PROGRESS: '该 Take 仍在生成中，为避免轮询回写孤儿记录，暂不能删除。',
 };
 
 class ApiRequestError extends Error {
@@ -238,6 +244,8 @@ export default function VideoLabPanel({ projectId, shots }: { projectId: string;
   const [compareError, setCompareError] = useState('');
   const [finalVideoTaskIds, setFinalVideoTaskIds] = useState<Record<string, string | undefined>>({});
   const [finalizingTaskId, setFinalizingTaskId] = useState<string | null>(null);
+  const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
   const [batchShotIds, setBatchShotIds] = useState<string[]>([]);
   const [batchGateOpen, setBatchGateOpen] = useState(false);
   const [batchSubmitting, setBatchSubmitting] = useState(false);
@@ -515,6 +523,55 @@ export default function VideoLabPanel({ projectId, shots }: { projectId: string;
     }
   };
 
+  const retryDownload = async (take: VideoTaskRecord) => {
+    setRetryingTaskId(take.id);
+    setTakesError('');
+    try {
+      const data = await readJson(await fetch(
+        `/api/video-lab/tasks/${encodeURIComponent(take.id)}/retry-download?projectId=${encodeURIComponent(projectId)}`,
+        { method: 'POST' },
+      ));
+      if (taskId === take.id && data.task) setTask(data.task as VideoTaskRecord);
+    } catch (retryError) {
+      const apiError = retryError as ApiRequestError;
+      if (taskId === take.id && apiError.data?.task) setTask(apiError.data.task as VideoTaskRecord);
+      setTakesError(apiError.message || '重试下载失败');
+    } finally {
+      setRetryingTaskId(null);
+      setTakeRefreshNonce(value => value + 1);
+    }
+  };
+
+  const deleteTake = async (take: VideoTaskRecord) => {
+    const confirmed = window.confirm(
+      `确认删除这个 Take？\nSeed: ${take.seed ?? '未知'}\n创建时间: ${formatTaskTime(take.created_at)}\n\n本地视频文件也会一并删除，且无法撤销。`,
+    );
+    if (!confirmed) return;
+    setDeletingTaskId(take.id);
+    setTakesError('');
+    try {
+      await readJson(await fetch(
+        `/api/video-lab/tasks/${encodeURIComponent(take.id)}?projectId=${encodeURIComponent(projectId)}`,
+        { method: 'DELETE' },
+      ));
+      setTakes(current => current.filter(item => item.id !== take.id));
+      setCompareTaskIds(current => current.filter(id => id !== take.id));
+      if (taskId === take.id) {
+        setTaskId('');
+        setTask(null);
+        setSnapshot(null);
+        setSubmittedShotId('');
+      }
+    } catch (deleteError) {
+      const apiError = deleteError as ApiRequestError;
+      const code = String(apiError.data?.code || '');
+      setTakesError(TAKE_DELETE_ERROR_MESSAGES[code] || apiError.message || '删除 Take 失败');
+    } finally {
+      setDeletingTaskId(null);
+      setTakeRefreshNonce(value => value + 1);
+    }
+  };
+
   const toggleBatchShot = (shotId: string) => {
     setBatchError('');
     setBatchShotIds(current => current.includes(shotId)
@@ -609,8 +666,8 @@ export default function VideoLabPanel({ projectId, shots }: { projectId: string;
     <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-950/70 p-4 text-slate-200 shadow-xl sm:p-6">
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 pb-4">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-violet-400">Video Lab · M2</p>
-          <h2 className="mt-1 text-base font-bold text-white">多 Take · 定稿 · 批量生成</h2>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-violet-400">Video Lab · M3</p>
+          <h2 className="mt-1 text-base font-bold text-white">多 Take · 定稿 · 重试与清理</h2>
           <p className="mt-1 text-xs text-slate-500">保留 M1 单镜生成；视频只有本地落盘且文件可读后才可定稿。</p>
         </div>
         <div className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-right">
@@ -913,8 +970,8 @@ export default function VideoLabPanel({ projectId, shots }: { projectId: string;
                         {formatTaskTime(take.created_at)} · Seed {take.seed ?? '未知'} · {duration ? `${duration}s` : '时长未知'}
                       </p>
                     </div>
-                    {canUseLocalTake && (
-                      <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canUseLocalTake && (
                         <label className="flex min-h-9 cursor-pointer items-center gap-2 rounded-lg border border-slate-700 px-3 text-[10px] text-slate-300 hover:border-cyan-600">
                           <input
                             type="checkbox"
@@ -924,18 +981,38 @@ export default function VideoLabPanel({ projectId, shots }: { projectId: string;
                           />
                           对比
                         </label>
-                        {!isGold && (
-                          <button
-                            type="button"
-                            disabled={finalizingTaskId !== null}
-                            onClick={() => selectedShotId && void updateFinalVideo(selectedShotId, take.id)}
-                            className="min-h-9 rounded-lg bg-amber-600 px-3 text-[10px] font-bold text-white hover:bg-amber-500 disabled:opacity-40"
-                          >
-                            {finalizingTaskId === take.id ? '正在定稿…' : '设为定稿'}
-                          </button>
-                        )}
-                      </div>
-                    )}
+                      )}
+                      {canUseLocalTake && !isGold && (
+                        <button
+                          type="button"
+                          disabled={finalizingTaskId !== null}
+                          onClick={() => selectedShotId && void updateFinalVideo(selectedShotId, take.id)}
+                          className="min-h-9 rounded-lg bg-amber-600 px-3 text-[10px] font-bold text-white hover:bg-amber-500 disabled:opacity-40"
+                        >
+                          {finalizingTaskId === take.id ? '正在定稿…' : '设为定稿'}
+                        </button>
+                      )}
+                      {take.download_error && (
+                        <button
+                          type="button"
+                          disabled={retryingTaskId !== null || deletingTaskId !== null}
+                          onClick={() => void retryDownload(take)}
+                          className="min-h-9 rounded-lg border border-cyan-700 px-3 text-[10px] font-semibold text-cyan-300 hover:bg-cyan-950/40 disabled:opacity-40"
+                        >
+                          {retryingTaskId === take.id ? '正在重试下载…' : '重试下载'}
+                        </button>
+                      )}
+                      {!isGold && (
+                        <button
+                          type="button"
+                          disabled={deletingTaskId !== null || retryingTaskId !== null}
+                          onClick={() => void deleteTake(take)}
+                          className="min-h-9 rounded-lg border border-red-900/80 px-3 text-[10px] font-semibold text-red-300 hover:bg-red-950/40 disabled:opacity-40"
+                        >
+                          {deletingTaskId === take.id ? '正在删除…' : '删除'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {take.download_error && (
                     <div className="mt-2 rounded border border-red-900/70 bg-red-950/30 px-3 py-2 text-[10px] text-red-200" role="alert">
@@ -1046,7 +1123,21 @@ export default function VideoLabPanel({ projectId, shots }: { projectId: string;
               </div>
             </div>
             <div className="rounded-lg border border-red-900/70 bg-red-950/20 p-3">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-red-400">提交失败 {batchResult.failed.length}</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-red-400">提交失败 {batchResult.failed.length}</p>
+                {batchResult.failed.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBatchShotIds(batchResult.failed.map(item => item.shotId).slice(0, 100));
+                      setBatchGateOpen(true);
+                    }}
+                    className="rounded border border-red-800 px-2 py-1 text-[9px] font-semibold text-red-200 hover:bg-red-950/50"
+                  >
+                    重试失败镜头
+                  </button>
+                )}
+              </div>
               <div className="mt-2 space-y-1">
                 {batchResult.failed.map(item => (
                   <button key={`${item.shotId}:${item.error}`} type="button" onClick={() => setSelectedShotId(item.shotId)} className="block w-full rounded border border-red-900/70 px-2 py-1.5 text-left text-[9px] text-red-200 hover:bg-red-950/40">
@@ -1075,6 +1166,11 @@ export default function VideoLabPanel({ projectId, shots }: { projectId: string;
               <div className="flex justify-between gap-4"><dt className="text-slate-500">估算运行时间</dt><dd className="font-mono text-white">{batchEstimatedRuntimeSeconds} 秒（{batchShotIds.length} × 70）</dd></div>
               <div className="flex justify-between gap-4"><dt className="text-slate-500">Provider</dt><dd className="text-right text-white">{selectedCapability.label}</dd></div>
               <div className="border-t border-slate-800 pt-2"><dt className="text-slate-500">预计费用</dt><dd className="mt-1 text-amber-300">费用由 {selectedCapability.label} 的 Provider 实际计费；本界面不虚构单价。</dd></div>
+              {selectedCapability.minSubmitIntervalMs && batchShotIds.length > 1 && (
+                <div className="border-t border-amber-900/60 pt-2 text-amber-300">
+                  该 Provider 限流约 1 任务/分钟，本批第 2 镜起可能提交失败，失败镜头可稍后一键重试。
+                </div>
+              )}
             </dl>
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={() => setBatchGateOpen(false)} className="min-h-11 rounded-lg border border-slate-700 text-xs font-semibold text-slate-300 hover:bg-slate-800">返回修改</button>

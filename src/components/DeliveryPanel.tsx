@@ -25,6 +25,7 @@ interface DeliverySummary {
   missingParams: number;
   stale: number;
   details: DeliveryDetail[];
+  finalVideos?: { count: number; totalBytes: number };
 }
 
 interface ExportResult {
@@ -57,6 +58,12 @@ async function readJson(response: Response): Promise<any> {
   return data;
 }
 
+function formatVideoBytes(bytes: number): string {
+  const gigabyte = 1024 ** 3;
+  if (bytes >= gigabyte) return `${(bytes / gigabyte).toFixed(1)} GB`;
+  return `${(bytes / (1024 ** 2)).toFixed(1)} MB`;
+}
+
 export default function DeliveryPanel({
   projectId,
   onJumpToShot,
@@ -70,6 +77,7 @@ export default function DeliveryPanel({
   const [error, setError] = useState('');
   const [missing, setMissing] = useState<DeliveryDetail[]>([]);
   const [result, setResult] = useState<ExportResult | null>(null);
+  const [includeFinalVideos, setIncludeFinalVideos] = useState(false);
 
   const baseUrl = `/api/generated-scripts/${encodeURIComponent(projectId)}`;
 
@@ -79,6 +87,7 @@ export default function DeliveryPanel({
     try {
       const data = await readJson(await fetch(`${baseUrl}/delivery-check`, { signal }));
       setSummary(data);
+      if (!data.finalVideos?.count) setIncludeFinalVideos(false);
       setMissing([]);
     } catch (refreshError) {
       if ((refreshError as Error).name !== 'AbortError') setError((refreshError as Error).message);
@@ -92,6 +101,7 @@ export default function DeliveryPanel({
     setSummary(null);
     setResult(null);
     setMissing([]);
+    setIncludeFinalVideos(false);
     void refresh(controller.signal);
     return () => controller.abort();
   }, [refresh]);
@@ -105,10 +115,10 @@ export default function DeliveryPanel({
       const data = await readJson(await fetch(`${baseUrl}/export-deck`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, includeFinalVideos }),
       }));
       setResult(data);
-      if (data.summary) setSummary(data.summary);
+      if (data.summary) setSummary(current => ({ ...data.summary, finalVideos: current?.finalVideos }));
     } catch (exportError) {
       if (exportError instanceof RequestError && exportError.status === 409) {
         setMissing(Array.isArray(exportError.data?.missing) ? exportError.data.missing : []);
@@ -202,8 +212,23 @@ export default function DeliveryPanel({
         <div className="rounded-xl border border-emerald-800/60 bg-emerald-950/20 px-3 py-3 text-emerald-300">交付检查通过，没有发现缺项。</div>
       )}
 
-      <div className="grid gap-3 border-t border-slate-800 pt-4 md:grid-cols-2">
-        <div className="space-y-1.5">
+      <div className="space-y-3 border-t border-slate-800 pt-4">
+        <label className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 ${summary?.finalVideos?.count ? 'cursor-pointer border-slate-700 bg-slate-900/50 text-slate-300' : 'cursor-not-allowed border-slate-800 bg-slate-950/40 text-slate-600'}`}>
+          <input
+            type="checkbox"
+            checked={includeFinalVideos}
+            disabled={!summary?.finalVideos?.count || checking || Boolean(exporting)}
+            onChange={event => setIncludeFinalVideos(event.target.checked)}
+            className="mt-0.5 accent-emerald-500"
+          />
+          <span>
+            <span className="block font-semibold">同时打包定稿视频（预计增加 {formatVideoBytes(summary?.finalVideos?.totalBytes || 0)}）</span>
+            <span className="mt-0.5 block text-[10px] text-slate-500">默认关闭；不勾选时 manifest 仍会引用已复核的本地定稿视频。</span>
+          </span>
+        </label>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1.5">
           <button
             type="button"
             disabled={checking || Boolean(exporting) || finalBlocked}
@@ -215,8 +240,8 @@ export default function DeliveryPanel({
           <p className={`text-[10px] ${finalBlocked ? 'text-amber-400' : 'text-slate-500'}`}>
             {!summary ? '完成检查后可导出' : summary.notFinalized > 0 ? `仍有 ${summary.notFinalized} 镜未定稿，正式包暂不可用` : '所有分镜均已定稿，可生成正式交付包'}
           </p>
-        </div>
-        <div className="space-y-1.5">
+          </div>
+          <div className="space-y-1.5">
           <button
             type="button"
             disabled={checking || Boolean(exporting)}
@@ -226,6 +251,7 @@ export default function DeliveryPanel({
             {exporting === 'review' ? '正在生成审阅稿…' : '导出审阅稿'}
           </button>
           <p className="text-[10px] text-slate-500">未定稿镜头将标记 DRAFT，不会静默漏页。</p>
+          </div>
         </div>
       </div>
 

@@ -14,6 +14,7 @@ export type VideoProviderCapability = {
   fpsOptions: number[];
   supportsAudio: boolean;
   supportsNativeCameraControl: boolean;
+  minSubmitIntervalMs?: number;
 };
 
 // Keep this declaration limited to behavior proven by the existing Agnes
@@ -33,6 +34,7 @@ export const AGNES_VIDEO_CAPABILITY: VideoProviderCapability = {
   fpsOptions: [24],
   supportsAudio: false,
   supportsNativeCameraControl: false,
+  minSubmitIntervalMs: 61_000,
 };
 
 export const VIDEO_PROVIDER_CAPABILITIES: VideoProviderCapability[] = [AGNES_VIDEO_CAPABILITY];

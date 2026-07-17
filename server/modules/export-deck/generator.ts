@@ -31,6 +31,19 @@ interface ShotExportData {
   localImagePath: string | null; // resolved local path if valid and exists
   imageExt: string | null; // image extension e.g. .png
   sceneId: string | null;
+  finalVideo?: {
+    taskId: string;
+    provider: string | null;
+    seed: number | null;
+    status: 'ok' | 'missing';
+    reason: string | null;
+    sourcePath: string | null;
+    sourceLocalPath: string | null;
+    file: string | null;
+    fileBytes: number;
+    requested: { durationSec: number; fps: number; resolution: string } | null;
+    actual: { width: number; height: number; fps: number; durationSec: number } | null;
+  };
 }
 
 /**
@@ -736,25 +749,29 @@ export function generateManifest(
         avatarUrl: avatarExists ? avatarUrl : null,
       };
     }),
-    shots: shotsData.map(shot => ({
-      id: shot.id,
-      index: shot.index,
-      timestamp: shot.timestamp,
-      durationSec: shot.durationSec,
-      description: shot.description,
-      optimizedPrompt: shot.optimizedPrompt,
-      camera: shot.camera,
-      framing: shot.framing,
-      cameraH: shot.cameraH,
-      cameraV: shot.cameraV,
-      cameraZoom: shot.cameraZoom,
-      derivedFromShotId: shot.derivedFromShotId,
-      isMaster: shot.isMaster,
-      finalized: shot.finalized,
-      isStale: shot.isStale,
-      imageFile: shot.localImagePath ? `finals/shot-${String(shot.index).padStart(2, '0')}${shot.imageExt}` : null,
-      sceneId: shot.sceneId ?? null,
-    })),
+    shots: shotsData.map(shot => {
+      const { sourceLocalPath: _sourceLocalPath, ...finalVideo } = shot.finalVideo || {} as NonNullable<ShotExportData['finalVideo']>;
+      return {
+        id: shot.id,
+        index: shot.index,
+        timestamp: shot.timestamp,
+        durationSec: shot.durationSec,
+        description: shot.description,
+        optimizedPrompt: shot.optimizedPrompt,
+        camera: shot.camera,
+        framing: shot.framing,
+        cameraH: shot.cameraH,
+        cameraV: shot.cameraV,
+        cameraZoom: shot.cameraZoom,
+        derivedFromShotId: shot.derivedFromShotId,
+        isMaster: shot.isMaster,
+        finalized: shot.finalized,
+        isStale: shot.isStale,
+        imageFile: shot.localImagePath ? `finals/shot-${String(shot.index).padStart(2, '0')}${shot.imageExt}` : null,
+        sceneId: shot.sceneId ?? null,
+        ...(shot.finalVideo ? { finalVideo } : {}),
+      };
+    }),
   };
 
   if (hasScenes) {

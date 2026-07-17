@@ -63,6 +63,8 @@ function createFixture(configuredProviders = ['agnes']) {
   const videoTasks: VideoTaskRow[] = [];
   const readableLocalPaths = new Set<string>();
   let mutateCalls = 0;
+  const redownloadCalls: string[] = [];
+  const deleteCalls: string[] = [];
   const deps: VideoLabDeps = {
     readDb: () => store,
     isProviderConfigured: providerId => configured.has(providerId),
@@ -77,6 +79,20 @@ function createFixture(configuredProviders = ['agnes']) {
     listVideoTasksByShot: shotId => videoTasks.filter(row => row.shot_id === shotId),
     getVideoTask: taskId => videoTasks.find(row => row.id === taskId),
     isLocalVideoReadable: localPath => readableLocalPaths.has(localPath),
+    redownloadVideo: async taskId => {
+      redownloadCalls.push(taskId);
+      const row = videoTasks.find(item => item.id === taskId);
+      if (row) {
+        row.local_path = `/uploads/video-tasks/${taskId}.mp4`;
+        row.download_error = null;
+      }
+      return { ok: true };
+    },
+    deleteVideoTaskRow: taskId => {
+      deleteCalls.push(taskId);
+      const index = videoTasks.findIndex(item => item.id === taskId);
+      if (index >= 0) videoTasks.splice(index, 1);
+    },
   };
   return {
     store,
@@ -84,6 +100,8 @@ function createFixture(configuredProviders = ['agnes']) {
     submissions,
     videoTasks,
     readableLocalPaths,
+    redownloadCalls,
+    deleteCalls,
     get mutateCalls() { return mutateCalls; },
     deps,
   };
@@ -177,6 +195,18 @@ function postBatch(baseUrl: string, body: unknown) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+  });
+}
+
+function retryDownload(baseUrl: string, taskId: string, projectId = 'project-3x2') {
+  return fetch(`${baseUrl}/api/video-lab/tasks/${encodeURIComponent(taskId)}/retry-download?projectId=${encodeURIComponent(projectId)}`, {
+    method: 'POST',
+  });
+}
+
+function deleteTake(baseUrl: string, taskId: string, projectId = 'project-3x2') {
+  return fetch(`${baseUrl}/api/video-lab/tasks/${encodeURIComponent(taskId)}?projectId=${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
   });
 }
 
@@ -442,6 +472,133 @@ test('final-video writes a readable local take and null removes the JSON field',
     assert.equal(Object.hasOwn(fixture.store.generated_scripts[0].newShots[0], 'finalVideoTaskId'), false);
     assert.equal(fixture.mutateCalls, 2);
   });
+});
+
+test('retry-download rejects every unsafe precondition with a machine-readable code', async () => {
+  const fixture = createFixture();
+  fixture.videoTasks.push(
+    videoTask({ id: 'foreign-shot', shot_id: 'project-wide-shot-1', local_path: null, video_url: 'https://example.test/foreign.mp4' }),
+    videoTask({ id: 'still-running-download', status: 'in_progress', local_path: null, video_url: 'https://example.test/running.mp4' }),
+    videoTask({ id: 'already-downloaded', local_path: '/uploads/video-tasks/already.mp4', download_error: null, video_url: 'https://example.test/already.mp4' }),
+    videoTask({ id: 'no-remote-url', local_path: null, download_error: 'disk full', video_url: null }),
+  );
+  await withServer(fixture, async baseUrl => {
+    const cases: Array<[string, number, string]> = [
+      ['missing-task', 404, 'TASK_NOT_FOUND'],
+      ['foreign-shot', 404, 'SHOT_NOT_FOUND'],
+      ['still-running-download', 422, 'TASK_NOT_COMPLETED'],
+      ['already-downloaded', 409, 'ALREADY_DOWNLOADED'],
+      ['no-remote-url', 422, 'NO_REMOTE_URL'],
+    ];
+    for (const [taskId, status, code] of cases) {
+      const response = await retryDownload(baseUrl, taskId);
+      assert.equal(response.status, status, code);
+      assert.equal((await response.json() as any).code, code);
+    }
+    assert.deepEqual(fixture.redownloadCalls, []);
+  });
+});
+
+test('retry-download returns the refreshed task and preserves the provider error verbatim', async () => {
+  const fixture = createFixture();
+  const success = videoTask({
+    id: 'retry-success',
+    local_path: null,
+    download_error: 'socket reset',
+    video_url: 'https://example.test/retry-success.mp4',
+  });
+  const expired = videoTask({
+    id: 'retry-expired',
+    local_path: null,
+    download_error: 'initial failure',
+    video_url: 'https://example.test/expired.mp4',
+  });
+  fixture.videoTasks.push(success, expired);
+  const originalRedownload = fixture.deps.redownloadVideo;
+  fixture.deps.redownloadVideo = async taskId => {
+    if (taskId === 'retry-expired') {
+      expired.download_error = 'Agnes signed URL expired: 403 body=gone';
+      return { ok: false, error: 'Agnes signed URL expired: 403 body=gone' };
+    }
+    return originalRedownload(taskId);
+  };
+
+  await withServer(fixture, async baseUrl => {
+    const succeeded = await retryDownload(baseUrl, 'retry-success');
+    assert.equal(succeeded.status, 200);
+    const successData: any = await succeeded.json();
+    assert.equal(successData.task.local_path, '/uploads/video-tasks/retry-success.mp4');
+    assert.equal(successData.task.download_error, null);
+
+    const failed = await retryDownload(baseUrl, 'retry-expired');
+    assert.equal(failed.status, 502);
+    assert.deepEqual(await failed.json(), {
+      error: 'Agnes signed URL expired: 403 body=gone',
+      code: 'VIDEO_DOWNLOAD_FAILED',
+      task: expired,
+    });
+  });
+});
+
+test('DELETE take rejects foreign, in-progress, and any project final reference before deleting', async () => {
+  const fixture = createFixture();
+  fixture.videoTasks.push(
+    videoTask({ id: 'foreign-delete', shot_id: 'project-wide-shot-1' }),
+    videoTask({ id: 'in-progress-delete', status: 'in_progress' }),
+    videoTask({ id: 'other-shot-final' }),
+  );
+  (fixture.store.generated_scripts[0].newShots[1] as any).finalVideoTaskId = 'other-shot-final';
+
+  await withServer(fixture, async baseUrl => {
+    const cases: Array<[string, number, string]> = [
+      ['missing-delete', 404, 'TASK_NOT_FOUND'],
+      ['foreign-delete', 404, 'SHOT_NOT_FOUND'],
+      ['in-progress-delete', 422, 'TAKE_IN_PROGRESS'],
+      ['other-shot-final', 422, 'TAKE_IS_FINAL'],
+    ];
+    for (const [taskId, status, code] of cases) {
+      const response = await deleteTake(baseUrl, taskId);
+      assert.equal(response.status, status, code);
+      assert.equal((await response.json() as any).code, code);
+    }
+    assert.deepEqual(fixture.deleteCalls, []);
+  });
+});
+
+test('DELETE take removes an eligible task and M3 dependencies fail explicitly when unwired', async () => {
+  const fixture = createFixture();
+  fixture.videoTasks.push(videoTask({ id: 'delete-me', status: 'failed', local_path: null }));
+  await withServer(fixture, async baseUrl => {
+    const response = await deleteTake(baseUrl, 'delete-me');
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { deleted: 'delete-me' });
+    assert.deepEqual(fixture.deleteCalls, ['delete-me']);
+    assert.equal(fixture.videoTasks.some(row => row.id === 'delete-me'), false);
+  });
+
+  const app = express();
+  app.use(express.json());
+  registerVideoLabModule(app, {
+    ...fixture.deps,
+    redownloadVideo: undefined,
+    deleteVideoTaskRow: undefined,
+  });
+  const server = http.createServer(app);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    fixture.videoTasks.push(videoTask({
+      id: 'unwired-retry',
+      local_path: null,
+      download_error: 'disk full',
+      video_url: 'https://example.test/unwired.mp4',
+    }));
+    const response = await retryDownload(`http://127.0.0.1:${port}`, 'unwired-retry');
+    assert.equal(response.status, 503);
+    assert.equal((await response.json() as any).code, 'VIDEO_LAB_M3_NOT_CONFIGURED');
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
 });
 
 test('batch generation requires confirmed true and performs zero submissions otherwise', async () => {
