@@ -4,7 +4,7 @@
 
 ## 现在在哪
 
-- **主线分支**：`feature/camera-derive`，HEAD = `28106f5`（已 push origin），工作区仅剩用户自己的 `src/index.css` WIP（CC 未碰）。Video Lab M1+M2 已合入接线，完结 worktree/分支已清。
+- **主线分支**：`feature/camera-derive`，HEAD = `a38dea2`（已 push origin），工作区**干净**。Video Lab M1+M2 已合入接线，完结 worktree/分支已清。
 - **UI 重设计全批次完成**：P0 止血 → P1 路由 → P1b 布局 → P2a 故事版本/定稿 → P2b 交付导出 → **P3 风格契约+参数快照+检查器五区** → **P3.5 场景参考轻量版** → **P4 角色资产+README** → **P4b scenes/+Unicode**。
 - **用户四大痛点已闭环**：①上传优先首页 ②分析/创作结构分离+路由化 ③画风统一（项目级风格契约锁 preset/overlay/宽高/LoRA，分镜只开结构参数，批量生成硬闸门，每次生成留参数快照）④交付物（PPTX 分镜手册 + manifest + finals/ + characters/ + scenes/ + README）。
 - 远期未排：Video Lab（集成计划裁决 #12，分镜链路已稳，随时可从 `storyboard-manifest.json` 接上）。
@@ -43,7 +43,7 @@ WP-B(shot-review) · WP-C(export-deck) · WP-E(story-version) · WP-F(delivery-u
   **M2 任务书已出（v1.1 可分发）**：`tasks/codex-video-lab-m2.md`，基线 `f801086`，分支 feat/video-lab-m2。范围=按 shot 查询/Take 并排/finalVideoTaskId 定稿(硬规则 B 五 code 矩阵)/批量+成本闸门(硬规则 C 三数字分开+服务端 confirmed 闸门)。**Animatic 混播定稿视频已被用户裁决砍除**（final-videos 端点+playlist 升级不做，AnimaticPlayer videoUrl 分支休眠；M1 备忘② durationSec 回填顺延 M3 消化）。deps 扩四项回调(mutateDb/listVideoTasksByShot/getVideoTask/isLocalVideoReadable)由 CC 实现。M3 留=视频交付/ZIP/重试 UI/Take 清理。
   **Video Lab M2 已合入并接线完成（真机 PASS，2026-07-16）**：合并 `f010dd5`（Codex 17/17+54/54）+ CC 接线（四 deps：mutateDb 复用/listVideoTasksByShot prepared 查询/getVideoTask=videoTaskRow/isLocalVideoReadable 复用 export-deck naming.ts getLocalPath+isReadableFile）。真机（真实 Agnes）：两镜成本闸门（三数字分开）→409 画幅 crop→批量串行；**Agnes 实测限流 1 req/min**，第二镜真机复现"部分失败保留审计不阻断"后单独重批成功；Take 倒序列表（含失败 Take 红标无定稿按钮）→双 Take 并排原生 video→两镜各自定稿（★徽标/取消/换选/批量列表联动排除）→落库核验双指针+独立 seed 快照一致。**备忘①再证**：定稿实物 ffprobe=1088x832@24fps/81帧/3.375s，provider normalized_size=1152x768 不符。**真机新发现（另立项）**：App 对 generated-scripts/comfyui-tasks 失控轮询（分钟级 1.4 万请求→ERR_INSUFFICIENT_RESOURCES 饿死页面 fetch/媒体），与 M2 无关；M3 备忘=批内节流应对限流。证据 `evidence/video-lab-m2-acceptance.md` §6。
   **前端失控轮询 bug 已修（28106f5，push origin）**：M2 真机验收时发现的既有缺陷（非 M2 引入）。根因=App.tsx 任务完成 effect（约 line 1095）从不回写 `prevComfyTasksRef` 基线，导致任何历史 succeeded comfy 任务每个 2s 轮询周期都被判成"刚完成"→ refreshGeneratedScripts → setGeneratedScript(新引用) → 轮询 effect 重启 → 立即再轮询，自我强化循环几分钟打出 1.4 万+ 请求 → 浏览器 ERR_INSUFFICIENT_RESOURCES 饿死所有 fetch/媒体加载（Video Lab 面板卡"正在加载"、并排定稿视频卡 readyState 0 皆源于此；服务端对同 URL HEAD 200 正常）。修法（6 行）：每轮无条件回写基线 + 首轮 `prevTasks.length===0` 只建基线不判 reload。真机复验：generated-scripts/comfyui-tasks 请求速率回落 ~0.5/s，并排视频加载到 readyState 4（1088x832/3.38s）。**教训固化：高频轮询 effect 若在其副作用里替换 effect 依赖项（此处 generatedScript），且判定逻辑依赖一个从不更新的 ref 基线，就会构成"副作用重启自身"的失控循环——轮询类 effect 的基线 ref 必须每轮回写，首轮只建基线。**
-  **工作区未提交改动（2026-07-16 用户核对，来源明确=用户本人的进行中工作）**：6 文件实际新增约 629 行（tracked +576/−84，另未跟踪 src/api.ts 53 行）= 故事创意编辑、分镜重生成、图片加载优化、ComfyUI 打开/工作流下载/PNG 导回/请求恢复等已验证功能（server.ts/App.tsx/ShotVersionPanel/StyleContractReadonly/index.css + src/api.ts）。两任务书已把这些文件划为 Codex 禁碰。**推进顺序（用户拍板）**：①审查落定这批改动 → ②Animatic 开工（226ec80 worktree）→ ③合入后填 M1 基线 → ④启动 M1。另：**Agnes 静态图片 provider（生成分镜图）是独立需求，另开任务书，不混入视频任务书**。
+  **工作区未提交改动 — 已全部落定，工作区现干净（2026-07-16 收尾）**：该批用户本人 WIP（故事创意编辑、分镜重生成、图片加载优化、ComfyUI 打开/工作流下载/PNG 导回/请求恢复）随各里程碑陆续提交；最后残留的 `src/index.css` 已由 CC 审查（分镜工作台三栏栅格响应式断点：桌面第三栏 minmax(260,280)、≤1200 两栏上下文换行、≤860 单列堆叠；三档真机复验符合预期、无死选择器无级联冲突）后，以用户身份提交 `a38dea2`（未挂 Claude co-author，如实归属）。**推进顺序（用户拍板，均已完成）**：①审查落定这批改动 ✓ → ②Animatic 已合入 → ③M1 基线已填 → ④M1/M2 均已启动并接线真机 PASS。另：**Agnes 静态图片 provider（生成分镜图）是独立需求，另开任务书，不混入视频任务书**。
 - **风格锚点 IPAdapter**（方案 §六.4，P3 时判为需 ComfyUI 工作流预设扩展而后置）：定稿首图作风格参考注入后续分镜。属"真开放注入"范畴，先确认 manifest/工作流映射能力再评估。
 - **场景参考增强**：现为轻量版（纯文本 overlay 注入，图不参与 conditioning）；若需要图像 conditioning 再扩。
 
