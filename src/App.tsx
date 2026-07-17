@@ -2373,13 +2373,7 @@ export default function App() {
     setShotCharacterFeedback(null);
     if (imagePlatform === 'comfyui') {
       // Agnes 路由的分镜是同步返回,等待期间用与其他平台一致的加载态并禁用重复提交。
-      setGeneratingShotIndex(idx);
       try {
-        const runtimeResponse = await apiFetch('/api/comfyui/runtime');
-        const runtime = await runtimeResponse.json().catch(() => ({}));
-        if (!runtimeResponse.ok) throw new Error(runtime.error || `读取 ComfyUI 状态失败 (HTTP ${runtimeResponse.status})`);
-        if (!runtime.connected) throw new Error('ComfyUI 当前未连接，请先在右上角启动或打开 ComfyUI。');
-
         // Generation is intentionally submitted once. Retrying this POST automatically could create duplicate paid tasks.
         const res = await fetch("/api/generate-image", {
           method: "POST",
@@ -2424,9 +2418,21 @@ export default function App() {
           setShotCharacterFeedback({ kind: 'success', message: '图片已生成（Agnes 云端）。' });
           return;
         }
-        console.log('[RegenerateWithReference:Created]', { projectId: activeScript.id, shotId: shot.id, matchedCharacterIds: shot.matchedCharacterIds || [], taskId: taskResult.taskId, workflowPresetId: taskResult.workflowPresetId, characterReferenceImageUrl: taskResult.characterReferenceImageUrl });
-        setShotCharacterFeedback({ kind: 'success', message: `任务已创建：${taskResult.taskId}` });
-        await pollComfyTasks();
+        if (taskResult.taskId) {
+          const runtimeResponse = await apiFetch('/api/comfyui/runtime');
+          const runtime = await runtimeResponse.json().catch(() => ({}));
+          if (!runtimeResponse.ok) throw new Error(runtime.error || `读取 ComfyUI 状态失败 (HTTP ${runtimeResponse.status})`);
+
+          console.log('[RegenerateWithReference:Created]', { projectId: activeScript.id, shotId: shot.id, matchedCharacterIds: shot.matchedCharacterIds || [], taskId: taskResult.taskId, workflowPresetId: taskResult.workflowPresetId, characterReferenceImageUrl: taskResult.characterReferenceImageUrl });
+          if (!runtime.connected) {
+            setShotCharacterFeedback({ kind: 'error', message: `任务已入队（${taskResult.taskId}），但 ComfyUI 未连接，启动后才会开始执行。` });
+            return;
+          }
+          setShotCharacterFeedback({ kind: 'success', message: `任务已创建：${taskResult.taskId}` });
+          await pollComfyTasks();
+          return;
+        }
+        throw new Error('生成图片接口未返回可用的图片或任务');
       } catch (err: any) {
         setShotCharacterFeedback({ kind: 'error', message: err.message || '提交任务失败' });
       } finally {
@@ -5192,17 +5198,24 @@ export default function App() {
                         </h3>
                       </div>
                       <div className="flex items-center gap-2 self-end sm:self-auto">
-                        <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700/80 rounded-lg px-2.5 py-1.5 focus-within:border-blue-500/50">
-                          <span className="text-[10px] text-slate-400 font-medium select-none">生图平台:</span>
-                          <select
-                            value={imagePlatform}
-                            onChange={(e) => setImagePlatform(e.target.value as 'pollinations' | 'kling' | 'comfyui')}
-                            className="bg-transparent border-none text-slate-200 text-xs outline-none cursor-pointer font-medium p-0 focus:ring-0 focus:outline-none"
-                          >
-                            <option value="pollinations" className="bg-slate-900 text-slate-200">Pollinations</option>
-                            <option value="kling" className="bg-slate-900 text-slate-200">Kling AI (可灵)</option>
-                            <option value="comfyui" className="bg-slate-900 text-slate-200">ComfyUI (本地)</option>
-                          </select>
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700/80 rounded-lg px-2.5 py-1.5 focus-within:border-blue-500/50">
+                            <span className="text-[10px] text-slate-400 font-medium select-none">生图平台:</span>
+                            <select
+                              value={imagePlatform}
+                              onChange={(e) => setImagePlatform(e.target.value as 'pollinations' | 'kling' | 'comfyui')}
+                              className="bg-transparent border-none text-slate-200 text-xs outline-none cursor-pointer font-medium p-0 focus:ring-0 focus:outline-none"
+                            >
+                              <option value="pollinations" className="bg-slate-900 text-slate-200">Pollinations</option>
+                              <option value="kling" className="bg-slate-900 text-slate-200">Kling AI (可灵)</option>
+                              <option value="comfyui" className="bg-slate-900 text-slate-200">ComfyUI (本地)</option>
+                            </select>
+                          </div>
+                          {imagePlatform === 'comfyui' && (
+                            <p className="max-w-sm text-right text-[10px] leading-relaxed text-slate-500">
+                              已启用配置路由：空镜 → Agnes 云端（同步），主帧/含人物 → 本地 ComfyUI（规则以服务端配置为准）
+                            </p>
+                          )}
                         </div>
                         <button
                           onClick={() => {
