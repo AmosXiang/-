@@ -44,3 +44,26 @@
 ## 待用户拍板后 CC 下一步
 
 选 (b) → 跑 Flux Redux A/B（本轮未跑，ComfyUI 在线可立即做）；选 (a) → 建 SDXL styleComposition+FaceID 试跑；选 (c) → 直接进 P1-A 资产层 + master 镜注入小样。
+
+---
+
+## 补记：(b) Flux Redux A/B 在资产门证伪（2026-07-17，用户批准跑 b 后）
+
+用户批准把 (b) 当一次性证伪实验跑（验收：3 seed 全不抄构图 / strength 梯度 / 带·不带 PuLID 两轮 / 真图作证）。**执行前先查 Redux 所需模型文件——直接短路：**
+
+- `StyleModelLoader` 可用 style_model = **`[]`（空，无 Redux 风格模型）**
+- `CLIPVisionLoader` 可用 clip_vision = **`[]`（空，无 CLIP vision 模型）**
+- `StyleModelApply` 硬依赖 `style_model` + `clip_vision_output` 两者 → **无法实例化，A/B 无法运行**。
+
+叠加架构疑点：Redux 是 **Flux.1-dev** 机制，本管线是 **Flux.2-klein**（`flux-2-klein-base-4b` / `flux-2-klein-4b-fp8`，见 UNETLoader 枚举），Flux.2 是否有兼容 Redux 权重存疑——即便下载 flux1-redux-dev + sigclip，也可能架构不匹配。
+
+**判定：(b) 以"资产不具备 + 架构存疑"证伪，不进入生成测试**（省下 3×2 组真机生成）。按用户预设规则 → **落 (c)，不考虑 (a)**。
+若用户仍想验 (b)：需先自行安装 Flux.2 兼容的 Redux 风格模型 + CLIP vision（CC 不擅自下载 ~2GB+ 且大概率架构不匹配的权重）；装好且枚举非空后 CC 可立即跑上述 A/B。
+
+## 最终落地（当前证据下）
+
+**P1-B = (c) 分层折中**，与用户既定交付策略同构：
+- 风格锚点只上 master/establishing 镜（无 PuLID 冲突的镜头），机制待定（Flux.2 无 Redux、SDXL 有 ipadapterStyleComposition 但 master 镜多为 Flux.2）——实际 master 镜若为 Flux.2 亦无干净风格锚点，故 master 镜风格统一同样退化为 prompt overlay + 人工。
+- 人物镜：PuLID 身份 + prompt overlay + 人工复核 + 漂移镜用批准配方重生。
+- 空镜（Agnes）：prompt overlay（P0 已上）。
+- **净结论：全三通道的"图像级风格锚点"当前均不具备（Agnes=抄内容、Flux.2=无 Redux 资产、干净 IPAdapter=SDXL 专用与 Flux.2 管线错配）。风格统一当前只能靠 P0 的文本 overlay 统一 + 人工复核 + 漂移重生。图像级锚点是未来项，前置=引入 Flux.2 兼容的风格参考权重或统一到 SDXL，均属较大决策。**
