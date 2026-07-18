@@ -6,7 +6,6 @@ export interface ImageGenRequest {
   width: number;
   height: number;
   seed?: number;
-  referenceImages?: string[];
 }
 
 export interface ImageGenResult {

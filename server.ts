@@ -31,10 +31,16 @@ import {
   resolveEffectiveStyleContract,
 } from './server/modules/style-contract/index.ts';
 import { registerSceneReferenceModule, sceneForShot } from './server/modules/scene-reference/index.ts';
+import { registerStyleAnchorModule } from './server/modules/style-anchor/index.ts';
 import { registerVideoLabModule, type SubmitVideoTaskInput } from './server/modules/video-lab/index.ts';
 import { DEFAULT_COMFY_NEGATIVE_PROMPT } from './server/constants/comfyDefaults.ts';
 import { migrateImageProviderAudit } from './server/providers/imageGen/migrate.ts';
-import { registerImageGenRouting } from './server/providers/imageGen/routes.ts';
+import {
+  applyShotRecipeRecords,
+  buildRecipeFingerprint,
+  registerImageGenRouting,
+  type GenRecipe,
+} from './server/providers/imageGen/routes.ts';
 
 const require = createRequire(import.meta.url);
 const StreamPng = require('streampng-v2');
@@ -6694,7 +6700,9 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
         tasksToCreate.push({
           ...prepared.taskData,
           id: taskId,
-          batchOrder
+          batchOrder,
+          genRecipe: prepared.recipe,
+          styleAnchorVersion: prepared.styleAnchorVersion,
         });
         batchItems.push({ id: crypto.randomUUID(), targetId, shotIndex: idx, batchOrder, taskId, matchedCharacters: preflightItem.matchedCharacters, workflowPresetId: prepared.taskData.workflowPresetId, characterReferenceImageUrl: prepared.taskData.characterReferenceImageUrl, workflowInjected: prepared.taskData.workflowPresetId === '02_klein_pulid_identity' && !!prepared.taskData.characterReferenceImageUrl ? 1 : 0, finalStatus: 'pending', error: null });
         batchOrder++;
@@ -6764,6 +6772,7 @@ app.post('/api/comfyui/shots/generate-all', async (req, res) => {
       }
     });
     tx();
+    await stampComfyTaskRecipes(projectId, tasksToCreate);
     // P3:把 basedOnStoryVersion / basedOnStyleContractVersion 落到本批次涉及的 shots(全批版本一致)。
     await stampShotGenerationProvenance(projectId, tasksToCreate.map(t => String(t.targetId)));
 
@@ -7183,6 +7192,59 @@ function applyPresetUiParameters(
   return cloned;
 }
 
+function currentStyleAnchorVersion(projectId: string): number | null {
+  const project = readDb().generated_scripts.find((item: any) => String(item?.id) === String(projectId));
+  const version = Number(project?.styleAnchor?.version);
+  return Number.isInteger(version) && version >= 1 ? version : null;
+}
+
+function workflowNumericInput(workflow: any, key: string): number | undefined {
+  if (!workflow || typeof workflow !== 'object') return undefined;
+  for (const node of Object.values(workflow) as any[]) {
+    const value = node?.inputs?.[key];
+    const number = Number(value);
+    if (value !== undefined && value !== null && value !== '' && Number.isFinite(number)) return number;
+  }
+  return undefined;
+}
+
+function buildComfyTaskRecipe(
+  taskData: any,
+  styleContractVersion: number,
+  styleAnchorVersion: number | null,
+  workflow: any,
+  availableParams: Record<string, unknown> = {},
+): GenRecipe {
+  return buildRecipeFingerprint({
+    provider: 'comfyui_local',
+    model: taskData.model,
+    workflowPresetId: taskData.workflowPresetId || null,
+    styleContractVersion,
+    styleAnchorVersion,
+    params: {
+      width: taskData.width,
+      height: taskData.height,
+      steps: workflowNumericInput(workflow, 'steps'),
+      cfg: workflowNumericInput(workflow, 'cfg'),
+      ...availableParams,
+    },
+  });
+}
+
+async function stampComfyTaskRecipes(projectId: string, tasks: any[]): Promise<void> {
+  const records = tasks
+    .filter(task => task?.targetType === 'shot' && task?.viewType === 'main' && task?.genRecipe)
+    .map(task => ({
+      shotId: String(task.targetId),
+      recipe: task.genRecipe as GenRecipe,
+      styleAnchorVersion: task.styleAnchorVersion ?? null,
+    }));
+  if (!records.length) return;
+  await mutateDb(store => {
+    applyShotRecipeRecords(store, projectId, records);
+  });
+}
+
 async function prepareComfyTaskData(reqBody: any) {
   const {
     prompt, style, isCharacter, skipTranslation, negativePrompt, negative_prompt, seed,
@@ -7387,35 +7449,46 @@ async function prepareComfyTaskData(reqBody: any) {
       model: presetModel,
     });
 
+    const taskData = {
+      projectId: String(projectId || ''),
+      targetId,
+      targetType: targetType || (isCharacter ? 'character' : 'shot'),
+      viewType,
+      shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+      characterName: characterName ? String(characterName) : null,
+      prompt: identityPrompt,
+      negativePrompt: presetNegative,
+      seed: taskSeed,
+      model: presetModel,
+      width,
+      height,
+      apiWorkflowJson: JSON.stringify(apiSnapshot),
+      uiWorkflowJson: JSON.stringify(uiSnapshot),
+      workflowPresetId: presetId,
+      workflowFamily: manifest.workflowFamily,
+      workflowBatchId: workflowBatchId || null,
+      sourceImageUrl,
+      sourceTaskId,
+      outputNodeId: manifest.nodeMappings?.saveImageNodeId || '9',
+      presetParametersJson: JSON.stringify({ strength, loraStrength }),
+      characterReferenceImageUrl: characterReference.sourceImageUrl,
+      characterReferenceTaskId: characterReference.referenceTaskId,
+      lockCharacterIdentity: lockCharacterIdentity ? 1 : 0
+    };
+    const styleAnchorVersion = currentStyleAnchorVersion(taskData.projectId);
+    const recipe = buildComfyTaskRecipe(
+      taskData,
+      effectiveStyleContract?.version || 0,
+      styleAnchorVersion,
+      apiSnapshot,
+      { strength, loraStrength },
+    );
     return {
       success: true,
       presetId,
-      taskData: {
-        projectId: String(projectId || ''),
-        targetId,
-        targetType: targetType || (isCharacter ? 'character' : 'shot'),
-        viewType,
-        shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
-        characterName: characterName ? String(characterName) : null,
-        prompt: identityPrompt,
-        negativePrompt: presetNegative,
-        seed: taskSeed,
-        model: presetModel,
-        width,
-        height,
-        apiWorkflowJson: JSON.stringify(apiSnapshot),
-        uiWorkflowJson: JSON.stringify(uiSnapshot),
-        workflowPresetId: presetId,
-        workflowFamily: manifest.workflowFamily,
-        workflowBatchId: workflowBatchId || null,
-        sourceImageUrl,
-        sourceTaskId,
-        outputNodeId: manifest.nodeMappings?.saveImageNodeId || '9',
-        presetParametersJson: JSON.stringify({ strength, loraStrength }),
-        characterReferenceImageUrl: characterReference.sourceImageUrl,
-        characterReferenceTaskId: characterReference.referenceTaskId,
-        lockCharacterIdentity: lockCharacterIdentity ? 1 : 0
-      },
+      taskData,
+      recipe,
+      styleAnchorVersion,
       warning: characterReference.warning || (
         characterReference.characters.length && presetId !== '02_klein_pulid_identity'
           ? '当前分镜预设不支持参考图身份锁定；已保留文本提示，但角色外观可能漂移。'
@@ -7455,35 +7528,45 @@ async function prepareComfyTaskData(reqBody: any) {
   }
   const model = checkpoint || workflowCheckpoint(workflowSnapshot);
 
+  const taskData = {
+    projectId: String(projectId || ''),
+    targetId,
+    targetType: targetType || (isCharacter ? 'character' : 'shot'),
+    viewType,
+    shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
+    characterName: characterName ? String(characterName) : null,
+    prompt: optimizedPrompt,
+    negativePrompt: comfyNegative,
+    seed: taskSeed,
+    model,
+    width,
+    height,
+    apiWorkflowJson,
+    uiWorkflowJson,
+    workflowPresetId: 'sdxl_legacy',
+    workflowFamily: 'sdxl',
+    workflowBatchId: workflowBatchId || null,
+    sourceImageUrl: null,
+    sourceTaskId: null,
+    outputNodeId: '9',
+    presetParametersJson: JSON.stringify({}),
+    characterReferenceImageUrl: null,
+    characterReferenceTaskId: null,
+    lockCharacterIdentity: lockCharacterIdentity ? 1 : 0
+  };
+  const styleAnchorVersion = currentStyleAnchorVersion(taskData.projectId);
+  const recipe = buildComfyTaskRecipe(
+    taskData,
+    effectiveStyleContract?.version || 0,
+    styleAnchorVersion,
+    workflowSnapshot,
+  );
   return {
     success: true,
     presetId: 'sdxl_legacy',
-    taskData: {
-      projectId: String(projectId || ''),
-      targetId,
-      targetType: targetType || (isCharacter ? 'character' : 'shot'),
-      viewType,
-      shotIndex: typeof shotIndex === 'number' ? shotIndex : null,
-      characterName: characterName ? String(characterName) : null,
-      prompt: optimizedPrompt,
-      negativePrompt: comfyNegative,
-      seed: taskSeed,
-      model,
-      width,
-      height,
-      apiWorkflowJson,
-      uiWorkflowJson,
-      workflowPresetId: 'sdxl_legacy',
-      workflowFamily: 'sdxl',
-      workflowBatchId: workflowBatchId || null,
-      sourceImageUrl: null,
-      sourceTaskId: null,
-      outputNodeId: '9',
-      presetParametersJson: JSON.stringify({}),
-      characterReferenceImageUrl: null,
-      characterReferenceTaskId: null,
-      lockCharacterIdentity: lockCharacterIdentity ? 1 : 0
-    },
+    taskData,
+    recipe,
+    styleAnchorVersion,
     warning: characterReference.characters.length
       ? '当前 SDXL Legacy 分镜预设不支持参考图身份锁定；已继续使用旧流程，角色外观可能漂移。'
       : undefined
@@ -7510,6 +7593,8 @@ registerImageGenRouting({
         height: contract.height,
         presetId: String(contract.storyboardPresetId || '').trim() || null,
         loraStrength: Number.isFinite(contract.loraStrength) ? contract.loraStrength : null,
+        styleAnchorUrl: typeof project?.styleAnchor?.imageUrl === 'string' ? project.styleAnchor.imageUrl : null,
+        styleAnchorVersion: Number.isInteger(project?.styleAnchor?.version) ? project.styleAnchor.version : null,
       };
     } catch {
       return null;
@@ -7790,6 +7875,11 @@ app.post('/api/generate-image', async (req, res) => {
           );
         });
         tx();
+        await stampComfyTaskRecipes(prepared.taskData.projectId, [{
+          ...prepared.taskData,
+          genRecipe: prepared.recipe,
+          styleAnchorVersion: prepared.styleAnchorVersion,
+        }]);
         if (shotSnapshot) {
           await stampShotGenerationProvenance(prepared.taskData.projectId, [String(prepared.taskData.targetId)]);
         }
@@ -7811,6 +7901,8 @@ app.post('/api/generate-image', async (req, res) => {
           seed: prepared.taskData.seed,
           width: prepared.taskData.width,
           height: prepared.taskData.height,
+          recipe: prepared.recipe,
+          styleAnchorVersion: prepared.styleAnchorVersion ?? undefined,
           characterConsistency: prepared.taskData.characterReferenceImageUrl ? 'pulid' : 'none',
           characterReferenceImageUrl: prepared.taskData.characterReferenceImageUrl,
           characterReferenceTaskId: prepared.taskData.characterReferenceTaskId,
@@ -8002,6 +8094,7 @@ registerExportDeckModule(app, dbSqlite, {
 });
 registerStoryVersionModule(app, dbSqlite, { mutateDb });
 registerStyleContractModule(app, { readDb, mutateDb });
+registerStyleAnchorModule(app, { readDb, mutateDb, uploadsDir: UPLOADS_DIR });
 registerSceneReferenceModule(app, { readDb, mutateDb, uploadsDir: UPLOADS_DIR });
 registerVideoLabModule(app, {
   readDb,

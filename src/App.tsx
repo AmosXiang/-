@@ -41,6 +41,7 @@ import StoryEditor from "./components/StoryEditor";
 import ShotVersionPanel from "./components/ShotVersionPanel";
 import StyleContractPanel from "./components/StyleContractPanel";
 import StyleContractReadonly from "./components/StyleContractReadonly";
+import StyleAnchorPanel from "./components/StyleAnchorPanel";
 import SceneReferencePanel from "./components/SceneReferencePanel";
 import DeliveryPanel from "./components/DeliveryPanel";
 import StoryboardReview from "./components/StoryboardReview";
@@ -5287,6 +5288,10 @@ export default function App() {
                           projectId={String(generatedScript.id)}
                           refreshNonce={styleContractRefreshNonce}
                         />
+                        <StyleAnchorPanel
+                          projectId={String(generatedScript.id)}
+                          onChange={() => { void refreshGeneratedScripts(); }}
+                        />
                         <SceneReferencePanel projectId={String(generatedScript.id)} onScenesChange={handleSceneReferencesChange} />
                       </div>
                     ) : (
@@ -6200,7 +6205,12 @@ export default function App() {
                                   <details className="inspector-section">
                                     <summary><span>③ 项目风格契约</span><span className="inspector-chevron">›</span></summary>
                                     <div className="inspector-section-body space-y-3">
-                                      <StyleContractReadonly projectId={String(generatedScript.id)} />
+                                      <StyleContractReadonly
+                                        projectId={String(generatedScript.id)}
+                                        recipe={(shot as any).gen_recipe}
+                                        generatedContractVersion={(shot as any).gen_style_contract_version}
+                                        generatedAnchorVersion={(shot as any).gen_style_anchor_version}
+                                      />
                                       <p className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[10px] text-slate-400">当前分镜场景：<span className="font-semibold text-slate-200">{currentScene?.name || '未标注场景'}</span></p>
                                     </div>
                                   </details>

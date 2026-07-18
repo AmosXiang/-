@@ -1,3 +1,5 @@
+import type { GenRecipe } from './recipeFingerprint.ts';
+
 export interface ImageStyleContext {
   contractVersion: number;
   styleOverlay: string;
@@ -7,6 +9,8 @@ export interface ImageStyleContext {
   height: number;
   presetId: string | null;
   loraStrength: number | null;
+  styleAnchorUrl?: string | null;
+  styleAnchorVersion?: number | null;
 }
 
 export type StyleBundle = ImageStyleContext;
@@ -25,6 +29,7 @@ export interface StyleBundleSummary {
   height: number;
   presetId: string | null;
   loraStrength: number | null;
+  styleAnchorVersion: number | null;
   injected: StyleBundleInjection;
 }
 
@@ -41,6 +46,10 @@ export function buildStyleBundle(context: ImageStyleContext): StyleBundle {
     height: context.height,
     presetId: context.presetId === null ? null : String(context.presetId),
     loraStrength: context.loraStrength,
+    styleAnchorUrl: context.styleAnchorUrl ? String(context.styleAnchorUrl) : null,
+    styleAnchorVersion: Number.isInteger(context.styleAnchorVersion) && Number(context.styleAnchorVersion) >= 1
+      ? Number(context.styleAnchorVersion)
+      : null,
   };
 }
 
@@ -86,14 +95,27 @@ export function summarizeStyleBundle(
     height,
     presetId: bundle.presetId,
     loraStrength: bundle.loraStrength,
+    styleAnchorVersion: bundle.styleAnchorVersion ?? null,
     injected: { ...injected },
   };
 }
 
-export function appendStyleBundleSummary(rawMeta: unknown, summary: StyleBundleSummary | null): unknown {
-  if (!summary) return rawMeta;
+export function appendStyleBundleSummary(
+  rawMeta: unknown,
+  summary: StyleBundleSummary | null,
+  recipe?: GenRecipe,
+): unknown {
+  if (!summary && !recipe) return rawMeta;
   if (rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta)) {
-    return { ...(rawMeta as Record<string, unknown>), styleBundle: summary };
+    return {
+      ...(rawMeta as Record<string, unknown>),
+      ...(summary ? { styleBundle: summary } : {}),
+      ...(recipe ? { recipe } : {}),
+    };
   }
-  return { providerRawMeta: rawMeta ?? null, styleBundle: summary };
+  return {
+    providerRawMeta: rawMeta ?? null,
+    ...(summary ? { styleBundle: summary } : {}),
+    ...(recipe ? { recipe } : {}),
+  };
 }
