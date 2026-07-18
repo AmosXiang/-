@@ -5,7 +5,7 @@
 > **背景（四证据线定案，见 `evidence/agnes-referenceimages-ab-finding.md` / `evidence/comfyui-ipadapter-capability-finding.md`）**：图像级风格锚点架构性不可得；风格统一靠「P0 文本 overlay + 人工复核 + 漂移镜按批准配方重生」。P2＝把这套策略变成**可见、可追、要人工确认**的定稿门。用户原话拍板的判据：定稿应检查①同一风格契约版本②同一锚图版本③可接受的生成配方（provider+模型+工作流+关键强度）④本地图片存在/能解码/尺寸正确⑤人工视觉确认通过⑥相似度只作离群警告，**不自动淘汰**。
 > **核心原则**：**同一 provider ≠ 同一风格**；定稿判据是"配方一致 + 版本当前 + 人工过"，绝不用 `gen_provider` 相同与否当依据。
 > 分工（Codex 主导）：coding + deps/接线 + 验证 + 提交 + 隔离自验；CC 逐行 review + 真机。
-> 基线 `feature/camera-derive@<P1-A 合入后 HEAD，CC 通知>`。分支：`git worktree add -b feat/style-finalize-gate ../wt-finalize-gate <baseline>`。
+> 基线 `feature/camera-derive@468d55f`（P1-A 已合入，`gen_recipe` / `buildRecipeFingerprint` / `applyShotRecipeRecords` 已就绪，从 `server/providers/imageGen/` 导出）。分支：`git worktree add -b feat/style-finalize-gate ../wt-finalize-gate 468d55f`。
 
 ## 一、范围拍板（越界即返工）
 
