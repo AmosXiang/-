@@ -17,6 +17,8 @@ const context: ImageStyleContext = {
   height: 720,
   presetId: '01_klein_character_master',
   loraStrength: 0.65,
+  styleAnchorUrl: '/uploads/style-anchors/p1-2.png',
+  styleAnchorVersion: 2,
 };
 
 test('composeAgnesPrompt appends project then scene overlays after the optimized prompt', () => {
@@ -73,6 +75,7 @@ test('version zero remains auditable and summary dimensions reflect the provider
     height: 384,
     presetId: '01_klein_character_master',
     loraStrength: 0.65,
+    styleAnchorVersion: 2,
     injected: { style: true, scene: true },
   });
   assert.deepEqual(appendStyleBundleSummary({ remote_url: 'https://example.invalid/image.png' }, summary), {

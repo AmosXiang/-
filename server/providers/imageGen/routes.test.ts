@@ -141,6 +141,8 @@ const styleContext: ImageStyleContext = {
   height: 720,
   presetId: '01_klein_character_master',
   loraStrength: 0.65,
+  styleAnchorUrl: '/uploads/style-anchors/p1-2.png',
+  styleAnchorVersion: 2,
 };
 
 test('autoRoute off: normal empty-shot generation passes through to the legacy handler untouched', async () => {
@@ -259,7 +261,11 @@ test('Agnes consumes the shared bundle after prompt optimization and records ver
     resolveStyleContext: () => styleContext,
   });
   try {
-    const { status, body } = await ctx.post({ ...normalEmptyShotBody, forceProvider: 'agnes' });
+    const { status, body } = await ctx.post({
+      ...normalEmptyShotBody,
+      forceProvider: 'agnes',
+      referenceImages: ['/uploads/style-anchors/p1-2.png'],
+    });
     assert.equal(status, 200);
     assert.equal(body.styleContractVersion, 0);
     assert.equal(stub.calls.length, 1);
@@ -273,11 +279,18 @@ test('Agnes consumes the shared bundle after prompt optimization and records ver
       width: 1280,
       height: 720,
       seed: undefined,
-      referenceImages: undefined,
     });
+    assert.equal('referenceImages' in stub.calls[0], false);
+    assert.equal(stub.calls[0].prompt.includes('/uploads/style-anchors/'), false);
 
     const shot = readShot(ctx.db, 's1');
     assert.equal(shot.gen_style_contract_version, 0);
+    assert.equal(shot.gen_style_anchor_version, 2);
+    assert.equal(shot.gen_recipe.provider, 'agnes');
+    assert.equal(shot.gen_recipe.model, 'agnes-image-2.1-flash');
+    assert.equal(shot.gen_recipe.styleAnchorVersion, 2);
+    assert.deepEqual(body.recipe, shot.gen_recipe);
+    assert.equal(body.styleAnchorVersion, 2);
     const audit = ctx.db.prepare('SELECT * FROM shot_image_provider_audit WHERE project_id = ? AND shot_id = ?').get('p1', 's1') as any;
     assert.ok(Buffer.byteLength(audit.raw_meta) <= 8192);
     const rawMeta = JSON.parse(audit.raw_meta);
@@ -291,8 +304,10 @@ test('Agnes consumes the shared bundle after prompt optimization and records ver
       height: 720,
       presetId: '01_klein_character_master',
       loraStrength: 0.65,
+      styleAnchorVersion: 2,
       injected: { style: true, scene: true },
     });
+    assert.deepEqual(rawMeta.recipe, shot.gen_recipe);
   } finally {
     await ctx.close();
   }
@@ -346,6 +361,9 @@ test('missing, null, or failed style context preserves legacy Agnes behavior wit
       assert.equal(ctx.stub.calls[0].height, 1024, item.name);
       assert.equal(Object.prototype.hasOwnProperty.call(body, 'styleContractVersion'), false, item.name);
       assert.equal(Object.prototype.hasOwnProperty.call(readShot(ctx.db, 's1'), 'gen_style_contract_version'), false, item.name);
+      assert.equal(Object.prototype.hasOwnProperty.call(readShot(ctx.db, 's1'), 'gen_style_anchor_version'), false, item.name);
+      assert.equal(readShot(ctx.db, 's1').gen_recipe.styleContractVersion, 0, item.name);
+      assert.equal(readShot(ctx.db, 's1').gen_recipe.styleAnchorVersion, null, item.name);
       assert.equal(warnings.filter(warning => warning.includes('style_context_unavailable')).length, 1, item.name);
     } finally {
       console.warn = originalWarn;

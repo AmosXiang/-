@@ -4,6 +4,8 @@ import sharp from 'sharp';
 import { AgnesClient } from '../agnesClient.ts';
 import { type ImageGenProvider, type ImageGenRequest, type ImageGenResult, validateImageGenRequest } from './types.ts';
 
+export const AGNES_TEXT_TO_IMAGE_MODEL = 'agnes-image-2.1-flash' as const;
+
 function record(value: unknown): Record<string, any> {
   return value && typeof value === 'object' ? value as Record<string, any> : {};
 }
@@ -19,17 +21,6 @@ function imageUrl(raw: unknown): string {
   return candidate;
 }
 
-async function referenceDataUrl(localPath: string): Promise<string> {
-  const absolute = path.resolve(localPath);
-  const bytes = await fs.promises.readFile(absolute);
-  const metadata = await sharp(bytes).metadata();
-  const mime = metadata.format === 'jpeg' ? 'image/jpeg'
-    : metadata.format === 'webp' ? 'image/webp'
-      : metadata.format === 'gif' ? 'image/gif'
-        : 'image/png';
-  return `data:${mime};base64,${bytes.toString('base64')}`;
-}
-
 export class AgnesImageProvider implements ImageGenProvider {
   readonly name = 'agnes' as const;
 
@@ -40,15 +31,12 @@ export class AgnesImageProvider implements ImageGenProvider {
 
   async generate(req: ImageGenRequest): Promise<ImageGenResult> {
     validateImageGenRequest(req);
-    const referenceDataUrls = await Promise.all((req.referenceImages || []).map(referenceDataUrl));
-    const model = referenceDataUrls.length ? 'agnes-image-2.0-flash' : 'agnes-image-2.1-flash';
     const created = await this.client.generateImage({
-      model,
+      model: AGNES_TEXT_TO_IMAGE_MODEL,
       prompt: req.prompt,
       width: req.width,
       height: req.height,
       seed: req.seed,
-      referenceDataUrls,
     });
     const remoteUrl = imageUrl(created.raw);
     const startedAt = Date.now();
@@ -87,7 +75,14 @@ export class AgnesImageProvider implements ImageGenProvider {
       requestId: created.requestId,
       imagePath: `/uploads/${relativePath.replace(/\\/g, '/')}`,
       seedUsed: undefined,
-      rawMeta: { response: created.raw, remote_url: remoteUrl, seed_requested: req.seed ?? null, seed_forwarded: false },
+      rawMeta: {
+        response: created.raw,
+        remote_url: remoteUrl,
+        model: AGNES_TEXT_TO_IMAGE_MODEL,
+        seed_requested: req.seed ?? null,
+        seed_forwarded: false,
+        reference_count: 0,
+      },
     };
   }
 }

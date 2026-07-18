@@ -2,7 +2,7 @@ import path from 'path';
 import type { Express, NextFunction, Request, Response } from 'express';
 import type Database from 'better-sqlite3';
 import { AgnesClient } from '../agnesClient.ts';
-import { AgnesImageProvider } from './agnesImageProvider.ts';
+import { AGNES_TEXT_TO_IMAGE_MODEL, AgnesImageProvider } from './agnesImageProvider.ts';
 import { ImageGenRouter } from './router.ts';
 import {
   appendStyleBundleSummary,
@@ -13,7 +13,11 @@ import {
   type StyleBundle,
   type StyleBundleSummary,
 } from './styleBundle.ts';
+import { buildRecipeFingerprint, type GenRecipe } from './recipeFingerprint.ts';
 import { ImageGenValidationError, type ImageGenProvider, type ImageGenProviderName } from './types.ts';
+
+export { applyShotRecipeRecords, buildRecipeFingerprint } from './recipeFingerprint.ts';
+export type { GenRecipe, ShotRecipeRecord } from './recipeFingerprint.ts';
 
 type OptimizePrompt = (prompt: string, isCharacter: boolean, style?: string) => Promise<string>;
 
@@ -35,6 +39,7 @@ function rawMeta8k(value: unknown): string {
     : {};
   return JSON.stringify({
     ...(record.styleBundle === undefined ? {} : { styleBundle: record.styleBundle }),
+    ...(record.recipe === undefined ? {} : { recipe: record.recipe }),
     providerRawMetaTruncated: true,
     originalBytes: bytes,
   });
@@ -75,6 +80,8 @@ function saveAudit(
     remoteUrl?: string | null;
     imagePath?: string;
     styleContractVersion?: number | null;
+    styleAnchorVersion?: number | null;
+    recipe?: GenRecipe;
   },
 ) {
   const located = findShot(db, projectId, targetId, undefined);
@@ -89,6 +96,12 @@ function saveAudit(
     } else if (options.styleContractVersion !== undefined) {
       located.shot.gen_style_contract_version = options.styleContractVersion;
     }
+    if (options.styleAnchorVersion === null) {
+      delete located.shot.gen_style_anchor_version;
+    } else if (options.styleAnchorVersion !== undefined) {
+      located.shot.gen_style_anchor_version = options.styleAnchorVersion;
+    }
+    if (options.recipe) located.shot.gen_recipe = options.recipe;
     db.prepare("INSERT OR REPLACE INTO store (key, value) VALUES ('generated_scripts', ?)").run(JSON.stringify(located.scripts));
   }
   const now = new Date().toISOString();
@@ -221,15 +234,24 @@ export function registerImageGenRouting(options: {
         width,
         height,
         seed: req.body?.seed === undefined ? undefined : Number(req.body.seed),
-        referenceImages: Array.isArray(req.body?.referenceImages) ? req.body.referenceImages.map(String) : undefined,
       });
       const meta = result.rawMeta as Record<string, any>;
+      const recipe = buildRecipeFingerprint({
+        provider: result.provider,
+        model: String(meta?.model || AGNES_TEXT_TO_IMAGE_MODEL),
+        workflowPresetId: null,
+        styleContractVersion: styleBundle?.contractVersion ?? 0,
+        styleAnchorVersion: styleBundle?.styleAnchorVersion ?? null,
+        params: { width, height, loraStrength: styleBundle?.loraStrength },
+      });
       saveAudit(options.db, projectId, targetId, result.provider, decision.reason, {
         requestId: result.requestId,
-        rawMeta: appendStyleBundleSummary(result.rawMeta, styleBundleSummary),
+        rawMeta: appendStyleBundleSummary(result.rawMeta, styleBundleSummary, recipe),
         remoteUrl: meta?.remote_url,
         imagePath: result.imagePath,
         styleContractVersion: styleBundle?.contractVersion ?? null,
+        styleAnchorVersion: styleBundle?.styleAnchorVersion ?? null,
+        recipe,
       });
       return res.json({
         success: true,
@@ -238,6 +260,8 @@ export function registerImageGenRouting(options: {
         imageUrl: result.imagePath,
         seed: result.seedUsed,
         styleContractVersion: styleBundle?.contractVersion,
+        styleAnchorVersion: styleBundle?.styleAnchorVersion ?? undefined,
+        recipe,
       });
     } catch (error: any) {
       const message = String(error?.message || error);
