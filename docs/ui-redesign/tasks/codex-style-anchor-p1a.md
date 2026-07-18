@@ -9,7 +9,7 @@
 > **结论：图像级风格锚点在当前技术栈"缺机制"而非"缺资产"，架构性不可得，除非整族切换或 BFL 出 Flux.2 原生风格适配器。P1-B（图像级注入）永久关闭直到该前提改变。**
 > **因此本包 v2 重定义**：风格统一由「P0 文本 overlay（已上）＋人工复核＋漂移镜按批准配方重生」承担（四证据线背书）。本包做两件让这套策略**可落地、可追责、可被未来 P2 定稿门执行**的地基：①风格锚图＝**带版本的人工复核基准（reference-of-record）**，不是注入输入；②**配方指纹（recipe fingerprint）**＝每镜生成时的 provider＋模型＋工作流＋关键强度＋契约版本＋锚图版本的结构化记录＋稳定哈希。
 > 分工（Codex 主导，沿用 P0/离线入队包先例）：coding＋deps 形状＋server.ts 接线（仅列明热区）＋验证＋提交＋隔离起服接线自验；CC 只逐行 review＋真机。
-> 基线 `feature/camera-derive@<CC 通知的最新 HEAD>`。分支：`git worktree add -b feat/style-anchor-p1a ../wt-style-anchor <baseline>`（强制独立 worktree）。
+> 基线 `feature/camera-derive@f1740f5`。分支：`git worktree add -b feat/style-anchor-p1a ../wt-style-anchor f1740f5`（强制独立 worktree）。
 
 ## 一、范围拍板（越界即返工）
 
