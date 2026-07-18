@@ -96,3 +96,24 @@ The style anchor URL/version are read only for review/provenance. They are never
 ## Honest boundary
 
 This package proves asset versioning, recipe traceability, stable drift facts, read-only UI visibility, and zero image-level injection. It does **not** prove visual style consistency. Final visual judgment remains manual; any future blocking/finalization rule belongs to P2.
+
+---
+
+## CC 复核与真机（2026-07-18，合入 4df63f7）
+
+**逐行 review PASS**：
+- 范围：改动落在允许集（StyleAnchorPanel/StyleContractReadonly＝§五 风格设定/检查器组件）；server.ts 改动全部服务于「ComfyUI 任务落库写指纹」——单镜（generate-image handler）+ 批量（generate-all）两条 INSERT 路径 + registerImageGenRouting 热区补 styleAnchor* + 新模块 1 行 register；`stampComfyTaskRecipes`/`buildComfyTaskRecipe` 新 helper。L8002 的 @@ 头 "registerExportDeckModule" 仅为 diff 上下文标签，实际加的是 `registerStyleAnchorModule` 一行，未碰 export-deck。
+- **红线①零图像注入（物理达成）**：`composeAgnesPrompt` 未改；`referenceImages` 从 types→routes→provider **端到端删除**（provider 删 `referenceDataUrl`、model 硬钉 2.1-flash、`reference_count:0`）。真机对照：设锚图 v2 后生成空镜，产图为干净月光庭院、**无锚图（手+鼠标）任何痕迹**，`reference_count=0`、`model=agnes-image-2.1-flash`；锚图仅作 `gen_style_anchor_version=2` 元数据记录。**注**：此项删除超出任务书字面范围（任务书只要求"不用锚图注入"），CC 判为与永久红线同向的加固、予以保留，已报用户知情。
+- **红线②哈希跨进程稳定**：`recipeFingerprint.ts` params 键 `.sort()`、浮点 `toFixed(2)`/整数 `Math.round`、`-0→0`、canonical 用数组套数组（序列化顺序跨运行时确定）、undefined/null 用 tag 区分、params 值带 `typeof`；实证：键序打乱+精度(0.4235≈0.42)+prompt/seed/timestamp 噪声→同指纹 `3ae89567cf8505aa`，改 loraStrength→变。
+- 跨 provider 共用同一 `buildRecipeFingerprint`（Agnes 与 ComfyUI 均经此）。
+- style-anchor 模块：sha256 内容摘要判幂等（同图不 +1）、换图 +1、路径穿越三重防护、sharp 解码校验、旧文件清理。
+
+**真机（真实 Agnes）**：
+- 锚图版本：设 img1→v1、同图再设→v1（幂等）、换 img2→v2。
+- 空镜生成：shot JSON 落 `gen_recipe`（fp=11aebb0c…）+ `gen_style_anchor_version=2`；响应带 recipe/版本；产图零锚图影响（见上）。
+- DELETE 清锚图返回 `styleAnchor:null`。
+- 清理：借用镜头 #3 快照复原、测试锚图 DELETE 清除，项目回到测试前无锚图状态。
+
+`npm run lint` PASS；模块+imageGen 测试 **99/99**（含新增 recipeFingerprint/style-anchor 用例）。合入 `feature/camera-derive@4df63f7`。
+
+**遗留提示**：referenceImages 能力已从 Agnes 图路径移除——`POST /api/generate-image` 传 referenceImages 现被静默忽略（字段已从 ImageGenRequest 删）。与图像级注入判死一致，但改变了既有请求契约，记录备查。
