@@ -29,6 +29,18 @@ interface GenRecipe {
   params: Record<string, number | string>;
 }
 
+interface StyleGateDetail {
+  shotId: string;
+  index: number;
+  fingerprint: string | null;
+  contractCurrent: boolean;
+  anchorCurrent: boolean;
+  recipeMatches: boolean | null;
+  imageDecodable: boolean;
+  styleApprovedValid: boolean;
+  colorOutlier: boolean | null;
+}
+
 function errorMessage(data: any, status: number): string {
   if (typeof data?.error === 'string') return data.error;
   if (typeof data?.error?.message === 'string') return data.error.message;
@@ -47,11 +59,13 @@ function presetValue(value: unknown): string {
 
 export default function StyleContractReadonly({
   projectId,
+  shotId,
   recipe,
   generatedContractVersion,
   generatedAnchorVersion,
 }: {
   projectId: string;
+  shotId: string;
   recipe?: GenRecipe;
   generatedContractVersion?: number;
   generatedAnchorVersion?: number;
@@ -65,6 +79,9 @@ export default function StyleContractReadonly({
   const [error, setError] = useState('');
   const [presetWarning, setPresetWarning] = useState('');
   const [anchorVersion, setAnchorVersion] = useState<number | null>(null);
+  const [styleGateDetail, setStyleGateDetail] = useState<StyleGateDetail | null>(null);
+  const [approvedRecipeSource, setApprovedRecipeSource] = useState<string | null>(null);
+  const [styleAction, setStyleAction] = useState('');
 
   const endpoint = `/api/generated-scripts/${encodeURIComponent(projectId)}/style-contract`;
   const selectedPreset = useMemo(
@@ -77,9 +94,10 @@ export default function StyleContractReadonly({
     setError('');
     setPresetWarning('');
     try {
-      const [contractData, anchorData] = await Promise.all([
+      const [contractData, anchorData, deliveryData] = await Promise.all([
         readJson(await apiFetch(endpoint, { signal })),
         readJson(await apiFetch(`/api/projects/${encodeURIComponent(projectId)}/style-anchor`, { signal })),
+        readJson(await apiFetch(`/api/generated-scripts/${encodeURIComponent(projectId)}/delivery-check`, { signal })),
       ]);
       setContract(contractData.contract as StyleContractFields);
       setInitialized(Boolean(contractData.initialized));
@@ -87,6 +105,11 @@ export default function StyleContractReadonly({
       setLocked(Boolean(contractData.locked));
       const nextAnchorVersion = Number(anchorData.styleAnchor?.version);
       setAnchorVersion(Number.isInteger(nextAnchorVersion) && nextAnchorVersion >= 1 ? nextAnchorVersion : null);
+      const gateDetails = Array.isArray(deliveryData.styleGate?.details) ? deliveryData.styleGate.details : [];
+      setStyleGateDetail(gateDetails.find((item: any) => String(item.shotId) === String(shotId)) || null);
+      setApprovedRecipeSource(deliveryData.styleGate?.approvedRecipe?.setFromShotId
+        ? String(deliveryData.styleGate.approvedRecipe.setFromShotId)
+        : null);
       try {
         const presetData = await readJson(await apiFetch('/api/comfyui/presets?purpose=storyboard', { signal }));
         setPresets(Array.isArray(presetData.presets) ? presetData.presets : []);
@@ -98,13 +121,44 @@ export default function StyleContractReadonly({
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [endpoint, projectId]);
+  }, [endpoint, projectId, shotId]);
 
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  const runStyleAction = async (key: string, request: () => Promise<Response>) => {
+    setStyleAction(key);
+    setError('');
+    try {
+      await readJson(await request());
+      await load();
+    } catch (actionError) {
+      setError((actionError as Error).message);
+    } finally {
+      setStyleAction('');
+    }
+  };
+
+  const pinRecipe = () => runStyleAction('pin', () => apiFetch(
+    `/api/projects/${encodeURIComponent(projectId)}/approved-recipe`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shotId }),
+    },
+  ));
+
+  const setStyleApproved = (approved: boolean) => runStyleAction('approve', () => apiFetch(
+    `/api/generated-scripts/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/style-approved`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved }),
+    },
+  ));
 
   if (loading) {
     return <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-xs text-slate-400" role="status">正在读取项目风格契约…</div>;
@@ -124,6 +178,11 @@ export default function StyleContractReadonly({
   const badge = (matches: boolean, current: number | null, generated: number | null | undefined, label: string) => (
     <span className={`rounded-lg border px-2 py-1 text-[10px] font-semibold ${matches ? 'border-emerald-800 bg-emerald-950/30 text-emerald-300' : 'border-amber-800 bg-amber-950/30 text-amber-300'}`}>
       {label} {matches ? `匹配${current === null ? '（未设置）' : ` v${current}`}` : `落后当前${current === null ? '（已清除）' : ` v${current}`} · 生成 ${generated === null || generated === undefined ? '未记录' : `v${generated}`}`}
+    </span>
+  );
+  const gateBadge = (label: string, value: boolean | null, nullable = false) => (
+    <span className={`rounded-md border px-1.5 py-0.5 text-[9px] ${value === true ? 'border-emerald-800 bg-emerald-950/30 text-emerald-300' : nullable && value === null ? 'border-slate-700 bg-slate-900 text-slate-400' : 'border-amber-800 bg-amber-950/30 text-amber-300'}`}>
+      {label} {value === true ? '通过' : nullable && value === null ? '未设标准' : '需处理'}
     </span>
   );
   const recipePanel = (
@@ -149,6 +208,41 @@ export default function StyleContractReadonly({
               </Fragment>
             ))}
           </dl>
+          <section className="mt-3 space-y-2 rounded-lg border border-slate-800 bg-slate-950/55 p-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold text-slate-300">定稿门判据</p>
+              <span className="text-[9px] text-slate-500">批准配方：{approvedRecipeSource ? `来自镜头 ${approvedRecipeSource}` : '未设置'}</span>
+            </div>
+            {styleGateDetail ? (
+              <div className="flex flex-wrap gap-1.5">
+                {gateBadge('契约', styleGateDetail.contractCurrent)}
+                {gateBadge('锚图', styleGateDetail.anchorCurrent)}
+                {gateBadge('配方', styleGateDetail.recipeMatches, true)}
+                {gateBadge('图片', styleGateDetail.imageDecodable)}
+                {gateBadge('人工', styleGateDetail.styleApprovedValid)}
+                {styleGateDetail.colorOutlier === true && <span className="rounded-md border border-cyan-800 bg-cyan-950/30 px-1.5 py-0.5 text-[9px] text-cyan-300">色彩离群 · 仅提示</span>}
+              </div>
+            ) : <p className="text-[9px] text-slate-500">当前交付检查未返回该镜头判据。</p>}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={!recipe?.fingerprint || Boolean(styleAction)}
+                onClick={() => void pinRecipe()}
+                className="rounded-md border border-indigo-800 px-2 py-1 text-[9px] text-indigo-300 hover:bg-indigo-950/50 disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                {styleAction === 'pin' ? '钉选中…' : '钉为项目批准配方'}
+              </button>
+              <button
+                type="button"
+                disabled={!recipe?.fingerprint || Boolean(styleAction)}
+                onClick={() => void setStyleApproved(!styleGateDetail?.styleApprovedValid)}
+                className="rounded-md border border-emerald-800 px-2 py-1 text-[9px] text-emerald-300 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                {styleAction === 'approve' ? '保存中…' : styleGateDetail?.styleApprovedValid ? '撤销风格确认' : '标记风格已确认'}
+              </button>
+            </div>
+            <p className="text-[9px] leading-relaxed text-slate-500">人工复核辅助：不自动淘汰、不阻断导出；漂移镜请判断后按批准配方重生。</p>
+          </section>
           <p className="mt-3 text-[10px] leading-relaxed text-slate-500">仅展示生成时配方与版本状态，不拦截生成、定稿或导出。</p>
         </>
       ) : <p className="mt-2 text-[10px] text-slate-500">该镜头尚无配方指纹（旧镜头或尚未生成）。</p>}

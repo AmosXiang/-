@@ -90,6 +90,29 @@ function noteValue(value: unknown, fallback?: string): string | undefined {
   return note || undefined;
 }
 
+function requiredShotId(value: unknown): string {
+  const shotId = typeof value === 'string' ? value.trim() : '';
+  if (!shotId || shotId.length > 256) {
+    throw new StyleAnchorError(400, 'shotId is required.', 'SHOT_ID_INVALID');
+  }
+  return shotId;
+}
+
+function shotInProject(project: any, shotId: string): any {
+  const shots = Array.isArray(project?.newShots) ? project.newShots : [];
+  const shot = shots.find((item: any) => String(item?.id) === shotId);
+  if (!shot) throw new StyleAnchorError(404, `Shot '${shotId}' not found.`, 'SHOT_NOT_FOUND');
+  return shot;
+}
+
+function recipeSnapshot(shot: any): any {
+  const recipe = shot?.gen_recipe;
+  if (!recipe || typeof recipe !== 'object' || typeof recipe.fingerprint !== 'string' || !recipe.fingerprint.trim()) {
+    throw new StyleAnchorError(422, 'The selected shot has no generation recipe.', 'RECIPE_MISSING');
+  }
+  return JSON.parse(JSON.stringify(recipe));
+}
+
 function anchorDirectory(uploadsDir: string): string {
   return path.resolve(uploadsDir, 'style-anchors');
 }
@@ -137,6 +160,67 @@ export function registerStyleAnchorModule(app: Express, deps: StyleAnchorDeps): 
       }
       callback(null, true);
     },
+  });
+
+  app.put('/api/projects/:projectId/approved-recipe', async (req: Request, res: Response) => {
+    try {
+      const projectId = safeProjectId(req.params.projectId);
+      const shotId = requiredShotId(req.body?.shotId);
+      let approvedRecipe: any;
+      await deps.mutateDb((store: any) => {
+        const project = projectInStore(store, projectId);
+        const recipe = recipeSnapshot(shotInProject(project, shotId));
+        approvedRecipe = {
+          fingerprint: recipe.fingerprint,
+          recipe,
+          setFromShotId: shotId,
+          setAt: new Date().toISOString(),
+        };
+        project.approvedRecipe = approvedRecipe;
+      });
+      return res.json({ success: true, approvedRecipe });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  app.delete('/api/projects/:projectId/approved-recipe', async (req: Request, res: Response) => {
+    try {
+      const projectId = safeProjectId(req.params.projectId);
+      await deps.mutateDb((store: any) => {
+        delete projectInStore(store, projectId).approvedRecipe;
+      });
+      return res.json({ success: true, approvedRecipe: null });
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  app.put('/api/generated-scripts/:projectId/shots/:shotId/style-approved', async (req: Request, res: Response) => {
+    try {
+      const projectId = safeProjectId(req.params.projectId);
+      const shotId = requiredShotId(req.params.shotId);
+      if (typeof req.body?.approved !== 'boolean') {
+        throw new StyleAnchorError(400, 'approved must be boolean.', 'APPROVED_STATE_INVALID');
+      }
+      let styleApproved: any = null;
+      await deps.mutateDb((store: any) => {
+        const shot = shotInProject(projectInStore(store, projectId), shotId);
+        if (req.body.approved) {
+          const recipe = recipeSnapshot(shot);
+          styleApproved = {
+            approvedFingerprint: recipe.fingerprint,
+            approvedAt: new Date().toISOString(),
+          };
+          shot.styleApproved = styleApproved;
+        } else {
+          delete shot.styleApproved;
+        }
+      });
+      return res.json({ success: true, styleApproved });
+    } catch (error) {
+      return sendError(res, error);
+    }
   });
 
   app.get('/api/projects/:projectId/style-anchor', (req: Request, res: Response) => {
