@@ -48,6 +48,7 @@ Result: **99 passed, 0 failed**.
 
 ### Static and production build gates
 
+- `npm run lint` — **PASS** (`tsc --noEmit`)
 - `node_modules\.bin\tsc.cmd --noEmit` — **PASS**
 - `npm run build` — **PASS**, 2,092 modules transformed. Vite reported only the existing large-chunk advisory.
 
