@@ -94,3 +94,26 @@ The isolated server persisted the approved recipe and both shot approvals. Shot 
 ## Honest boundary
 
 P2 reports deterministic provenance, file-decode state, and a low-cost color warning. It does **not** determine whether images are visually consistent. Human `styleApproved` remains the final judgment; CLIP or semantic similarity remains future work. Browser/real-machine interaction is reserved for CC review after this local package.
+
+---
+
+## CC 复核与真机（2026-07-19，合入 f706610）
+
+**逐行 review PASS**（四红线全守）：
+- **server.ts 零改动**兑现（不在 diff）；父提交严格 `468d55f`。范围合规（export-deck/** + style-anchor/** + DeliveryPanel + StyleContractReadonly[检查器组件] + App.tsx 1 行 + 证据）。
+- **红线①零指纹重算**：`styleGate.ts` 只 `fingerprintOf(shot.gen_recipe)` 取字符串，`recipeMatches = fingerprint === approvedFingerprint` 纯比较；无 buildRecipeFingerprint/createHash（grep 证实）。
+- **红线②零图像注入**：门只读（sharp 解码判 decodable + 色彩直方图），无 provider 调用。
+- **红线③零自动淘汰/新增阻断**：styleGate 仅加进 delivery-check summary（因 sharp 解码改 async）；final-mode 409（notFinalized>0）逻辑**逐字未动**，风格 drift 不新增任何 4xx。
+- **色彩离群仅警告**：`colorOutlier → warnings[]`，`detailNeedsAttention = reasons.length>0` 不含它；`recipeMatches===null`（无基线）不触发 recipe_drift。
+- 批准/确认写操作快照当前 `gen_recipe.fingerprint`；无有效 recipe 时拒绝钉/确认。
+
+**真机（真实 server + 真实端点，DB 副本手术隔离）**：
+- baseline delivery-check：styleGate 存在、`approvedRecipeMissing=true`、无基线 `recipeDrift=0`、needsAttention=74（全镜未人工确认，符合"人工确认是判据"语义）。
+- 钉批准配方 → `approvedRecipe.fingerprint` 落项目；delivery-check：该镜 `recipeMatches=true`、其余 73 镜 `recipeDrift=73`（不匹配基线，正确）。
+- 标记 style-approved → `styleApproved.approvedFingerprint` 快照当前指纹；该镜 `styleApprovedValid=true`、`needsAttention=false reasons=[]` 完全过门。
+- **漂移 + 自动失效**：改该镜 gen_recipe.fingerprint → `recipeMatches=false`（recipeDrift 计数+1）**且** `styleApprovedValid` 自动失效（批准时快照指纹已不等于当前）→ `reasons=["recipe_drift","style_unapproved"]`。这是 P2 核心价值：配方一变，过期"已确认"自动作废。
+- 清理：借用镜头快照复原、approvedRecipe/styleApproved 清除，项目回测试前干净态（approvedRecipe=null、styleApproved=0、gen_recipe=0）。
+
+**诚实边界**：本轮 Agnes 图片上游持续 503（Service busy，外部过载，非代码），故门测试的 gen_recipe 采用**直接种入**而非现场 Agnes 生成——P2 契约是"读取+比对指纹"（已证零重算），配方**生产**在 P1-A 已用真实 Agnes 验过（见 style-anchor-p1a §CC 增补）；门的读取/比对/漂移/失效全经真实 server 端点验证。
+
+`npm run lint` PASS；模块+imageGen 测试 **104/104**。合入 `feature/camera-derive@f706610`。**风格线 P0→P1-A→P2 收口**（图像级锚点架构性判死，四证据线在案）。
