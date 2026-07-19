@@ -7,7 +7,9 @@
 | 顺序 | 任务书 | 基线 | 依赖 | 状态 |
 |---|---|---|---|---|
 | 1 | `codex-style-anchor-p1a.md`（v2：风格锚图复核基准 + **配方指纹**地基） | `feature/camera-derive@f1740f5` | 无（P0 已合入） | **✅ 已合入（4df63f7；CC review+真机 PASS，evidence 有 CC 增补节）** |
-| 2 | `codex-style-finalize-gate-p2.md`（风格定稿门：查配方/版本/人工，非 provider） | **`feature/camera-derive@468d55f`** | P1-A 已合入，`gen_recipe`/`buildRecipeFingerprint` 就绪 | **🟢 可开工** |
+| 2 | `codex-style-finalize-gate-p2.md`（风格定稿门：查配方/版本/人工，非 provider） | `feature/camera-derive@468d55f` | P1-A 已合入 | **✅ 已合入（f706610；CC review+真机 PASS，四红线全守）** |
+
+**队列已清空。风格线 P0→P1-A→P2 全部收口**（图像级锚点架构性判死，四证据线在案：agnes-referenceimages-ab-finding / comfyui-ipadapter-capability-finding）。风格统一由 P0 文本 overlay + 人工复核（P2 定稿门 + 配方指纹）+ 漂移镜按批准配方重生承担。无后续 Codex 待派任务书。
 
 ## 硬约束（两包共用）
 
