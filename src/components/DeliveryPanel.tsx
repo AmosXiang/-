@@ -16,6 +16,35 @@ interface DeliveryDetail {
   issues: IssueCode[];
 }
 
+interface StyleGateDetail {
+  shotId: string;
+  index: number;
+  fingerprint: string | null;
+  contractCurrent: boolean;
+  anchorCurrent: boolean;
+  recipeMatches: boolean | null;
+  imageDecodable: boolean;
+  styleApprovedValid: boolean;
+  colorOutlier: boolean | null;
+  needsAttention: boolean;
+  reasons: string[];
+  warnings: string[];
+}
+
+interface StyleGateSummary {
+  total: number;
+  contractStale: number;
+  anchorStale: number;
+  recipeDrift: number;
+  undecodable: number;
+  unapproved: number;
+  colorOutliers: number;
+  needsAttention: number;
+  approvedRecipeMissing: boolean;
+  approvedRecipe: { fingerprint: string; setFromShotId: string; setAt: string } | null;
+  details: StyleGateDetail[];
+}
+
 interface DeliverySummary {
   total: number;
   finalized: number;
@@ -25,6 +54,7 @@ interface DeliverySummary {
   missingParams: number;
   stale: number;
   details: DeliveryDetail[];
+  styleGate: StyleGateSummary;
   finalVideos?: { count: number; totalBytes: number };
 }
 
@@ -78,6 +108,7 @@ export default function DeliveryPanel({
   const [missing, setMissing] = useState<DeliveryDetail[]>([]);
   const [result, setResult] = useState<ExportResult | null>(null);
   const [includeFinalVideos, setIncludeFinalVideos] = useState(false);
+  const [styleAction, setStyleAction] = useState('');
 
   const baseUrl = `/api/generated-scripts/${encodeURIComponent(projectId)}`;
 
@@ -129,6 +160,45 @@ export default function DeliveryPanel({
     }
   };
 
+  const runStyleAction = async (key: string, request: () => Promise<Response>) => {
+    setStyleAction(key);
+    setError('');
+    try {
+      await readJson(await request());
+      await refresh();
+    } catch (actionError) {
+      setError((actionError as Error).message);
+    } finally {
+      setStyleAction('');
+    }
+  };
+
+  const pinRecipe = (shotId: string) => runStyleAction(`pin:${shotId}`, () => fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/approved-recipe`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shotId }),
+    },
+  ));
+
+  const clearRecipe = () => runStyleAction('clear-recipe', () => fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/approved-recipe`,
+    { method: 'DELETE' },
+  ));
+
+  const setStyleApproved = (shotId: string, approved: boolean) => runStyleAction(
+    `approve:${shotId}`,
+    () => fetch(
+      `/api/generated-scripts/${encodeURIComponent(projectId)}/shots/${encodeURIComponent(shotId)}/style-approved`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved }),
+      },
+    ),
+  );
+
   const stats = summary ? [
     ['分镜总数', summary.total, 'text-white'],
     ['已定稿', summary.finalized, 'text-emerald-300'],
@@ -141,6 +211,18 @@ export default function DeliveryPanel({
 
   const issueRows = missing.length > 0 ? missing : summary?.details || [];
   const finalBlocked = !summary || summary.notFinalized > 0;
+  const styleGate = summary?.styleGate;
+  const styleStats = styleGate ? [
+    ['契约旧版', styleGate.contractStale],
+    ['锚图旧版', styleGate.anchorStale],
+    ['配方漂移', styleGate.recipeDrift],
+    ['图片不可解码', styleGate.undecodable],
+    ['未人工确认', styleGate.unapproved],
+    ['色彩离群提示', styleGate.colorOutliers],
+  ] as const : [];
+  const approvedRecipeIndex = styleGate?.approvedRecipe
+    ? styleGate.details.find(item => item.shotId === styleGate.approvedRecipe?.setFromShotId)?.index
+    : undefined;
 
   return (
     <section className="space-y-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-xs text-slate-200">
@@ -176,6 +258,97 @@ export default function DeliveryPanel({
             </div>
           ))}
         </div>
+      )}
+
+      {styleGate && (
+        <section className="space-y-3 rounded-xl border border-indigo-900/70 bg-indigo-950/15 p-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-semibold text-indigo-200">风格一致性 · 人工复核门</p>
+              <p className="mt-1 max-w-3xl text-[10px] leading-relaxed text-slate-500">
+                只报告配方、版本、图片与人工确认状态；不自动淘汰、不自动重生，也不新增导出阻断。色彩离群仅作提示。
+              </p>
+            </div>
+            {styleGate.approvedRecipe ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-lg border border-emerald-800 bg-emerald-950/30 px-2 py-1 text-[10px] text-emerald-300">
+                  批准配方来自 {approvedRecipeIndex === undefined ? styleGate.approvedRecipe.setFromShotId : `#${approvedRecipeIndex + 1}`}
+                </span>
+                <button
+                  type="button"
+                  disabled={Boolean(styleAction)}
+                  onClick={() => void clearRecipe()}
+                  className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] text-slate-400 hover:border-red-700 hover:text-red-300 disabled:opacity-40"
+                >
+                  {styleAction === 'clear-recipe' ? '清除中…' : '清除批准配方'}
+                </button>
+              </div>
+            ) : (
+              <span className="rounded-lg border border-amber-800 bg-amber-950/30 px-2 py-1 text-[10px] text-amber-300">未设批准配方 · 请从下方镜头钉选</span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+            {styleStats.map(([label, value], index) => (
+              <div key={label} className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2">
+                <p className="text-[9px] text-slate-500">{label}</p>
+                <p className={`mt-1 font-mono text-base font-bold ${value > 0 ? (index === 5 ? 'text-cyan-300' : 'text-amber-300') : 'text-emerald-300'}`}>{value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="max-h-80 divide-y divide-slate-800 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/45">
+            {styleGate.details.map(detail => {
+              const criteria = [
+                ['契约', detail.contractCurrent, false],
+                ['锚图', detail.anchorCurrent, false],
+                ['配方', detail.recipeMatches, true],
+                ['图片', detail.imageDecodable, false],
+                ['人工', detail.styleApprovedValid, false],
+              ] as const;
+              return (
+                <div key={detail.shotId} className="space-y-2 px-3 py-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="w-10 font-mono font-semibold text-slate-300">#{detail.index + 1}</span>
+                    <span className="flex flex-1 flex-wrap gap-1.5">
+                      {criteria.map(([label, value, nullable]) => (
+                        <span
+                          key={label}
+                          className={`rounded-md border px-1.5 py-0.5 text-[9px] ${value === true ? 'border-emerald-800 bg-emerald-950/30 text-emerald-300' : nullable && value === null ? 'border-slate-700 bg-slate-900 text-slate-400' : 'border-amber-800 bg-amber-950/30 text-amber-300'}`}
+                        >
+                          {label} {value === true ? '通过' : nullable && value === null ? '未设标准' : '需处理'}
+                        </span>
+                      ))}
+                      {detail.colorOutlier === true && <span className="rounded-md border border-cyan-800 bg-cyan-950/30 px-1.5 py-0.5 text-[9px] text-cyan-300">色彩离群 · 仅提示</span>}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={!detail.fingerprint || Boolean(styleAction)}
+                      onClick={() => void pinRecipe(detail.shotId)}
+                      className="rounded-md border border-indigo-800 px-2 py-1 text-[9px] text-indigo-300 hover:bg-indigo-950/50 disabled:cursor-not-allowed disabled:opacity-35"
+                    >
+                      {styleAction === `pin:${detail.shotId}` ? '钉选中…' : '钉为批准配方'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!detail.fingerprint || Boolean(styleAction)}
+                      onClick={() => void setStyleApproved(detail.shotId, !detail.styleApprovedValid)}
+                      className="rounded-md border border-emerald-800 px-2 py-1 text-[9px] text-emerald-300 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-35"
+                    >
+                      {styleAction === `approve:${detail.shotId}` ? '保存中…' : detail.styleApprovedValid ? '撤销风格确认' : '标记风格已确认'}
+                    </button>
+                    {onJumpToShot && (
+                      <button type="button" onClick={() => onJumpToShot(detail.shotId)} className="rounded-md border border-slate-700 px-2 py-1 text-[9px] text-slate-400 hover:text-white">跳到镜头 →</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-slate-500">需关注 {styleGate.needsAttention}/{styleGate.total} 镜；色彩离群不计入该数字。最终风格判断必须由人工完成。</p>
+        </section>
       )}
 
       {issueRows.length > 0 && (

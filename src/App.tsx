@@ -6207,6 +6207,7 @@ export default function App() {
                                     <div className="inspector-section-body space-y-3">
                                       <StyleContractReadonly
                                         projectId={String(generatedScript.id)}
+                                        shotId={String(shot.id)}
                                         recipe={(shot as any).gen_recipe}
                                         generatedContractVersion={(shot as any).gen_style_contract_version}
                                         generatedAnchorVersion={(shot as any).gen_style_anchor_version}

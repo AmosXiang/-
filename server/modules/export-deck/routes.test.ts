@@ -250,7 +250,7 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     const getHandler = routes['GET:/api/generated-scripts/:id/delivery-check'];
     assert.ok(getHandler, 'GET delivery-check handler registered');
 
-    getHandler(req, res);
+    await getHandler(req, res);
 
     assert.equal(res.statusCode, 200);
     const summary = res.body;
@@ -262,6 +262,7 @@ test('Export Deck Module API and Generator Tests', async (t) => {
     assert.equal(summary.failed, 1, 'Shot 3 task status is failed');
     assert.equal(summary.missingParams, 1, 'Only Shot 3 has missing parameters');
     assert.equal(summary.stale, 1, 'Shot 2 is stale');
+    assert.equal(summary.styleGate.total, 3, 'P2 style gate reports every shot without changing legacy details');
     assert.equal(Object.hasOwn(summary, 'finalVideos'), false, 'M2 response shape is unchanged without video deps');
 
     // Details check
@@ -822,7 +823,7 @@ test('final-video export revalidation maps all five missing states and copies no
   t.after(fixture.cleanup);
 
   const checkRes = makeMockRes();
-  fixture.routes['GET:/api/generated-scripts/:id/delivery-check'](
+  await fixture.routes['GET:/api/generated-scripts/:id/delivery-check'](
     { params: { id: script.id } },
     checkRes,
   );
@@ -888,7 +889,7 @@ test('final-video delivery uses probe output, defaults to references, and packag
   t.after(fixture.cleanup);
 
   const checkRes = makeMockRes();
-  fixture.routes['GET:/api/generated-scripts/:id/delivery-check']({ params: { id: script.id } }, checkRes);
+  await fixture.routes['GET:/api/generated-scripts/:id/delivery-check']({ params: { id: script.id } }, checkRes);
   assert.deepEqual(checkRes.body.finalVideos, { count: 1, totalBytes: Buffer.byteLength(videoContent) });
 
   const referenceOnly = makeMockRes();

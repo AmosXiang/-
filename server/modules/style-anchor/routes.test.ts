@@ -7,6 +7,7 @@ import test from 'node:test';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import sharp from 'sharp';
+import { buildRecipeFingerprint } from '../../providers/imageGen/recipeFingerprint.ts';
 import { registerStyleAnchorModule } from './routes.ts';
 
 function fixture() {
@@ -28,6 +29,7 @@ function fixture() {
 async function withServer(run: (baseUrl: string, fx: ReturnType<typeof fixture>) => Promise<void>) {
   const fx = fixture();
   const app = express();
+  app.use(express.json());
   registerStyleAnchorModule(app, fx);
   const server = http.createServer(app);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -49,6 +51,17 @@ async function put(baseUrl: string, bytes?: Buffer, note?: string) {
   if (bytes) form.append('image', new Blob([bytes], { type: 'image/png' }), 'anchor.png');
   if (note !== undefined) form.append('note', note);
   return fetch(`${baseUrl}/api/projects/project-1/style-anchor`, { method: 'PUT', body: form });
+}
+
+function recipe(loraStrength = 0.8) {
+  return buildRecipeFingerprint({
+    provider: 'agnes',
+    model: 'agnes-image-2.1-flash',
+    workflowPresetId: null,
+    styleContractVersion: 2,
+    styleAnchorVersion: 1,
+    params: { width: 1280, height: 720, loraStrength },
+  });
 }
 
 test('GET returns null for legacy projects and a machine-readable 404', async () => {
@@ -121,5 +134,99 @@ test('upload rejects non-images and stored path traversal is never unlinked', as
     assert.equal(clear.status, 422);
     assert.equal((await clear.json() as any).code, 'IMAGE_PATH_INVALID');
     assert.equal('styleAnchor' in fx.project(), true);
+  });
+});
+
+test('approved recipe pins and clears the exact P1-A recipe snapshot', async () => {
+  await withServer(async (baseUrl, fx) => {
+    const sourceRecipe = recipe();
+    await fx.mutateDb(store => {
+      store.generated_scripts[0].newShots = [{ id: 'shot-1', gen_recipe: sourceRecipe }];
+    });
+    const pinned = await fetch(`${baseUrl}/api/projects/project-1/approved-recipe`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shotId: 'shot-1' }),
+    });
+    assert.equal(pinned.status, 200);
+    const approvedRecipe = (await pinned.json() as any).approvedRecipe;
+    assert.equal(approvedRecipe.fingerprint, sourceRecipe.fingerprint);
+    assert.deepEqual(approvedRecipe.recipe, sourceRecipe);
+    assert.equal(approvedRecipe.setFromShotId, 'shot-1');
+    assert.deepEqual(fx.project().approvedRecipe, approvedRecipe);
+
+    const cleared = await fetch(`${baseUrl}/api/projects/project-1/approved-recipe`, { method: 'DELETE' });
+    assert.equal(cleared.status, 200);
+    assert.equal('approvedRecipe' in fx.project(), false);
+  });
+});
+
+test('style approval snapshots the current fingerprint, can be revoked, and rejects invalid sources', async () => {
+  await withServer(async (baseUrl, fx) => {
+    const sourceRecipe = recipe();
+    await fx.mutateDb(store => {
+      store.generated_scripts[0].newShots = [
+        { id: 'shot-1', gen_recipe: sourceRecipe },
+        { id: 'shot-no-recipe' },
+      ];
+    });
+    const endpoint = `${baseUrl}/api/generated-scripts/project-1/shots/shot-1/style-approved`;
+    const approved = await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true }),
+    });
+    assert.equal(approved.status, 200);
+    const styleApproved = (await approved.json() as any).styleApproved;
+    assert.equal(styleApproved.approvedFingerprint, sourceRecipe.fingerprint);
+    assert.deepEqual(fx.project().newShots[0].styleApproved, styleApproved);
+
+    const revoked = await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: false }),
+    });
+    assert.equal(revoked.status, 200);
+    assert.equal('styleApproved' in fx.project().newShots[0], false);
+
+    const invalidState = await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: 'yes' }),
+    });
+    assert.equal(invalidState.status, 400);
+    assert.equal((await invalidState.json() as any).code, 'APPROVED_STATE_INVALID');
+
+    const noRecipe = await fetch(`${baseUrl}/api/generated-scripts/project-1/shots/shot-no-recipe/style-approved`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true }),
+    });
+    assert.equal(noRecipe.status, 422);
+    assert.equal((await noRecipe.json() as any).code, 'RECIPE_MISSING');
+
+    const missingShot = await fetch(`${baseUrl}/api/projects/project-1/approved-recipe`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shotId: 'missing' }),
+    });
+    assert.equal(missingShot.status, 404);
+    assert.equal((await missingShot.json() as any).code, 'SHOT_NOT_FOUND');
+
+    const missingProject = await fetch(`${baseUrl}/api/projects/missing/approved-recipe`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shotId: 'shot-1' }),
+    });
+    assert.equal(missingProject.status, 404);
+    assert.equal((await missingProject.json() as any).code, 'PROJECT_NOT_FOUND');
+
+    const missingProjectApproval = await fetch(`${baseUrl}/api/generated-scripts/missing/shots/shot-1/style-approved`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true }),
+    });
+    assert.equal(missingProjectApproval.status, 404);
+    assert.equal((await missingProjectApproval.json() as any).code, 'PROJECT_NOT_FOUND');
   });
 });

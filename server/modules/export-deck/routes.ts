@@ -4,6 +4,7 @@ import type { Express, Request, Response } from 'express';
 import type Database from 'better-sqlite3';
 import { generatePptx, generateManifest, createExportZip } from './generator.ts';
 import { isReadableFile, getLocalPath, sanitizeFilename, sceneExportFile } from './naming.ts';
+import { buildStyleGate } from './styleGate.ts';
 
 type DatabaseInstance = Database.Database;
 
@@ -176,7 +177,7 @@ export function registerExportDeckModule(
   }
 
   // Check function reused by both endpoints
-  function performDeliveryCheck(projectId: string, script: any) {
+  async function performDeliveryCheck(projectId: string, script: any) {
     const shots = script.newShots || [];
     const total = shots.length;
     const details: any[] = [];
@@ -356,6 +357,11 @@ export function registerExportDeckModule(
       };
     });
 
+    const styleGate = await buildStyleGate(
+      script,
+      shots,
+      shotsData.map(shot => shot.localImagePath),
+    );
     const summary = {
       total,
       finalized: finalizedCount,
@@ -365,6 +371,7 @@ export function registerExportDeckModule(
       missingParams: missingParamsCount,
       stale: staleCount,
       details,
+      styleGate,
       ...(videoDelivery ? { finalVideos: { count: finalVideoCount, totalBytes: finalVideoBytes } } : {}),
     };
 
@@ -372,7 +379,7 @@ export function registerExportDeckModule(
   }
 
   // 1. Delivery Check API
-  app.get('/api/generated-scripts/:id/delivery-check', (req: Request, res: Response) => {
+  app.get('/api/generated-scripts/:id/delivery-check', async (req: Request, res: Response) => {
     const projectId = String(req.params.id);
     const scripts = readScripts(db);
     const script = scripts.find(s => String(s.id) === projectId);
@@ -381,7 +388,7 @@ export function registerExportDeckModule(
       return res.status(404).json({ error: `Project ${projectId} not found` });
     }
 
-    const { summary } = performDeliveryCheck(projectId, script);
+    const { summary } = await performDeliveryCheck(projectId, script);
     return res.json(summary);
   });
 
@@ -402,7 +409,7 @@ export function registerExportDeckModule(
       return res.status(404).json({ error: `Project ${projectId} not found` });
     }
 
-    const { summary, shotsData } = performDeliveryCheck(projectId, script);
+    const { summary, shotsData } = await performDeliveryCheck(projectId, script);
     let exportSummary: Record<string, unknown> = summary;
 
     // If final mode, require all shots to be finalized
